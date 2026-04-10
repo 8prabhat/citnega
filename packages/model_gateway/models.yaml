@@ -1,0 +1,162 @@
+# Citnega Model Configuration
+# ---------------------------
+# providers: defines how to connect to each backend
+# models:    maps model IDs to providers and parameters
+#
+# Environment variable syntax: ${VAR_NAME} or ${VAR_NAME:-default}
+# Provider types: ollama | openai_compatible
+
+providers:
+  # ── Local Ollama ──────────────────────────────────────────────────────────
+  ollama_local:
+    type: ollama
+    base_url: "${OLLAMA_BASE_URL:-http://localhost:11434}"
+
+  # ── OpenAI ────────────────────────────────────────────────────────────────
+  openai:
+    type: openai_compatible
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY:-}"
+
+  # ── Anthropic (via openai-compatible proxy or direct) ─────────────────────
+  anthropic:
+    type: openai_compatible
+    base_url: "https://api.anthropic.com/v1"
+    api_key: "${ANTHROPIC_API_KEY:-}"
+
+  # ── Groq (ultra-fast inference) ───────────────────────────────────────────
+  groq:
+    type: openai_compatible
+    base_url: "https://api.groq.com/openai/v1"
+    api_key: "${GROQ_API_KEY:-}"
+
+  # ── LM Studio (local OpenAI-compatible) ──────────────────────────────────
+  lm_studio:
+    type: openai_compatible
+    base_url: "${LM_STUDIO_BASE_URL:-http://localhost:1234/v1}"
+    api_key: "lm-studio"
+
+  # ── Custom remote (self-hosted vLLM, Llama.cpp server, etc.) ─────────────
+  custom_remote:
+    type: openai_compatible
+    base_url: "${CUSTOM_REMOTE_URL:-http://localhost:8000/v1}"
+    api_key: "${CUSTOM_REMOTE_API_KEY:-}"
+
+
+models:
+  # ── Local Ollama models (sorted by priority — highest = preferred) ────────
+  - id: gemma4-26b-local
+    provider: ollama_local
+    model_name: "gemma4:26b"
+    priority: 100
+    max_context_tokens: 32768
+    description: "Gemma 4 26B — local Ollama (thinking)"
+    thinking: true
+
+  - id: gemma4-12b-local
+    provider: ollama_local
+    model_name: "gemma4:12b"
+    priority: 90
+    max_context_tokens: 32768
+    description: "Gemma 4 12B — local Ollama (thinking)"
+    thinking: true
+
+  - id: qwen3-coder-30b-local
+    provider: ollama_local
+    model_name: "qwen3-coder:30b"
+    priority: 88
+    max_context_tokens: 32768
+    description: "Qwen3 Coder 30B — local Ollama"
+
+  # Add deepseek-r1 or qwq below to enable thinking token support:
+  # - id: deepseek-r1-local
+  #   provider: ollama_local
+  #   model_name: "deepseek-r1:14b"
+  #   priority: 87
+  #   max_context_tokens: 32768
+  #   description: "DeepSeek R1 14B — local Ollama (thinking)"
+  #   thinking: true
+
+  - id: glm-4-32b-local
+    provider: ollama_local
+    model_name: "sammcj/glm-4-32b-0414:q6_k"
+    priority: 85
+    max_context_tokens: 32768
+    description: "GLM-4 32B — local Ollama"
+
+  - id: llama3.2-local
+    provider: ollama_local
+    model_name: "llama3.2"
+    priority: 80
+    max_context_tokens: 128000
+    description: "Llama 3.2 — local Ollama"
+
+  - id: llama3.1-local
+    provider: ollama_local
+    model_name: "llama3.1"
+    priority: 75
+    max_context_tokens: 128000
+    description: "Llama 3.1 — local Ollama"
+
+  - id: qwen2.5-local
+    provider: ollama_local
+    model_name: "qwen2.5"
+    priority: 70
+    max_context_tokens: 32768
+    description: "Qwen 2.5 — local Ollama"
+
+  - id: mistral-local
+    provider: ollama_local
+    model_name: "mistral"
+    priority: 65
+    max_context_tokens: 32768
+    description: "Mistral — local Ollama"
+
+  # ── OpenAI models ─────────────────────────────────────────────────────────
+  - id: gpt-4o
+    provider: openai
+    model_name: "gpt-4o"
+    priority: 95
+    max_context_tokens: 128000
+    description: "GPT-4o — OpenAI"
+
+  - id: gpt-4o-mini
+    provider: openai
+    model_name: "gpt-4o-mini"
+    priority: 60
+    max_context_tokens: 128000
+    description: "GPT-4o Mini — OpenAI"
+
+  - id: gpt-4-turbo
+    provider: openai
+    model_name: "gpt-4-turbo"
+    priority: 85
+    max_context_tokens: 128000
+    description: "GPT-4 Turbo — OpenAI"
+
+  # ── Groq models (fast inference) ─────────────────────────────────────────
+  - id: llama3-70b-groq
+    provider: groq
+    model_name: "llama3-70b-8192"
+    priority: 72
+    max_context_tokens: 8192
+    description: "Llama 3 70B — Groq"
+
+  - id: mixtral-groq
+    provider: groq
+    model_name: "mixtral-8x7b-32768"
+    priority: 68
+    max_context_tokens: 32768
+    description: "Mixtral 8x7B — Groq"
+
+  # ── LM Studio (local) ─────────────────────────────────────────────────────
+  - id: lm-studio-local
+    provider: lm_studio
+    model_name: "local-model"
+    priority: 55
+    max_context_tokens: 32768
+    description: "LM Studio local model"
+
+  # Default model: used when no model is explicitly selected.
+  # Must match one of the model ids above.
+default_model: "gemma4-26b-local"

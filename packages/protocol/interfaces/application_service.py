@@ -1,0 +1,117 @@
+"""IApplicationService — facade interface for TUI and CLI."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import AsyncIterator
+
+from citnega.packages.protocol.callables.types import CallableMetadata
+from citnega.packages.protocol.events import CanonicalEvent
+from citnega.packages.protocol.models import (
+    KBItem,
+    KBSearchResult,
+    ModelInfo,
+    RunSummary,
+    Session,
+    SessionConfig,
+    StateSnapshot,
+)
+
+
+class IApplicationService(ABC):
+    """
+    Facade for all TUI / CLI interactions.
+
+    The TUI and CLI depend on this interface only — they never import
+    runtime internals, adapters, or infrastructure directly.
+    """
+
+    # ── Session management ─────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def create_session(self, config: SessionConfig) -> Session: ...
+
+    @abstractmethod
+    async def get_session(self, session_id: str) -> Session | None: ...
+
+    @abstractmethod
+    async def list_sessions(self, limit: int = 50) -> list[Session]: ...
+
+    @abstractmethod
+    async def delete_session(self, session_id: str) -> None: ...
+
+    # ── Run execution ──────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def run_turn(self, session_id: str, user_input: str) -> str:
+        """Start a turn; returns the run_id."""
+        ...
+
+    @abstractmethod
+    def stream_events(self, run_id: str) -> AsyncIterator[CanonicalEvent]:
+        """Yield canonical events for a running or completed run."""
+        ...
+
+    @abstractmethod
+    async def get_run(self, run_id: str) -> RunSummary | None: ...
+
+    @abstractmethod
+    async def list_runs(self, session_id: str, limit: int = 50) -> list[RunSummary]: ...
+
+    # ── Run control ────────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def pause_run(self, run_id: str) -> None: ...
+
+    @abstractmethod
+    async def resume_run(self, run_id: str) -> None: ...
+
+    @abstractmethod
+    async def cancel_run(self, run_id: str) -> None: ...
+
+    @abstractmethod
+    async def respond_to_approval(
+        self,
+        approval_id: str,
+        approved: bool,
+        note: str | None = None,
+    ) -> None: ...
+
+    # ── Introspection ──────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def get_state_snapshot(self, session_id: str) -> StateSnapshot: ...
+
+    # ── Knowledge base ─────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def search_kb(self, query: str, limit: int = 10) -> list[KBSearchResult]: ...
+
+    @abstractmethod
+    async def add_kb_item(self, item: KBItem) -> KBItem: ...
+
+    @abstractmethod
+    async def delete_kb_item(self, item_id: str) -> None: ...
+
+    # ── Import / export ────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def export_session(self, session_id: str) -> Path: ...
+
+    @abstractmethod
+    async def import_session(self, path: Path) -> Session: ...
+
+    # ── Registry queries ───────────────────────────────────────────────────────
+
+    @abstractmethod
+    def list_agents(self) -> list[CallableMetadata]: ...
+
+    @abstractmethod
+    def list_tools(self) -> list[CallableMetadata]: ...
+
+    @abstractmethod
+    def list_frameworks(self) -> list[str]: ...
+
+    @abstractmethod
+    def list_models(self) -> list[ModelInfo]: ...

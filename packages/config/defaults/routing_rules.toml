@@ -1,0 +1,24 @@
+[[rules]]
+pattern    = "^(read|show|open|view).*\\.(csv|json|txt|md)$"
+specialist = "file_agent"
+confidence = 0.9
+
+[[rules]]
+pattern    = "^(calculate|compute|sum|average|total|count)"
+specialist = "data_agent"
+confidence = 0.8
+
+[[rules]]
+pattern    = "^(summarize|summarise|tl;dr|brief|condense)"
+specialist = "summary_agent"
+confidence = 0.9
+
+[[rules]]
+pattern    = "^(research|find|search|look up|what is|who is|when did)"
+specialist = "research_agent"
+confidence = 0.7
+
+[[rules]]
+pattern    = "^(write|draft|compose|edit|rewrite|improve)"
+specialist = "writing_agent"
+confidence = 0.7

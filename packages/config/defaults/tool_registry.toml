@@ -1,0 +1,107 @@
+[[tools]]
+name        = "web_search"
+class_path  = "citnega.packages.tools.builtin.web_search.WebSearchTool"
+description = "Search the web for information."
+
+[tools.policy]
+timeout_seconds    = 30
+requires_approval  = false
+network_allowed    = true
+max_output_bytes   = 262144
+
+[[tools]]
+name        = "read_file"
+class_path  = "citnega.packages.tools.builtin.read_file.ReadFileTool"
+description = "Read the contents of a file."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = false
+allowed_paths     = ["~/citnega/", "~/Documents/"]
+max_output_bytes  = 524288
+
+[[tools]]
+name        = "write_file"
+class_path  = "citnega.packages.tools.builtin.write_file.WriteFileTool"
+description = "Write content to a file."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = true
+allowed_paths     = ["~/citnega/output/"]
+max_output_bytes  = 1048576
+
+[[tools]]
+name        = "kb_search"
+class_path  = "citnega.packages.tools.builtin.kb_search.KBSearchTool"
+description = "Search the local knowledge base."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = false
+max_output_bytes  = 131072
+
+[[tools]]
+name        = "list_dir"
+class_path  = "citnega.packages.tools.builtin.list_dir.ListDirTool"
+description = "List the contents of a directory."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = false
+allowed_paths     = ["~/citnega/", "~/Documents/"]
+max_output_bytes  = 65536
+
+[[tools]]
+name        = "fetch_url"
+class_path  = "citnega.packages.tools.builtin.fetch_url.FetchURLTool"
+description = "Fetch the contents of a URL."
+
+[tools.policy]
+timeout_seconds   = 30
+requires_approval = false
+network_allowed   = true
+max_output_bytes  = 524288
+
+[[tools]]
+name        = "parse_csv"
+class_path  = "citnega.packages.tools.builtin.parse_csv.ParseCSVTool"
+description = "Parse a CSV file and return structured data."
+
+[tools.policy]
+timeout_seconds   = 15
+requires_approval = false
+allowed_paths     = ["~/citnega/", "~/Documents/"]
+max_output_bytes  = 524288
+
+[[tools]]
+name        = "parse_json"
+class_path  = "citnega.packages.tools.builtin.parse_json.ParseJSONTool"
+description = "Parse a JSON file and return structured data."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = false
+allowed_paths     = ["~/citnega/", "~/Documents/"]
+max_output_bytes  = 524288
+
+[[tools]]
+name        = "run_calculation"
+class_path  = "citnega.packages.tools.builtin.run_calculation.RunCalculationTool"
+description = "Evaluate a mathematical expression."
+
+[tools.policy]
+timeout_seconds   = 10
+requires_approval = false
+max_output_bytes  = 4096
+
+[[tools]]
+name        = "search_files"
+class_path  = "citnega.packages.tools.builtin.search_files.SearchFilesTool"
+description = "Search for files matching a pattern in the filesystem."
+
+[tools.policy]
+timeout_seconds   = 20
+requires_approval = false
+allowed_paths     = ["~/citnega/", "~/Documents/"]
+max_output_bytes  = 131072

@@ -1,0 +1,119 @@
+# Citnega Model Registry — v1
+#
+# Add/edit models here.  Each [[models]] entry maps to a ModelInfo record.
+# The gateway uses this file to route requests and report health status.
+
+[[models]]
+model_id      = "gemma4-27b-local"
+provider_type = "ollama"
+model_name    = "gemma4:26b"
+local         = true
+priority      = 100
+cost_rank     = 1
+preferred_for = ["general", "code", "analysis", "reasoning"]
+
+[models.capabilities]
+local_only            = true
+supports_streaming    = true
+supports_tool_calling = true
+supports_json_output  = true
+max_context_tokens    = 32768
+
+[[models]]
+model_id      = "gemma3-12b-local"
+provider_type = "ollama"
+model_name    = "gemma3:12b"
+local         = true
+priority      = 90
+cost_rank     = 1
+preferred_for = ["general", "code", "analysis"]
+
+[models.capabilities]
+local_only            = true
+supports_streaming    = true
+supports_tool_calling = true
+supports_json_output  = true
+max_context_tokens    = 8192
+
+[[models]]
+model_id      = "llama3-8b-local"
+provider_type = "ollama"
+model_name    = "llama3:8b"
+local         = true
+priority      = 70
+cost_rank     = 1
+preferred_for = ["general", "chat"]
+
+[models.capabilities]
+local_only            = true
+supports_streaming    = true
+supports_tool_calling = false
+supports_json_output  = false
+max_context_tokens    = 4096
+
+[[models]]
+model_id      = "mistral-7b-local"
+provider_type = "ollama"
+model_name    = "mistral:7b"
+local         = true
+priority      = 60
+cost_rank     = 1
+preferred_for = ["general"]
+
+[models.capabilities]
+local_only            = true
+supports_streaming    = true
+supports_tool_calling = false
+supports_json_output  = false
+max_context_tokens    = 4096
+
+[[models]]
+model_id      = "qwen2.5-coder-7b"
+provider_type = "ollama"
+model_name    = "qwen2.5-coder:7b"
+local         = true
+priority      = 80
+cost_rank     = 1
+preferred_for = ["code", "analysis"]
+
+[models.capabilities]
+local_only            = true
+supports_streaming    = true
+supports_tool_calling = true
+supports_json_output  = true
+max_context_tokens    = 32768
+
+[[models]]
+model_id      = "openai-gpt4o"
+provider_type = "openai_compatible"
+model_name    = "gpt-4o"
+local         = false
+priority      = 50
+cost_rank     = 4
+preferred_for = ["reasoning", "multimodal"]
+
+[models.capabilities]
+local_only             = false
+supports_streaming     = true
+supports_tool_calling  = true
+supports_reasoning     = true
+supports_json_output   = true
+supports_multimodal    = true
+supports_long_context  = true
+max_context_tokens     = 128000
+
+[[models]]
+model_id      = "vllm-mixtral"
+provider_type = "vllm"
+model_name    = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+local         = false
+priority      = 55
+cost_rank     = 2
+preferred_for = ["general", "reasoning"]
+
+[models.capabilities]
+local_only            = false
+supports_streaming    = true
+supports_tool_calling = true
+supports_json_output  = true
+max_context_tokens    = 32768

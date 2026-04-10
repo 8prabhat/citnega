@@ -1,0 +1,60 @@
+[runtime]
+framework           = "adk"
+default_model_id    = "gemma3-12b-local"
+local_only          = true
+max_callable_depth  = 2
+
+[session]
+max_context_tokens       = 8192
+approval_timeout_seconds = 300
+
+[logging]
+level          = "INFO"
+retention_days = 30
+format         = "jsonl"
+
+[tui]
+theme         = "default"
+mouse_enabled = false
+history_size  = 1000
+
+[context]
+handlers = [
+    "recent_turns",
+    "session_summary",
+    "kb_retrieval",
+    "runtime_state",
+    "token_budget",
+]
+recent_turns_count = 20
+kb_retrieval_limit = 5
+
+[security]
+log_file_permissions    = "0600"
+config_file_permissions = "0600"
+data_dir_permissions    = "0700"
+
+# ── Conversation & session management ──────────────────────────────────────────
+[conversation]
+# Enable automatic compaction when a threshold is hit.
+auto_compact = true
+
+# Trigger compaction when the conversation reaches this many messages.
+# Set to 0 to disable message-count trigger.
+compact_threshold_messages = 50
+
+# Trigger compaction when estimated token usage exceeds this number.
+# Set to 0 to disable token-count trigger.
+compact_threshold_tokens = 6000
+
+# After compaction, keep this many recent messages verbatim (not summarised).
+compact_keep_recent = 10
+
+# Ask the model to write the summary; false = plain message-count fallback.
+compact_use_model = true
+
+# How many sessions to show in the session-picker on startup.
+max_sessions_shown = 20
+
+# Automatically rename a new session from the text of the first user message.
+auto_name_from_first_message = true

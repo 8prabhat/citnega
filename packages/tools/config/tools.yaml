@@ -1,0 +1,61 @@
+# Citnega Tool Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Overrides the policy defaults set in each tool class.
+# Any key omitted here falls back to the class-level tool_policy() default.
+# ─────────────────────────────────────────────────────────────────────────────
+
+read_file:
+  description: "Read the contents of a file from the local filesystem."
+  policy:
+    timeout_seconds: 15
+    requires_approval: false
+    network_allowed: false
+
+list_dir:
+  description: "List files and directories at a given path."
+  policy:
+    timeout_seconds: 10
+    requires_approval: false
+    network_allowed: false
+
+search_files:
+  description: "Search for files matching a pattern under a directory."
+  policy:
+    timeout_seconds: 20
+    requires_approval: false
+    network_allowed: false
+
+fetch_url:
+  description: "Fetch the content of a URL via HTTP GET."
+  policy:
+    timeout_seconds: 30
+    requires_approval: false
+    network_allowed: true
+
+search_web:
+  description: "Search the web using DuckDuckGo and return top results."
+  policy:
+    timeout_seconds: 30
+    requires_approval: false
+    network_allowed: true
+
+run_shell:
+  description: "Execute a shell command and return stdout/stderr."
+  policy:
+    timeout_seconds: 60
+    requires_approval: true
+    network_allowed: false
+
+summarize_text:
+  description: "Summarise a block of text using the model."
+  policy:
+    timeout_seconds: 60
+    requires_approval: false
+    network_allowed: false
+
+read_kb:
+  description: "Search the knowledge base and return relevant entries."
+  policy:
+    timeout_seconds: 15
+    requires_approval: false
+    network_allowed: false

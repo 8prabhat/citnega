@@ -1,0 +1,45 @@
+# Citnega Agent Registry — v1
+
+[[specialists]]
+name       = "research_agent"
+module     = "citnega.packages.agents.specialists.research_agent"
+class_name = "ResearchAgent"
+enabled    = true
+
+[[specialists]]
+name       = "summary_agent"
+module     = "citnega.packages.agents.specialists.summary_agent"
+class_name = "SummaryAgent"
+enabled    = true
+
+[[specialists]]
+name       = "file_agent"
+module     = "citnega.packages.agents.specialists.file_agent"
+class_name = "FileAgent"
+enabled    = true
+
+[[specialists]]
+name       = "data_agent"
+module     = "citnega.packages.agents.specialists.data_agent"
+class_name = "DataAgent"
+enabled    = true
+
+[[specialists]]
+name       = "writing_agent"
+module     = "citnega.packages.agents.specialists.writing_agent"
+class_name = "WritingAgent"
+enabled    = true
+
+[[core_agents]]
+name       = "conversation_agent"
+module     = "citnega.packages.agents.core.conversation_agent"
+class_name = "ConversationAgent"
+enabled    = true
+default    = true
+
+[[core_agents]]
+name       = "planner_agent"
+module     = "citnega.packages.agents.core.planner_agent"
+class_name = "PlannerAgent"
+enabled    = true
+default    = false

@@ -1,0 +1,259 @@
+"""
+Citnega TUI — entry point.
+
+The App owns:
+  - The ApplicationService (injected via cli_bootstrap)
+  - The ChatController (processes incoming canonical events into UI updates)
+  - The EventConsumerWorker (bridges EventEmitter queue → Textual messages)
+  - The active session (created on startup if none exists)
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import TYPE_CHECKING
+
+from textual.app import App, ComposeResult
+
+from citnega.apps.tui.screens.chat_screen import (
+    ChatScreen,
+    DismissPopup,
+    ToggleSlashPopup,
+    UserInputSubmitted,
+)
+from citnega.apps.tui.screens.session_picker import (
+    SessionPickerScreen,
+)
+from citnega.apps.tui.widgets.approval_block import ApprovalBlock
+from citnega.apps.tui.widgets.plan_approval_block import PlanApprovalBlock
+from citnega.apps.tui.workers.event_consumer import (
+    ApprovalRequested,
+    RunFinished,
+    RunStarted,
+    ThinkingReceived,
+    TokenReceived,
+    ToolCallFinished,
+    ToolCallStarted,
+)
+
+if TYPE_CHECKING:
+    from citnega.packages.runtime.app_service import ApplicationService
+
+
+class CitnegaApp(App):
+    """
+    Single-window conversational TUI.
+
+    Lifecycle:
+      1. on_mount  → push ChatScreen, bootstrap ApplicationService, create session
+      2. User sends input → ChatController routes to ApplicationService
+      3. EventConsumerWorker drains EventEmitter → posts TUI messages
+      4. ChatController handles messages → mutates widgets
+    """
+
+    TITLE = "Citnega"
+    SUB_TITLE = "agentic assistant"
+
+    def __init__(
+        self,
+        *,
+        service: "ApplicationService | None" = None,
+        session_id: str | None = None,
+        theme_name: str = "dark",
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._service: "ApplicationService | None" = service
+        self._session_id: str | None = session_id
+        self._theme_name = theme_name
+        self._controller = None
+        self._bootstrap_ctx = None
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────────
+
+    async def on_mount(self) -> None:
+        # 1. Bootstrap the service if not injected
+        if self._service is None:
+            from citnega.apps.cli.bootstrap import cli_bootstrap  # noqa: PLC0415
+            self._bootstrap_ctx = cli_bootstrap()
+            try:
+                self._service = await self._bootstrap_ctx.__aenter__()
+            except Exception as exc:
+                # Fall back to chat screen directly if bootstrap fails
+                await self.push_screen(ChatScreen())
+                self.notify(f"Bootstrap failed: {exc}", severity="error", timeout=10)
+                return
+
+        # 2. If a specific session_id was given, go straight to chat
+        if self._session_id is not None:
+            await self._start_chat_with_session(self._session_id)
+            return
+
+        # 3. Otherwise show the session picker
+        from citnega.packages.config.loaders import load_settings  # noqa: PLC0415
+        settings = load_settings()
+        limit    = settings.conversation.max_sessions_shown
+
+        try:
+            all_sessions = await self._service.list_sessions()
+        except Exception:
+            all_sessions = []
+
+        # Sort by most recently active first, cap at configured limit
+        all_sessions.sort(
+            key=lambda s: s.last_active_at or "",
+            reverse=True,
+        )
+        recent = all_sessions[:limit]
+
+        picker = SessionPickerScreen(sessions=recent)
+        await self.push_screen(picker)
+
+    async def on_session_picker_screen_session_selected(
+        self, message: "SessionPickerScreen.SessionSelected"
+    ) -> None:
+        """User picked a session from the picker — resume it."""
+        await self.pop_screen()
+        await self._start_chat_with_session(message.session_id)
+
+    async def on_session_picker_screen_new_session_requested(
+        self, message: "SessionPickerScreen.NewSessionRequested"
+    ) -> None:
+        """User pressed 'n' in the picker — start a fresh session."""
+        await self.pop_screen()
+        await self._start_chat_with_session(None)
+
+    async def _start_chat_with_session(self, session_id: str | None) -> None:
+        """Push ChatScreen and wire up the controller for *session_id*."""
+        await self.push_screen(ChatScreen())
+
+        from citnega.packages.protocol.models.sessions import SessionConfig  # noqa: PLC0415
+        try:
+            if session_id is None:
+                config = SessionConfig(
+                    session_id=str(uuid.uuid4()),
+                    name="new-session",
+                    framework="stub",
+                    default_model_id="",
+                )
+                session = await self._service.create_session(config)
+                self._session_id = session.config.session_id
+            else:
+                try:
+                    session = await self._service.get_session(session_id)
+                    self._session_id = session.config.session_id
+                except Exception:
+                    # Session not found — create fresh
+                    self.notify(f"Session {session_id!r} not found; starting fresh.")
+                    config = SessionConfig(
+                        session_id=str(uuid.uuid4()),
+                        name="new-session",
+                        framework="stub",
+                        default_model_id="",
+                    )
+                    session = await self._service.create_session(config)
+                    self._session_id = session.config.session_id
+        except Exception as exc:
+            self.notify(f"Session setup failed: {exc}", severity="error", timeout=10)
+            return
+
+        # Update status bar
+        from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
+        try:
+            status = self.screen.query_one(StatusBar)
+            status.session_id = self._session_id
+            status.framework  = self._service.list_frameworks()[0] if self._service else "direct"
+            active_model = self._service.get_session_model(self._session_id) if self._service else ""
+            if active_model:
+                status.model = active_model
+            elif self._service:
+                models = self._service.list_models()
+                if models:
+                    status.model = models[0].model_id
+        except Exception:
+            pass
+
+        # Create controller
+        from citnega.apps.tui.controllers.chat_controller import ChatController  # noqa: PLC0415
+        self._controller = ChatController(
+            app=self,
+            service=self._service,
+            session_id=self._session_id,
+        )
+
+    async def on_unmount(self) -> None:
+        if self._controller is not None:
+            await self._controller.shutdown()
+        if self._bootstrap_ctx is not None:
+            await self._bootstrap_ctx.__aexit__(None, None, None)
+
+    # ── Message handlers ───────────────────────────────────────────────────────
+
+    async def on_user_input_submitted(self, message: UserInputSubmitted) -> None:
+        if self._controller is None:
+            return
+        await self._controller.handle_user_input(message.text)
+
+    def on_dismiss_popup(self, message: DismissPopup) -> None:
+        if self._controller is not None:
+            self._controller.dismiss_popup()
+
+    def on_toggle_slash_popup(self, message: ToggleSlashPopup) -> None:
+        if self._controller is not None:
+            self._controller.toggle_slash_popup()
+
+    async def on_approval_block_resolved(self, message: ApprovalBlock.Resolved) -> None:
+        if self._controller is not None:
+            await self._controller.on_approval_block_resolved(message)
+
+    async def on_plan_approval_block_resolved(
+        self, message: PlanApprovalBlock.Resolved
+    ) -> None:
+        if self._controller is not None:
+            await self._controller.on_plan_approval_block_resolved(message)
+
+    async def on_thinking_received(self, message: ThinkingReceived) -> None:
+        if self._controller is not None:
+            await self._controller.on_thinking_received(message)
+
+    async def on_token_received(self, message: TokenReceived) -> None:
+        if self._controller is not None:
+            await self._controller.on_token_received(message)
+
+    async def on_run_started(self, message: RunStarted) -> None:
+        if self._controller is not None:
+            self._controller.on_run_started(message)
+
+    async def on_run_finished(self, message: RunFinished) -> None:
+        if self._controller is not None:
+            await self._controller.on_run_finished(message)
+
+    async def on_tool_call_started(self, message: ToolCallStarted) -> None:
+        if self._controller is not None:
+            await self._controller.on_tool_call_started(message)
+
+    async def on_tool_call_finished(self, message: ToolCallFinished) -> None:
+        if self._controller is not None:
+            await self._controller.on_tool_call_finished(message)
+
+    async def on_approval_requested(self, message: ApprovalRequested) -> None:
+        if self._controller is not None:
+            await self._controller.on_approval_requested(message)
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    @property
+    def service(self) -> "ApplicationService | None":
+        return self._service
+
+    @property
+    def session_id(self) -> str | None:
+        return self._session_id
+
+
+def main() -> None:
+    CitnegaApp().run()
+
+
+if __name__ == "__main__":
+    main()

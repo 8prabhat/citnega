@@ -1,0 +1,43 @@
+[[models]]
+model_id         = "gemma3-12b-local"
+provider_type    = "ollama"
+endpoint         = "http://localhost:11434"
+auth_mode        = "none"
+model_name       = "gemma3:12b"
+local            = true
+cost_rank        = 1
+priority         = 10
+preferred_for    = ["general", "research", "writing"]
+timeout_seconds  = 60
+requests_per_minute = 600
+tokens_per_minute   = 120000
+
+[models.capabilities]
+supports_streaming    = true
+supports_tool_calling = true
+supports_reasoning    = false
+supports_json_output  = true
+supports_multimodal   = false
+max_context_tokens    = 8192
+
+[[models]]
+model_id         = "gpt-4o-mini-remote"
+provider_type    = "openai_compatible"
+endpoint         = "https://api.openai.com/v1"
+auth_mode        = "keyring"
+model_name       = "gpt-4o-mini"
+local            = false
+cost_rank        = 3
+priority         = 20
+preferred_for    = ["reasoning", "coding"]
+timeout_seconds  = 60
+requests_per_minute = 500
+tokens_per_minute   = 200000
+
+[models.capabilities]
+supports_streaming    = true
+supports_tool_calling = true
+supports_reasoning    = true
+supports_json_output  = true
+supports_multimodal   = false
+max_context_tokens    = 128000

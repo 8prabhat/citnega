@@ -1,0 +1,63 @@
+# Citnega Tool Registry — v1
+# Each [[tools]] entry describes a built-in tool.
+# The bootstrap uses this to instantiate and register tools.
+
+[[tools]]
+name        = "read_file"
+module      = "citnega.packages.tools.builtin.read_file"
+class_name  = "ReadFileTool"
+enabled     = true
+
+[[tools]]
+name        = "write_file"
+module      = "citnega.packages.tools.builtin.write_file"
+class_name  = "WriteFileTool"
+enabled     = true
+
+[[tools]]
+name        = "list_dir"
+module      = "citnega.packages.tools.builtin.list_dir"
+class_name  = "ListDirTool"
+enabled     = true
+
+[[tools]]
+name        = "search_files"
+module      = "citnega.packages.tools.builtin.search_files"
+class_name  = "SearchFilesTool"
+enabled     = true
+
+[[tools]]
+name        = "run_shell"
+module      = "citnega.packages.tools.builtin.run_shell"
+class_name  = "RunShellTool"
+enabled     = true
+
+[[tools]]
+name        = "fetch_url"
+module      = "citnega.packages.tools.builtin.fetch_url"
+class_name  = "FetchURLTool"
+enabled     = true
+
+[[tools]]
+name        = "search_web"
+module      = "citnega.packages.tools.builtin.search_web"
+class_name  = "SearchWebTool"
+enabled     = true
+
+[[tools]]
+name        = "read_kb"
+module      = "citnega.packages.tools.builtin.read_kb"
+class_name  = "ReadKBTool"
+enabled     = true
+
+[[tools]]
+name        = "write_kb"
+module      = "citnega.packages.tools.builtin.write_kb"
+class_name  = "WriteKBTool"
+enabled     = true
+
+[[tools]]
+name        = "summarize_text"
+module      = "citnega.packages.tools.builtin.summarize_text"
+class_name  = "SummarizeTextTool"
+enabled     = true

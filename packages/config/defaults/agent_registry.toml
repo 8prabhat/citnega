@@ -1,0 +1,43 @@
+[[core_agents]]
+name             = "conversation_agent"
+class_path       = "citnega.packages.agents.core.conversation_agent.ConversationAgent"
+description      = "Primary orchestrator. Receives user input and coordinates specialists."
+prompt_template  = "conversation_agent.txt"
+routing_policy   = "hybrid"
+
+[[core_agents]]
+name             = "planner_agent"
+class_path       = "citnega.packages.agents.core.planner_agent.PlannerAgent"
+description      = "Breaks complex tasks into ordered subtasks."
+prompt_template  = "planner_agent.txt"
+routing_policy   = "llm"
+
+[[specialist_agents]]
+name         = "research_agent"
+class_path   = "citnega.packages.agents.specialists.research_agent.ResearchAgent"
+description  = "Information gathering: web search, KB, document retrieval."
+tools        = ["web_search", "kb_search", "fetch_url", "read_file"]
+
+[[specialist_agents]]
+name         = "summary_agent"
+class_path   = "citnega.packages.agents.specialists.summary_agent.SummaryAgent"
+description  = "Summarization and synthesis."
+tools        = []
+
+[[specialist_agents]]
+name         = "file_agent"
+class_path   = "citnega.packages.agents.specialists.file_agent.FileAgent"
+description  = "File system operations (read, write, list, search)."
+tools        = ["read_file", "write_file", "list_dir", "search_files"]
+
+[[specialist_agents]]
+name         = "data_agent"
+class_path   = "citnega.packages.agents.specialists.data_agent.DataAgent"
+description  = "Structured data processing (CSV, JSON, calculations)."
+tools        = ["read_file", "parse_csv", "parse_json", "run_calculation"]
+
+[[specialist_agents]]
+name         = "writing_agent"
+class_path   = "citnega.packages.agents.specialists.writing_agent.WritingAgent"
+description  = "Long-form writing, editing, drafting."
+tools        = ["read_file", "write_file"]
