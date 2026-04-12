@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.interfaces.artifact_store import IArtifactStore
 from citnega.packages.security.permissions import ensure_dir_permissions, ensure_file_permissions
 from citnega.packages.shared.errors import ArtifactError
-from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.storage.path_resolver import PathResolver
 
 
 class ArtifactStore(IArtifactStore):
@@ -28,9 +32,7 @@ class ArtifactStore(IArtifactStore):
         try:
             resolved.relative_to(self._root.resolve())
         except ValueError as exc:
-            raise ArtifactError(
-                f"Artifact path escapes root: {path!r}"
-            ) from exc
+            raise ArtifactError(f"Artifact path escapes root: {path!r}") from exc
         return resolved
 
     async def put_text(self, path: str, content: str) -> Path:

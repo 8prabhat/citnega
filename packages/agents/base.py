@@ -50,6 +50,7 @@ def _load_agents_config() -> dict[str, Any]:
 
 # ── Base class ─────────────────────────────────────────────────────────────────
 
+
 class BaseAgent(SpecialistBase):
     """
     YAML-configurable agent base.
@@ -63,14 +64,14 @@ class BaseAgent(SpecialistBase):
     This keeps domain logic in Python and configuration in YAML (OCP).
     """
 
-    agent_id: str = ""   # override in subclasses — must match agents.yaml key
+    agent_id: str = ""  # override in subclasses — must match agents.yaml key
 
     def __init__(
         self,
-        policy_enforcer: "IPolicyEnforcer",
-        event_emitter:   "IEventEmitter",
-        tracer:          "ITracer",
-        tool_registry:   "dict[str, IInvocable] | None" = None,
+        policy_enforcer: IPolicyEnforcer,
+        event_emitter: IEventEmitter,
+        tracer: ITracer,
+        tool_registry: dict[str, IInvocable] | None = None,
     ) -> None:
         super().__init__(policy_enforcer, event_emitter, tracer, tool_registry)
 
@@ -92,7 +93,8 @@ class BaseAgent(SpecialistBase):
         # Override policy if YAML has one
         yaml_policy: dict | None = config.get("policy")
         if yaml_policy:
-            from citnega.packages.protocol.callables.types import CallablePolicy  # noqa: PLC0415
+            from citnega.packages.protocol.callables.types import CallablePolicy
+
             merged = {**self.policy.model_dump(), **yaml_policy}
             self.policy = CallablePolicy(**merged)  # type: ignore[misc]
 
@@ -104,7 +106,7 @@ class BaseAgent(SpecialistBase):
     async def _call_model(
         self,
         user_input: str,
-        context: "Any",
+        context: Any,
         system_override: str | None = None,
     ) -> str:
         """Call model with effective system prompt (YAML > class default)."""

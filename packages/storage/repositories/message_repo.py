@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 from citnega.packages.protocol.models.messages import Message, MessageRole
@@ -11,7 +11,7 @@ from citnega.packages.storage.repositories.base import BaseRepository
 
 
 class MessageRepository(BaseRepository[Message]):
-    _table    = "messages"
+    _table = "messages"
     _id_field = "message_id"
 
     def _from_row(self, row: dict[str, Any]) -> Message:
@@ -21,9 +21,7 @@ class MessageRepository(BaseRepository[Message]):
             run_id=row.get("run_id"),
             role=MessageRole(row["role"]),
             content=row["content"],
-            timestamp=datetime.fromisoformat(row["timestamp"]).replace(
-                tzinfo=timezone.utc
-            ),
+            timestamp=datetime.fromisoformat(row["timestamp"]).replace(tzinfo=UTC),
             metadata=json.loads(row.get("metadata") or "{}"),
         )
 
@@ -31,11 +29,11 @@ class MessageRepository(BaseRepository[Message]):
         return {
             "message_id": entity.message_id,
             "session_id": entity.session_id,
-            "run_id":     entity.run_id,
-            "role":       entity.role.value,
-            "content":    entity.content,
-            "timestamp":  entity.timestamp.isoformat(),
-            "metadata":   json.dumps(entity.metadata),
+            "run_id": entity.run_id,
+            "role": entity.role.value,
+            "content": entity.content,
+            "timestamp": entity.timestamp.isoformat(),
+            "metadata": json.dumps(entity.metadata),
         }
 
     async def save(self, entity: Message) -> Message:

@@ -18,9 +18,9 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -30,6 +30,8 @@ from citnega.packages.protocol.models.kb import KBItem, KBSourceType
 from citnega.packages.storage.database import DatabaseFactory
 from citnega.packages.storage.path_resolver import PathResolver
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Schema DDL (matches migration 0001_initial.py)
@@ -82,11 +84,12 @@ _KB_DDL = [
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def store(tmp_path: Path):
     db_path = tmp_path / "kb_test.db"
-    db      = DatabaseFactory(db_path)
-    pr      = PathResolver(app_home=tmp_path / "app")
+    db = DatabaseFactory(db_path)
+    pr = PathResolver(app_home=tmp_path / "app")
 
     async def _setup():
         await db.connect()
@@ -109,7 +112,7 @@ def _item(
     tags: list[str] | None = None,
     session_id: str | None = None,
 ) -> KBItem:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return KBItem(
         item_id=str(uuid.uuid4()),
         title=title,
@@ -131,6 +134,7 @@ def run(coro):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestAddAndGet:
     def test_round_trip(self, store) -> None:
         ks, _ = store
@@ -138,8 +142,8 @@ class TestAddAndGet:
         run(ks.add_item(item))
         fetched = run(ks.get_item(item.item_id))
         assert fetched is not None
-        assert fetched.item_id    == item.item_id
-        assert fetched.content    == item.content
+        assert fetched.item_id == item.item_id
+        assert fetched.content == item.content
         assert fetched.content_hash == item.content_hash
 
     def test_get_missing_returns_none(self, store) -> None:
@@ -241,7 +245,7 @@ class TestListItems:
     def test_list_by_source_type(self, store) -> None:
         ks, _ = store
         run(ks.add_item(_item("note content", source_type=KBSourceType.NOTE)))
-        run(ks.add_item(_item("doc content",  source_type=KBSourceType.DOCUMENT)))
+        run(ks.add_item(_item("doc content", source_type=KBSourceType.DOCUMENT)))
         notes = run(ks.list_items(source_type=KBSourceType.NOTE))
         assert len(notes) == 1
         assert notes[0].source_type == KBSourceType.NOTE
@@ -249,7 +253,7 @@ class TestListItems:
     def test_list_by_tag(self, store) -> None:
         ks, _ = store
         run(ks.add_item(_item("tagged item", tags=["python", "ml"])))
-        run(ks.add_item(_item("other item",  tags=["web"])))
+        run(ks.add_item(_item("other item", tags=["web"])))
         python_items = run(ks.list_items(tags=["python"]))
         assert len(python_items) == 1
 
@@ -268,7 +272,7 @@ class TestExportAll:
         path = run(ks.export_all())
         assert path.exists()
         assert path.suffix == ".jsonl"
-        lines = [l for l in path.read_text().splitlines() if l.strip()]
+        lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
         assert len(lines) == 1
 
     def test_export_empty_db_creates_empty_file(self, store) -> None:
@@ -287,7 +291,6 @@ class TestMultiSessionIsolation:
         run(ks.add_item(_item("Python pandas session B", session_id=sess_b)))
 
         from citnega.packages.kb.retrieval import fts_search
-        from citnega.packages.storage.database import DatabaseFactory
 
         _, db = store
 
@@ -306,8 +309,8 @@ class TestMultiSessionIsolation:
 
 class TestKBRetrievalHandler:
     def test_enriches_context_with_kb_results(self, store) -> None:
-        from datetime import datetime, timezone
-        from citnega.packages.kb.store import KnowledgeStore
+        from datetime import datetime
+
         from citnega.packages.protocol.models.context import ContextObject
         from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
         from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
@@ -317,7 +320,7 @@ class TestKBRetrievalHandler:
 
         handler = KBRetrievalHandler(kb_store=ks, retrieve_limit=3)
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         session = Session(
             config=SessionConfig(
                 session_id="s1",
@@ -344,7 +347,8 @@ class TestKBRetrievalHandler:
         assert "299,792,458" in kb_sources[0].content
 
     def test_no_op_when_kb_disabled(self, store) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from citnega.packages.protocol.models.context import ContextObject
         from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
         from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
@@ -354,14 +358,14 @@ class TestKBRetrievalHandler:
 
         handler = KBRetrievalHandler(kb_store=ks)
 
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         session = Session(
             config=SessionConfig(
                 session_id="s2",
                 name="test",
                 framework="stub",
                 default_model_id="",
-                kb_enabled=False,   # KB disabled
+                kb_enabled=False,  # KB disabled
             ),
             created_at=now,
             last_active_at=now,
@@ -379,13 +383,14 @@ class TestKBRetrievalHandler:
         assert len(kb_sources) == 0
 
     def test_no_op_when_store_is_none(self) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from citnega.packages.protocol.models.context import ContextObject
         from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
         from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
 
         handler = KBRetrievalHandler(kb_store=None)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         session = Session(
             config=SessionConfig(
                 session_id="s3",
@@ -406,4 +411,4 @@ class TestKBRetrievalHandler:
             budget_remaining=8192,
         )
         result = run(handler.enrich(context, session))
-        assert result is context   # unchanged
+        assert result is context  # unchanged

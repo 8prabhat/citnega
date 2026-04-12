@@ -8,10 +8,14 @@ and NTFS ACLs are set at directory creation by the OS).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import stat
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def is_unix() -> bool:
@@ -39,10 +43,8 @@ def ensure_file_permissions(path: Path, mode: int = 0o600) -> None:
     On Windows: no-op.
     """
     if is_unix() and path.exists():
-        try:
+        with contextlib.suppress(PermissionError):
             os.chmod(path, mode)
-        except PermissionError:
-            pass
 
 
 def check_dir_permissions(path: Path, expected_mode: int = 0o700) -> bool:

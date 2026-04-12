@@ -2,27 +2,31 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class SummaryInput(BaseModel):
-    text:      str  = Field(description="Text to summarise.")
-    style:     str  = Field(default="concise", description="'concise' | 'bullet' | 'detailed'")
-    max_words: int  = Field(default=200)
-    focus:     str  = Field(default="")
+    text: str = Field(description="Text to summarise.")
+    style: str = Field(default="concise", description="'concise' | 'bullet' | 'detailed'")
+    max_words: int = Field(default=200)
+    focus: str = Field(default="")
 
 
 class SummaryAgent(SpecialistBase):
-    name          = "summary_agent"
-    description   = "Summarises text using the summarize_text tool or direct model call."
+    name = "summary_agent"
+    description = "Summarises text using the summarize_text tool or direct model call."
     callable_type = CallableType.SPECIALIST
-    input_schema  = SummaryInput
+    input_schema = SummaryInput
     output_schema = SpecialistOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=60.0,
         requires_approval=False,
         network_allowed=True,
@@ -39,6 +43,7 @@ class SummaryAgent(SpecialistBase):
         tool = self._get_tool("summarize_text")
         if tool:
             from citnega.packages.tools.builtin.summarize_text import SummarizeTextInput
+
             child_ctx = context.child(self.name, self.callable_type)
             result = await tool.invoke(
                 SummarizeTextInput(

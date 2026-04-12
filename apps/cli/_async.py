@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import functools
-from typing import Any, Callable, Coroutine, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
 
 _T = TypeVar("_T")
 
@@ -21,6 +24,7 @@ def run_async(coro_fn: Callable[..., Coroutine[Any, Any, _T]]) -> Callable[..., 
         async def my_command(...) -> None:
             ...
     """
+
     @functools.wraps(coro_fn)
     def wrapper(*args: Any, **kwargs: Any) -> _T:
         return asyncio.run(coro_fn(*args, **kwargs))

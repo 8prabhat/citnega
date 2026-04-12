@@ -9,12 +9,13 @@ We create a thin async wrapper per callable and bind input/output schemas.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_callable_factory import BaseCallableFactory
-from citnega.packages.adapters.base.event_translator import EventTranslator
-from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
-from citnega.packages.protocol.events import CanonicalEvent
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
+    from citnega.packages.protocol.events import CanonicalEvent
 
 
 class LangGraphCallableFactory(BaseCallableFactory):

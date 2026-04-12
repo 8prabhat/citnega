@@ -13,17 +13,18 @@ All writes are serialised through DatabaseFactory.write_lock.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.kb.export import default_export_path, export_jsonl
 from citnega.packages.kb.retrieval import _row_to_item, fts_search
 from citnega.packages.protocol.interfaces.knowledge_store import IKnowledgeStore
-from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
-from citnega.packages.shared.errors import ArtifactError
-from citnega.packages.storage.database import DatabaseFactory
-from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
+    from citnega.packages.storage.database import DatabaseFactory
+    from citnega.packages.storage.path_resolver import PathResolver
 
 
 class KnowledgeStore(IKnowledgeStore):
@@ -36,8 +37,8 @@ class KnowledgeStore(IKnowledgeStore):
     """
 
     def __init__(self, db: DatabaseFactory, path_resolver: PathResolver) -> None:
-        self._db   = db
-        self._pr   = path_resolver
+        self._db = db
+        self._pr = path_resolver
 
     # ── IKnowledgeStore ────────────────────────────────────────────────────────
 
@@ -53,9 +54,9 @@ class KnowledgeStore(IKnowledgeStore):
             return existing
 
         row = _item_to_row(item)
-        cols  = ", ".join(row.keys())
+        cols = ", ".join(row.keys())
         holes = ", ".join("?" for _ in row)
-        sql   = f"INSERT OR IGNORE INTO kb_items ({cols}) VALUES ({holes})"
+        sql = f"INSERT OR IGNORE INTO kb_items ({cols}) VALUES ({holes})"
 
         async with self._db.write_lock:
             await self._db.execute(sql, tuple(row.values()))
@@ -63,9 +64,7 @@ class KnowledgeStore(IKnowledgeStore):
         return item
 
     async def get_item(self, item_id: str) -> KBItem | None:
-        row = await self._db.fetchone(
-            "SELECT * FROM kb_items WHERE item_id = ?", (item_id,)
-        )
+        row = await self._db.fetchone("SELECT * FROM kb_items WHERE item_id = ?", (item_id,))
         return _row_to_item(row) if row else None
 
     async def search(
@@ -77,9 +76,7 @@ class KnowledgeStore(IKnowledgeStore):
 
     async def delete_item(self, item_id: str) -> None:
         async with self._db.write_lock:
-            await self._db.execute(
-                "DELETE FROM kb_items WHERE item_id = ?", (item_id,)
-            )
+            await self._db.execute("DELETE FROM kb_items WHERE item_id = ?", (item_id,))
 
     async def list_items(
         self,
@@ -87,7 +84,7 @@ class KnowledgeStore(IKnowledgeStore):
         source_type: KBSourceType | None = None,
         limit: int = 100,
     ) -> list[KBItem]:
-        sql    = "SELECT * FROM kb_items WHERE 1=1"
+        sql = "SELECT * FROM kb_items WHERE 1=1"
         params: list[Any] = []
 
         if source_type is not None:
@@ -124,17 +121,18 @@ class KnowledgeStore(IKnowledgeStore):
 
 # ── Row helpers ────────────────────────────────────────────────────────────────
 
+
 def _item_to_row(item: KBItem) -> dict[str, Any]:
     return {
-        "item_id":           item.item_id,
-        "title":             item.title,
-        "content":           item.content,
-        "source_type":       item.source_type.value,
+        "item_id": item.item_id,
+        "title": item.title,
+        "content": item.content,
+        "source_type": item.source_type.value,
         "source_session_id": item.source_session_id,
-        "source_run_id":     item.source_run_id,
-        "tags":              json.dumps(item.tags),
-        "created_at":        item.created_at.isoformat(),
-        "updated_at":        item.updated_at.isoformat(),
-        "content_hash":      item.content_hash,
-        "file_path":         item.file_path,
+        "source_run_id": item.source_run_id,
+        "tags": json.dumps(item.tags),
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+        "content_hash": item.content_hash,
+        "file_path": item.file_path,
     }

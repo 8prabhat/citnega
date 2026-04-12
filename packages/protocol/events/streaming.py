@@ -9,6 +9,6 @@ class TokenEvent(BaseEvent):
     """Emitted for each LLM token during streaming."""
 
     event_type: str = "TokenEvent"
-    token:      str
-    is_first:   bool = False
-    is_final:   bool = False
+    token: str
+    is_first: bool = False
+    is_final: bool = False

@@ -20,6 +20,22 @@ ignore = [
     "B008",   # function-call-in-default-argument (used in Typer)
     "B024",   # abstract-base-class-without-abstract-method (intentional base classes)
     "SIM108", # ternary-instead-of-if (readability preference)
+    # Unused arguments in overrides must match the base signature
+    "ARG001",
+    "ARG002",
+    "ARG003",
+    # Style preferences — revisit when refactoring
+    "SIM105", # use contextlib.suppress — readability preference
+    "B904",   # raise from err — not always appropriate
+    "RUF006", # asyncio.create_task return value — fire-and-forget is intentional
+    "RUF012", # ClassVar annotation on mutable attrs — would require TYPE_CHECKING everywhere
+    # Ambiguous unicode in strings/comments/docstrings (intentional em-dashes)
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # TC (type-checking) rules: moving imports to TYPE_CHECKING blocks breaks
+    # Pydantic models that need types available at runtime for model_rebuild().
+    "TCH",
 ]
 
 [lint.per-file-ignores]

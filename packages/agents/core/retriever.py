@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.base import BaseAgent
 from citnega.packages.agents.specialists._specialist_base import SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class RetrieverInput(BaseModel):
-    query:   str       = Field(description="What to retrieve.")
+    query: str = Field(description="What to retrieve.")
     sources: list[str] = Field(
         default_factory=lambda: ["kb", "web"],
         description="Sources to query: 'kb', 'web', 'files'.",
@@ -19,11 +23,11 @@ class RetrieverInput(BaseModel):
 
 
 class RetrieverAgent(BaseAgent):
-    agent_id      = "retriever"
-    name          = "retriever_agent"
-    description   = "Retrieves relevant information from KB, web, and files."
+    agent_id = "retriever"
+    name = "retriever_agent"
+    description = "Retrieves relevant information from KB, web, and files."
     callable_type = CallableType.SPECIALIST
-    input_schema  = RetrieverInput
+    input_schema = RetrieverInput
     output_schema = SpecialistOutput
 
     SYSTEM_PROMPT = (
@@ -40,9 +44,9 @@ class RetrieverAgent(BaseAgent):
         if "kb" in input.sources:
             kb_tool = self._get_tool("read_kb")
             if kb_tool:
-                from pydantic import BaseModel as BM  # noqa: PLC0415
                 try:
-                    from citnega.packages.tools.builtin.read_kb import ReadKBInput  # noqa: PLC0415
+                    from citnega.packages.tools.builtin.read_kb import ReadKBInput
+
                     child_ctx = context.child(self.name, self.callable_type)
                     result = await kb_tool.invoke(ReadKBInput(query=input.query), child_ctx)
                     if result.success and result.output:
@@ -55,7 +59,10 @@ class RetrieverAgent(BaseAgent):
             web_tool = self._get_tool("search_web")
             if web_tool:
                 try:
-                    from citnega.packages.tools.builtin.search_web import SearchWebInput  # noqa: PLC0415
+                    from citnega.packages.tools.builtin.search_web import (
+                        SearchWebInput,
+                    )
+
                     child_ctx = context.child(self.name, self.callable_type)
                     result = await web_tool.invoke(SearchWebInput(query=input.query), child_ctx)
                     if result.success and result.output:
@@ -64,6 +71,8 @@ class RetrieverAgent(BaseAgent):
                     pass
 
         gathered = "\n\n".join(tool_results) if tool_results else "No results from tools."
-        user_msg = f"Query: {input.query}\n\nRetrieved information:\n{gathered}\n\nSummarise the findings."
+        user_msg = (
+            f"Query: {input.query}\n\nRetrieved information:\n{gathered}\n\nSummarise the findings."
+        )
         response = await self._call_model(user_msg, context)
         return SpecialistOutput(response=response, sources=input.sources)

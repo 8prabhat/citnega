@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 import uuid
-from datetime import datetime, timezone
 
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.models.runs import (
@@ -12,8 +13,11 @@ from citnega.packages.protocol.models.runs import (
     RunState,
     RunSummary,
 )
-from citnega.packages.shared.errors import RunNotFoundError, RuntimeError as CitnegaRuntimeError
-from citnega.packages.storage.repositories.run_repo import RunRepository
+from citnega.packages.shared.errors import RunNotFoundError
+from citnega.packages.shared.errors import RuntimeError as CitnegaRuntimeError
+
+if TYPE_CHECKING:
+    from citnega.packages.storage.repositories.run_repo import RunRepository
 
 
 class InvalidTransitionError(CitnegaRuntimeError):
@@ -31,7 +35,7 @@ class RunManager:
             run_id=str(uuid.uuid4()),
             session_id=session_id,
             state=RunState.PENDING,
-            started_at=datetime.now(tz=timezone.utc),
+            started_at=datetime.now(tz=UTC),
         )
         await self._repo.save(run)
         runtime_logger.info(
@@ -66,7 +70,7 @@ class RunManager:
 
         updates: dict[str, object] = {"state": new_state}
         if new_state in TERMINAL_RUN_STATES:
-            updates["finished_at"] = datetime.now(tz=timezone.utc)
+            updates["finished_at"] = datetime.now(tz=UTC)
         if error is not None:
             updates["error"] = error
         if tokens is not None:

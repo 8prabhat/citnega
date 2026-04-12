@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from citnega.packages.security.key_store import CompositeKeyStore, EnvVarKeyStore
 from tests.fixtures.key_store import InMemoryKeyStore
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestEnvVarKeyStore:
@@ -50,7 +53,7 @@ class TestInMemoryKeyStore:
 
 class TestCompositeKeyStore:
     def test_falls_back_to_second_store(self) -> None:
-        primary   = InMemoryKeyStore()
+        primary = InMemoryKeyStore()
         secondary = InMemoryKeyStore()
         secondary.set_key("svc", "k", "from_secondary")
 
@@ -58,7 +61,7 @@ class TestCompositeKeyStore:
         assert composite.get_key("svc", "k") == "from_secondary"
 
     def test_primary_takes_precedence(self) -> None:
-        primary   = InMemoryKeyStore()
+        primary = InMemoryKeyStore()
         secondary = InMemoryKeyStore()
         primary.set_key("svc", "k", "from_primary")
         secondary.set_key("svc", "k", "from_secondary")
@@ -71,7 +74,7 @@ class TestCompositeKeyStore:
         assert composite.get_key("missing", "key") is None
 
     def test_set_writes_to_primary(self) -> None:
-        primary   = InMemoryKeyStore()
+        primary = InMemoryKeyStore()
         secondary = InMemoryKeyStore()
         composite = CompositeKeyStore([primary, secondary])
         composite.set_key("svc", "k", "v")

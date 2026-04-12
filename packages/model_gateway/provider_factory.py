@@ -12,15 +12,15 @@ Usage::
 
 from __future__ import annotations
 
-import httpx
 from typing import TYPE_CHECKING
 
-from citnega.packages.model_gateway.yaml_config import ModelEntry, ModelYAMLConfig
-from citnega.packages.protocol.interfaces.model_gateway import IModelProvider
+import httpx
+
 from citnega.packages.protocol.models.model_gateway import ModelCapabilityFlags, ModelInfo
 
 if TYPE_CHECKING:
-    pass
+    from citnega.packages.model_gateway.yaml_config import ModelEntry, ModelYAMLConfig
+    from citnega.packages.protocol.interfaces.model_gateway import IModelProvider
 
 # Shared HTTP client — reused across providers for connection pooling
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
@@ -90,10 +90,7 @@ class ProviderFactory:
             if entry.id == model_id:
                 return entry
         available = [m.id for m in self._config.models]
-        raise KeyError(
-            f"Model '{model_id}' not found in YAML config. "
-            f"Available: {available}"
-        )
+        raise KeyError(f"Model '{model_id}' not found in YAML config. Available: {available}")
 
     def _build_from_entry(self, entry: ModelEntry) -> IModelProvider:
         provider_cfg = self._config.providers[entry.provider]
@@ -102,7 +99,10 @@ class ProviderFactory:
         ptype = provider_cfg.type
 
         if ptype == "ollama":
-            from citnega.packages.model_gateway.providers.ollama import OllamaProvider  # noqa: PLC0415
+            from citnega.packages.model_gateway.providers.ollama import (
+                OllamaProvider,
+            )
+
             return OllamaProvider(
                 model_info=model_info,
                 base_url=provider_cfg.base_url,
@@ -110,7 +110,10 @@ class ProviderFactory:
             )
 
         if ptype in ("openai_compatible", "custom_remote"):
-            from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider  # noqa: PLC0415
+            from citnega.packages.model_gateway.providers.openai_compatible import (
+                OpenAICompatibleProvider,
+            )
+
             return OpenAICompatibleProvider(
                 model_info=model_info,
                 base_url=provider_cfg.base_url,
@@ -120,7 +123,10 @@ class ProviderFactory:
 
         if ptype == "vllm":
             # vLLM exposes an OpenAI-compatible API
-            from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider  # noqa: PLC0415
+            from citnega.packages.model_gateway.providers.openai_compatible import (
+                OpenAICompatibleProvider,
+            )
+
             return OpenAICompatibleProvider(
                 model_info=model_info,
                 base_url=provider_cfg.base_url,
@@ -135,6 +141,7 @@ class ProviderFactory:
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
+
 
 def _make_model_info(entry: ModelEntry) -> ModelInfo:
     # Determine provider type from the config model entry's extra fields or id

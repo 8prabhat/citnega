@@ -7,21 +7,21 @@ ProviderFactory.  No external framework dependency.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.direct.runner import DirectModelRunner
 from citnega.packages.model_gateway.yaml_config import ModelYAMLConfig, load_yaml_config
-from citnega.packages.protocol.callables.interfaces import IInvocable
 from citnega.packages.protocol.interfaces.adapter import (
     AdapterConfig,
     ICallableFactory,
     IFrameworkAdapter,
-    IFrameworkRunner,
 )
 from citnega.packages.runtime.context.conversation_store import ConversationStore
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.models.sessions import Session
 
 
@@ -73,7 +73,7 @@ class DirectModelAdapter(IFrameworkAdapter):
 
     async def create_runner(
         self,
-        session: "Session",
+        session: Session,
         callables: list[IInvocable],
         model_gateway: Any,
     ) -> DirectModelRunner:
@@ -127,10 +127,10 @@ class DirectModelAdapter(IFrameworkAdapter):
         """Return model metadata list for UI display."""
         return [
             {
-                "id":          e.id,
-                "model_name":  e.model_name,
-                "provider":    e.provider,
-                "priority":    e.priority,
+                "id": e.id,
+                "model_name": e.model_name,
+                "provider": e.provider,
+                "priority": e.priority,
                 "description": e.description,
             }
             for e in sorted(self._yaml_config.models, key=lambda m: -m.priority)

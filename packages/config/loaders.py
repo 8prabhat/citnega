@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from citnega.packages.config.settings import Settings
-from citnega.packages.shared.errors import InvalidConfigError, MissingConfigError
+from citnega.packages.shared.errors import InvalidConfigError
 
 # Path to the bundled defaults directory
 _DEFAULTS_DIR = Path(__file__).parent / "defaults"
@@ -34,9 +34,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
     except FileNotFoundError:
         return {}
     except Exception as exc:
-        raise InvalidConfigError(
-            f"Failed to parse TOML at {path}: {exc}", original=exc
-        ) from exc
+        raise InvalidConfigError(f"Failed to parse TOML at {path}: {exc}", original=exc) from exc
 
 
 def load_settings(
@@ -68,19 +66,35 @@ def load_settings(
         _deep_merge(merged, user_toml)
 
         if profile:
-            profile_toml = _load_toml(
-                app_home / "config" / "profiles" / profile / "settings.toml"
-            )
+            profile_toml = _load_toml(app_home / "config" / "profiles" / profile / "settings.toml")
             _deep_merge(merged, profile_toml)
+
+        # workspace.toml — written atomically by /setworkfolder; loaded last so
+        # it takes precedence over settings.toml for [workspace] keys only.
+        workspace_toml = _load_toml(app_home / "config" / "workspace.toml")
+        _deep_merge(merged, workspace_toml)
 
     try:
         # Use Settings(**merged) instead of model_validate so that
         # pydantic-settings also reads environment variables (env > TOML > defaults).
         return Settings(**merged)
     except Exception as exc:
-        raise InvalidConfigError(
-            f"Settings validation failed: {exc}", original=exc
-        ) from exc
+        raise InvalidConfigError(f"Settings validation failed: {exc}", original=exc) from exc
+
+
+def save_workspace_settings(workfolder_path: str, app_home: Path) -> None:
+    """
+    Persist the workspace folder path to ``<app_home>/config/workspace.toml``.
+
+    Writing to a dedicated file keeps it atomic and prevents any risk of
+    corrupting the main ``settings.toml``.
+    """
+    path = app_home / "config" / "workspace.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"[workspace]\nworkfolder_path = {workfolder_path!r}\n",
+        encoding="utf-8",
+    )
 
 
 def load_registry_toml(name: str, app_home: Path | None = None) -> dict[str, Any]:

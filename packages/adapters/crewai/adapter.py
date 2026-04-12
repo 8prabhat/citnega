@@ -4,7 +4,7 @@ CrewAIFrameworkAdapter — IFrameworkAdapter for CrewAI.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_adapter import BaseFrameworkAdapter
 from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
@@ -12,10 +12,12 @@ from citnega.packages.adapters.base.event_translator import EventTranslator
 from citnega.packages.adapters.crewai.callable_factory import CrewAICallableFactory
 from citnega.packages.adapters.crewai.runner import CrewAIRunner
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.interfaces.adapter import AdapterConfig, ICallableFactory
-from citnega.packages.protocol.models.sessions import Session
-from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.interfaces.adapter import AdapterConfig, ICallableFactory
+    from citnega.packages.protocol.models.sessions import Session
+    from citnega.packages.storage.path_resolver import PathResolver
 
 
 class CrewAIFrameworkAdapter(BaseFrameworkAdapter):
@@ -45,14 +47,10 @@ class CrewAIFrameworkAdapter(BaseFrameworkAdapter):
         model_gateway: Any,
     ) -> CrewAIRunner:
         token = self._new_cancellation_token()
-        checkpoint_dir = (
-            self._path_resolver.checkpoint_dir(session.config.session_id)
-        )
+        checkpoint_dir = self._path_resolver.checkpoint_dir(session.config.session_id)
         serializer = CheckpointSerializer(checkpoint_dir, framework_name="crewai")
         model_id = (
-            self._config.default_model_id
-            if self._config
-            else session.config.default_model_id
+            self._config.default_model_id if self._config else session.config.default_model_id
         )
         return CrewAIRunner(
             session=session,

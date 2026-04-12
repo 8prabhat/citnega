@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from citnega.packages.protocol.interfaces.repository import IRepository
-from citnega.packages.storage.database import DatabaseFactory
+
+if TYPE_CHECKING:
+    from citnega.packages.storage.database import DatabaseFactory
 
 T = TypeVar("T")
 
@@ -22,7 +24,7 @@ class BaseRepository(IRepository[T], Generic[T]):
       - ``_id_field``         — primary key column name
     """
 
-    _table:    str
+    _table: str
     _id_field: str
 
     def __init__(self, db: DatabaseFactory) -> None:

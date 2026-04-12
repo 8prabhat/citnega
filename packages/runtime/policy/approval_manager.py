@@ -11,7 +11,7 @@ Approval flow:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from citnega.packages.protocol.models.approvals import Approval, ApprovalStatus
 
@@ -45,7 +45,7 @@ class ApprovalManager:
             run_id=run_id,
             callable_name=callable_name,
             input_summary=input_summary,
-            requested_at=datetime.now(tz=timezone.utc),
+            requested_at=datetime.now(tz=UTC),
         )
         async with self._lock:
             self._approvals[approval_id] = approval
@@ -88,14 +88,12 @@ class ApprovalManager:
         if approval is None or event is None:
             raise ApprovalNotFoundError(approval_id)
         if approval.status != ApprovalStatus.PENDING:
-            raise ValueError(
-                f"Approval {approval_id!r} is already in state {approval.status!r}."
-            )
+            raise ValueError(f"Approval {approval_id!r} is already in state {approval.status!r}.")
 
         resolved = approval.model_copy(
             update={
                 "status": status,
-                "responded_at": datetime.now(tz=timezone.utc),
+                "responded_at": datetime.now(tz=UTC),
                 "user_note": user_note,
             }
         )
@@ -112,22 +110,21 @@ class ApprovalManager:
                 self._approvals[approval_id] = approval.model_copy(
                     update={
                         "status": ApprovalStatus.TIMEOUT,
-                        "responded_at": datetime.now(tz=timezone.utc),
+                        "responded_at": datetime.now(tz=UTC),
                     }
                 )
 
     def get_pending(self, run_id: str) -> list[Approval]:
         """Return all PENDING approvals for a given run."""
         return [
-            a for a in self._approvals.values()
+            a
+            for a in self._approvals.values()
             if a.run_id == run_id and a.status == ApprovalStatus.PENDING
         ]
 
     def cleanup(self, run_id: str) -> None:
         """Remove all approvals for a completed run."""
-        ids_to_remove = [
-            aid for aid, a in self._approvals.items() if a.run_id == run_id
-        ]
+        ids_to_remove = [aid for aid, a in self._approvals.items() if a.run_id == run_id]
         for aid in ids_to_remove:
             self._approvals.pop(aid, None)
             ev = self._events.pop(aid, None)

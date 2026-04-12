@@ -4,34 +4,36 @@ from __future__ import annotations
 
 import pathlib
 import re
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCallable
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.shared.errors import ArtifactError
 from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
 
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
+
 
 class SearchFilesInput(BaseModel):
-    root_path:      str  = Field(description="Root directory to search under.")
-    pattern:        str  = Field(description="Regex pattern to search for in file content.")
-    glob_filter:    str  = Field(default="**/*", description="Glob filter for file names.")
-    max_results:    int  = Field(default=50)
-    context_lines:  int  = Field(default=2, description="Lines of context around each match.")
+    root_path: str = Field(description="Root directory to search under.")
+    pattern: str = Field(description="Regex pattern to search for in file content.")
+    glob_filter: str = Field(default="**/*", description="Glob filter for file names.")
+    max_results: int = Field(default=50)
+    context_lines: int = Field(default=2, description="Lines of context around each match.")
     case_sensitive: bool = Field(default=False)
 
 
 class SearchFilesTool(BaseCallable):
-    name          = "search_files"
-    description   = "Search file contents matching a regex pattern within a directory tree."
+    name = "search_files"
+    description = "Search file contents matching a regex pattern within a directory tree."
     callable_type = CallableType.TOOL
-    input_schema  = SearchFilesInput
+    input_schema = SearchFilesInput
     output_schema = ToolOutput
-    policy        = tool_policy(
+    policy = tool_policy(
         timeout_seconds=30.0,
-        allowed_paths=["${SESSION_ID}"],
     )
 
     async def _execute(self, input: SearchFilesInput, context: CallContext) -> ToolOutput:
@@ -57,12 +59,10 @@ class SearchFilesTool(BaseCallable):
             for i, line in enumerate(lines):
                 if regex.search(line):
                     start = max(0, i - input.context_lines)
-                    end   = min(len(lines), i + input.context_lines + 1)
-                    snippet = "\n".join(
-                        f"  {j+1:>4}: {lines[j]}" for j in range(start, end)
-                    )
+                    end = min(len(lines), i + input.context_lines + 1)
+                    snippet = "\n".join(f"  {j + 1:>4}: {lines[j]}" for j in range(start, end))
                     rel = file_path.relative_to(root)
-                    results.append(f"{rel}:{i+1}\n{snippet}")
+                    results.append(f"{rel}:{i + 1}\n{snippet}")
                     if len(results) >= input.max_results:
                         break
             if len(results) >= input.max_results:

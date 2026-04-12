@@ -15,16 +15,11 @@ Shared behaviour (provided here):
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+import contextlib
 
-from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.interfaces.adapter import AdapterConfig, IFrameworkAdapter
-from citnega.packages.protocol.models.sessions import Session
 from citnega.packages.adapters.base.cancellation import CancellationToken
-
-if TYPE_CHECKING:
-    from citnega.packages.protocol.interfaces.adapter import ICallableFactory, IFrameworkRunner
+from citnega.packages.observability.logging_setup import runtime_logger
+from citnega.packages.protocol.interfaces.adapter import AdapterConfig, IFrameworkAdapter
 
 
 class BaseFrameworkAdapter(IFrameworkAdapter):
@@ -95,7 +90,5 @@ class BaseFrameworkAdapter(IFrameworkAdapter):
 
     def _release_token(self, token: CancellationToken) -> None:
         """Remove a completed runner's token from the live list."""
-        try:
+        with contextlib.suppress(ValueError):
             self._cancellation_tokens.remove(token)
-        except ValueError:
-            pass

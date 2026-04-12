@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from citnega.packages.protocol.models.runs import RunState, RunSummary
@@ -10,7 +10,7 @@ from citnega.packages.storage.repositories.base import BaseRepository
 
 
 def _parse_dt(s: str) -> datetime:
-    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(s).replace(tzinfo=UTC)
 
 
 def _parse_dt_opt(s: str | None) -> datetime | None:
@@ -18,7 +18,7 @@ def _parse_dt_opt(s: str | None) -> datetime | None:
 
 
 class RunRepository(BaseRepository[RunSummary]):
-    _table    = "runs"
+    _table = "runs"
     _id_field = "run_id"
 
     def _from_row(self, row: dict[str, Any]) -> RunSummary:
@@ -35,13 +35,13 @@ class RunRepository(BaseRepository[RunSummary]):
 
     def _to_row(self, entity: RunSummary) -> dict[str, Any]:
         return {
-            "run_id":        entity.run_id,
-            "session_id":    entity.session_id,
-            "state":         entity.state.value,
-            "started_at":    entity.started_at.isoformat(),
-            "finished_at":   entity.finished_at.isoformat() if entity.finished_at else None,
-            "turn_count":    entity.turn_count,
-            "total_tokens":  entity.total_tokens,
+            "run_id": entity.run_id,
+            "session_id": entity.session_id,
+            "state": entity.state.value,
+            "started_at": entity.started_at.isoformat(),
+            "finished_at": entity.finished_at.isoformat() if entity.finished_at else None,
+            "turn_count": entity.turn_count,
+            "total_tokens": entity.total_tokens,
             "error_message": entity.error,
         }
 

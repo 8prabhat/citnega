@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
-
 import typer
 
 from citnega.apps.cli._async import run_async
@@ -20,10 +15,12 @@ app = typer.Typer(help="Knowledge base operations.")
 @app.command("add")
 @run_async
 async def kb_add(
-    content:     str = typer.Argument(..., help="Text content to add to the KB."),
-    title:       str = typer.Option("",   "--title", "-t", help="Item title (default: first 60 chars)."),
-    tag:         str = typer.Option("",   "--tag",         help="Comma-separated tags."),
-    source_type: str = typer.Option("document", "--type", help="Source type (document|note|generated)."),
+    content: str = typer.Argument(..., help="Text content to add to the KB."),
+    title: str = typer.Option("", "--title", "-t", help="Item title (default: first 60 chars)."),
+    tag: str = typer.Option("", "--tag", help="Comma-separated tags."),
+    source_type: str = typer.Option(
+        "document", "--type", help="Source type (document|note|generated)."
+    ),
 ) -> None:
     """Add text to the knowledge base (auto-chunks long content)."""
     resolved_title = title or content[:60].replace("\n", " ") + ("…" if len(content) > 60 else "")
@@ -32,7 +29,9 @@ async def kb_add(
     try:
         stype = KBSourceType(source_type)
     except ValueError:
-        typer.echo(f"Invalid source type {source_type!r}. Use: document, note, generated.", err=True)
+        typer.echo(
+            f"Invalid source type {source_type!r}. Use: document, note, generated.", err=True
+        )
         raise typer.Exit(code=1)
 
     items = build_items(content, title=resolved_title, source_type=stype, tags=tags)
@@ -54,7 +53,7 @@ async def kb_add(
 @run_async
 async def kb_search(
     query: str = typer.Argument(..., help="Search query."),
-    limit: int = typer.Option(10,  "--limit", "-l", help="Max results."),
+    limit: int = typer.Option(10, "--limit", "-l", help="Max results."),
 ) -> None:
     """Search the knowledge base using full-text search."""
     async with cli_bootstrap() as svc:
@@ -69,13 +68,15 @@ async def kb_search(
 @app.command("export")
 @run_async
 async def kb_export(
-    output: str = typer.Option("", "--output", "-o", help="Output file path (default: timestamped in kb_exports_dir)."),
-    fmt:    str = typer.Option("jsonl", "--format", "-f", help="Format: jsonl or markdown."),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output file path (default: timestamped in kb_exports_dir)."
+    ),
+    fmt: str = typer.Option("jsonl", "--format", "-f", help="Format: jsonl or markdown."),
 ) -> None:
     """Export the full knowledge base to JSONL or Markdown."""
     async with cli_bootstrap() as svc:
         try:
-            path = await svc.export_session("all")   # export_session exports full KB
+            path = await svc.export_session("all")  # export_session exports full KB
         except NotImplementedError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=2)

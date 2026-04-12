@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from citnega.packages.storage.repositories.base import BaseRepository
@@ -12,10 +11,20 @@ class InvocationRecord:
     """Lightweight record type for callable_invocations (not a Pydantic model)."""
 
     __slots__ = (
-        "invocation_id", "run_id", "callable_name", "callable_type",
-        "depth", "parent_invocation_id", "input_hash", "input_summary",
-        "output_size", "duration_ms", "policy_result", "error_code",
-        "started_at", "finished_at",
+        "callable_name",
+        "callable_type",
+        "depth",
+        "duration_ms",
+        "error_code",
+        "finished_at",
+        "input_hash",
+        "input_summary",
+        "invocation_id",
+        "output_size",
+        "parent_invocation_id",
+        "policy_result",
+        "run_id",
+        "started_at",
     )
 
     def __init__(self, **kwargs: Any) -> None:
@@ -24,7 +33,7 @@ class InvocationRecord:
 
 
 class InvocationRepository(BaseRepository[InvocationRecord]):
-    _table    = "callable_invocations"
+    _table = "callable_invocations"
     _id_field = "invocation_id"
 
     def _from_row(self, row: dict[str, Any]) -> InvocationRecord:

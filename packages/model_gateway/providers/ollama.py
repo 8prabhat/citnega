@@ -11,9 +11,7 @@ Ollama REST API:
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
-
-import httpx
+from typing import TYPE_CHECKING
 
 from citnega.packages.model_gateway.providers.base_provider import BaseProvider
 from citnega.packages.protocol.models.model_gateway import (
@@ -23,7 +21,11 @@ from citnega.packages.protocol.models.model_gateway import (
     ModelRequest,
     ModelResponse,
 )
-from citnega.packages.shared.errors import ProviderHTTPError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    import httpx
 
 
 def _to_ollama_messages(messages: list[ModelMessage]) -> list[dict[str, object]]:
@@ -60,9 +62,7 @@ class OllamaProvider(BaseProvider):
         if request.tools:
             payload["tools"] = request.tools
 
-        resp = await self._http_client.post(
-            f"{self._base_url}/api/chat", json=payload
-        )
+        resp = await self._http_client.post(f"{self._base_url}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
 
@@ -76,15 +76,13 @@ class OllamaProvider(BaseProvider):
             tool_calls=tool_calls,
             finish_reason=data.get("done_reason", "stop"),
             usage={
-                "prompt_tokens":     usage.get("prompt_tokens", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens":      usage.get("total_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
             },
         )
 
-    async def _do_stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]:
+    async def _do_stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
         payload: dict[str, object] = {
             "model": self._model_info.model_name,
             "messages": _to_ollama_messages(request.messages),
@@ -106,7 +104,7 @@ class OllamaProvider(BaseProvider):
                 except json.JSONDecodeError:
                     continue
                 message = chunk.get("message", {})
-                content  = message.get("content",  "") or ""
+                content = message.get("content", "") or ""
                 thinking = message.get("thinking", "") or ""
                 done = chunk.get("done", False)
                 finish_reason: str | None = chunk.get("done_reason") if done else None
@@ -123,9 +121,7 @@ class OllamaProvider(BaseProvider):
 
     async def _do_health_check(self) -> str:
         try:
-            resp = await self._http_client.get(
-                f"{self._base_url}/api/tags", timeout=3.0
-            )
+            resp = await self._http_client.get(f"{self._base_url}/api/tags", timeout=3.0)
             if resp.status_code == 200:
                 return "healthy"
             return "degraded"

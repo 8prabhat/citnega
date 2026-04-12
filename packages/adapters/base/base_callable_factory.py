@@ -12,14 +12,15 @@ Shared helpers:
 
 from __future__ import annotations
 
-import json
 from abc import abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from citnega.packages.adapters.base.event_translator import EventTranslator
-from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.interfaces.adapter import ICallableFactory
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.event_translator import EventTranslator
+    from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
+    from citnega.packages.protocol.events import CanonicalEvent
 
 
 class BaseCallableFactory(ICallableFactory):
@@ -52,10 +53,7 @@ class BaseCallableFactory(ICallableFactory):
             desc = meta.get("description", "")
             param_lines.append(f"  {field} ({ftype}): {desc}")
         params_str = "\n".join(param_lines) if param_lines else "  (no parameters)"
-        return (
-            f"{callable.name}: {callable.description}\n"
-            f"Parameters:\n{params_str}"
-        )
+        return f"{callable.name}: {callable.description}\nParameters:\n{params_str}"
 
     def _translate_event(
         self,
@@ -64,9 +62,7 @@ class BaseCallableFactory(ICallableFactory):
         run_id: str,
         turn_id: str | None = None,
     ) -> CanonicalEvent:
-        return self._translator.translate(
-            framework_event, session_id, run_id, turn_id
-        )
+        return self._translator.translate(framework_event, session_id, run_id, turn_id)
 
     # ------------------------------------------------------------------
     # Abstract factory methods (framework-specific)

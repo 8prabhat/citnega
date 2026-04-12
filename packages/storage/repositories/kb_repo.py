@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
-from datetime import datetime, timezone
 from typing import Any
 
 from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
@@ -23,7 +23,7 @@ _BM25_SEARCH_SQL = """
 
 
 class KBRepository(BaseRepository[KBItem]):
-    _table    = "kb_items"
+    _table = "kb_items"
     _id_field = "item_id"
 
     def _from_row(self, row: dict[str, Any]) -> KBItem:
@@ -35,29 +35,25 @@ class KBRepository(BaseRepository[KBItem]):
             source_session_id=row.get("source_session_id"),
             source_run_id=row.get("source_run_id"),
             tags=json.loads(row.get("tags") or "[]"),
-            created_at=datetime.fromisoformat(row["created_at"]).replace(
-                tzinfo=timezone.utc
-            ),
-            updated_at=datetime.fromisoformat(row["updated_at"]).replace(
-                tzinfo=timezone.utc
-            ),
+            created_at=datetime.fromisoformat(row["created_at"]).replace(tzinfo=UTC),
+            updated_at=datetime.fromisoformat(row["updated_at"]).replace(tzinfo=UTC),
             content_hash=row["content_hash"],
             file_path=row.get("file_path"),
         )
 
     def _to_row(self, entity: KBItem) -> dict[str, Any]:
         return {
-            "item_id":           entity.item_id,
-            "title":             entity.title,
-            "content":           entity.content,
-            "source_type":       entity.source_type.value,
+            "item_id": entity.item_id,
+            "title": entity.title,
+            "content": entity.content,
+            "source_type": entity.source_type.value,
             "source_session_id": entity.source_session_id,
-            "source_run_id":     entity.source_run_id,
-            "tags":              json.dumps(entity.tags),
-            "created_at":        entity.created_at.isoformat(),
-            "updated_at":        entity.updated_at.isoformat(),
-            "content_hash":      entity.content_hash,
-            "file_path":         entity.file_path,
+            "source_run_id": entity.source_run_id,
+            "tags": json.dumps(entity.tags),
+            "created_at": entity.created_at.isoformat(),
+            "updated_at": entity.updated_at.isoformat(),
+            "content_hash": entity.content_hash,
+            "file_path": entity.file_path,
         }
 
     async def save(self, entity: KBItem) -> KBItem:
@@ -95,10 +91,7 @@ class KBRepository(BaseRepository[KBItem]):
 
         # Filter by tags if requested
         if tags and isinstance(tags, list):
-            items = [
-                item for item in items
-                if any(t in item.tags for t in tags)
-            ]
+            items = [item for item in items if any(t in item.tags for t in tags)]
         return items
 
     async def search(self, query: str, limit: int = 10) -> list[KBSearchResult]:

@@ -15,15 +15,17 @@ from citnega.packages.protocol.models.model_gateway import (
     TaskNeeds,
 )
 from citnega.packages.protocol.models.runs import (
+    TERMINAL_RUN_STATES,
+    VALID_RUN_TRANSITIONS,
     RunState,
     RunSummary,
     StateSnapshot,
-    TERMINAL_RUN_STATES,
-    VALID_RUN_TRANSITIONS,
 )
 from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
 
 __all__ = [
+    "TERMINAL_RUN_STATES",
+    "VALID_RUN_TRANSITIONS",
     "Approval",
     "ApprovalStatus",
     "CheckpointMeta",
@@ -40,13 +42,11 @@ __all__ = [
     "ModelMessage",
     "ModelRequest",
     "ModelResponse",
-    "TaskNeeds",
     "RunState",
     "RunSummary",
-    "StateSnapshot",
-    "TERMINAL_RUN_STATES",
-    "VALID_RUN_TRANSITIONS",
     "Session",
     "SessionConfig",
     "SessionState",
+    "StateSnapshot",
+    "TaskNeeds",
 ]

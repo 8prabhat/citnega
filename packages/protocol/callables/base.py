@@ -11,19 +11,21 @@ or event emission.
 
 from __future__ import annotations
 
-import time
 from abc import abstractmethod
-from typing import TYPE_CHECKING, AsyncIterator, Type
+import time
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.interfaces import IOrchestrable, IStreamable
 from citnega.packages.protocol.callables.results import InvokeResult, StreamChunk
 from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
 from citnega.packages.shared.errors import CitnegaError, UnhandledCallableError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from citnega.packages.protocol.callables.context import CallContext
     from citnega.packages.protocol.interfaces.events import IEventEmitter, ITracer
     from citnega.packages.protocol.interfaces.policy import IPolicyEnforcer
     from citnega.packages.protocol.interfaces.routing import IRoutingPolicy
@@ -38,22 +40,22 @@ class BaseCallable(IStreamable):
     then implement ``_execute()``.
     """
 
-    name:          str
-    description:   str
+    name: str
+    description: str
     callable_type: CallableType
-    input_schema:  Type[BaseModel]
-    output_schema: Type[BaseModel]
-    policy:        CallablePolicy = CallablePolicy()
+    input_schema: type[BaseModel]
+    output_schema: type[BaseModel]
+    policy: CallablePolicy = CallablePolicy()
 
     def __init__(
         self,
-        policy_enforcer: "IPolicyEnforcer",
-        event_emitter: "IEventEmitter",
-        tracer: "ITracer",
+        policy_enforcer: IPolicyEnforcer,
+        event_emitter: IEventEmitter,
+        tracer: ITracer,
     ) -> None:
         self._policy_enforcer = policy_enforcer
-        self._event_emitter   = event_emitter
-        self._tracer          = tracer
+        self._event_emitter = event_emitter
+        self._tracer = tracer
 
     async def invoke(self, input: BaseModel, context: CallContext) -> InvokeResult:
         """
@@ -78,9 +80,7 @@ class BaseCallable(IStreamable):
             input.model_dump() if isinstance(input, BaseModel) else input
         )
 
-        self._event_emitter.emit(
-            CallableStartEvent.from_invocation(self, context)
-        )
+        self._event_emitter.emit(CallableStartEvent.from_invocation(self, context))
 
         start = time.monotonic()
         result: InvokeResult
@@ -126,9 +126,7 @@ class BaseCallable(IStreamable):
         finally:
             context.run_cleanups()
 
-        self._event_emitter.emit(
-            CallableEndEvent.from_result(result, context)
-        )
+        self._event_emitter.emit(CallableEndEvent.from_result(result, context))
         self._tracer.record(self, validated, result, context)
 
         return result
@@ -181,7 +179,7 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
             args, tool_registry = args[:3], args[3]
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._sub_callables: list[IStreamable] = []
-        self._routing_policy: "IRoutingPolicy | None" = None
+        self._routing_policy: IRoutingPolicy | None = None
         self._tool_registry: dict = dict(tool_registry) if isinstance(tool_registry, dict) else {}
 
     def register_sub_callable(self, callable: IStreamable) -> None:  # type: ignore[override]
@@ -190,5 +188,5 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
     def list_sub_callables(self) -> list[IStreamable]:  # type: ignore[override]
         return list(self._sub_callables)
 
-    def set_routing_policy(self, policy: "IRoutingPolicy") -> None:
+    def set_routing_policy(self, policy: IRoutingPolicy) -> None:
         self._routing_policy = policy

@@ -12,10 +12,10 @@ High-entropy string detection: strings >20 chars in denied fields → REDACTED.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 import re
 import string
-from collections.abc import Mapping
 from typing import Any
 
 _REDACTED = "***REDACTED***"

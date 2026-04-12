@@ -11,8 +11,8 @@ class RunStateEvent(BaseEvent):
 
     event_type: str = "RunStateEvent"
     from_state: RunState
-    to_state:   RunState
-    reason:     str | None = None
+    to_state: RunState
+    reason: str | None = None
 
 
 class RunCompleteEvent(BaseEvent):
@@ -21,5 +21,5 @@ class RunCompleteEvent(BaseEvent):
     Always the last event in a run's event stream.
     """
 
-    event_type:  str = "RunCompleteEvent"
+    event_type: str = "RunCompleteEvent"
     final_state: RunState

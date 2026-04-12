@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class ConversationStore:
@@ -51,9 +53,9 @@ class ConversationStore:
                     self._data = {}
             if not self._data:
                 self._data = {
-                    "messages":        [],
+                    "messages": [],
                     "active_model_id": self._default_model_id,
-                    "mode_name":       "chat",
+                    "mode_name": "chat",
                 }
 
     async def save(self) -> None:
@@ -74,9 +76,7 @@ class ConversationStore:
     async def add_message(self, role: str, content: str) -> None:
         """Append a message and save."""
         async with self._lock:
-            self._data.setdefault("messages", []).append(
-                {"role": role, "content": content}
-            )
+            self._data.setdefault("messages", []).append({"role": role, "content": content})
         await self.save()
 
     async def clear_messages(self) -> None:
@@ -115,10 +115,7 @@ class ConversationStore:
     @property
     def token_estimate(self) -> int:
         """Rough token estimate: total chars of all messages ÷ 4."""
-        total_chars = sum(
-            len(m.get("content", ""))
-            for m in self._data.get("messages", [])
-        )
+        total_chars = sum(len(m.get("content", "")) for m in self._data.get("messages", []))
         return total_chars // 4
 
     @property
@@ -146,21 +143,22 @@ class ConversationStore:
             messages = self._data.get("messages", [])
             # Don't compact compaction markers — skip leading system messages
             content_msgs = [m for m in messages if m.get("role") != "system"]
-            system_msgs  = [m for m in messages if m.get("role") == "system"]
+            system_msgs = [m for m in messages if m.get("role") == "system"]
 
-            cutoff   = max(0, len(content_msgs) - keep_recent)
+            cutoff = max(0, len(content_msgs) - keep_recent)
             archived = content_msgs[:cutoff]
-            recent   = content_msgs[cutoff:]
+            recent = content_msgs[cutoff:]
 
             if not archived:
                 return 0
 
-            import datetime as _dt  # noqa: PLC0415
+            import datetime as _dt
+
             compact_marker = {
-                "role":    "system",
+                "role": "system",
                 "content": (
                     f"[Compacted — {len(archived)} messages archived on "
-                    f"{_dt.datetime.now(tz=_dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}]\n\n"
+                    f"{_dt.datetime.now(tz=_dt.UTC).strftime('%Y-%m-%d %H:%M UTC')}]\n\n"
                     f"{summary}"
                 ),
             }
@@ -168,12 +166,14 @@ class ConversationStore:
             # Preserve any existing system/compact markers, add new one, then recent
             self._data["messages"] = [*system_msgs, compact_marker, *recent]
 
-            self._data.setdefault("compaction_history", []).append({
-                "compacted_at":      _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
-                "messages_removed":  len(archived),
-                "kept_recent":       len(recent),
-                "summary_length":    len(summary),
-            })
+            self._data.setdefault("compaction_history", []).append(
+                {
+                    "compacted_at": _dt.datetime.now(tz=_dt.UTC).isoformat(),
+                    "messages_removed": len(archived),
+                    "kept_recent": len(recent),
+                    "summary_length": len(summary),
+                }
+            )
 
         await self.save()
         return len(archived)
@@ -206,7 +206,7 @@ class ConversationStore:
 
     # Used by the controller to signal which plan phase the runner should use.
     # Not persisted because it resets on restart intentionally.
-    _plan_phase: str = "draft"   # class-level default; overridden per instance
+    _plan_phase: str = "draft"  # class-level default; overridden per instance
 
     @property
     def plan_phase(self) -> str:

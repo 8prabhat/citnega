@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import gzip
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.retention import _rotate_sync
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 def _log_file(log_dir: Path, days_ago: int) -> Path:
-    date = (datetime.now(tz=timezone.utc) - timedelta(days=days_ago)).date().isoformat()
+    date = (datetime.now(tz=UTC) - timedelta(days=days_ago)).date().isoformat()
     p = log_dir / f"{date}.jsonl"
     p.write_text('{"event": "test"}\n')
     return p
@@ -31,7 +32,7 @@ class TestRotateSync:
     def test_today_log_not_touched(self, tmp_path: Path) -> None:
         log_dir = tmp_path / "app"
         log_dir.mkdir()
-        today = datetime.now(tz=timezone.utc).date().isoformat()
+        today = datetime.now(tz=UTC).date().isoformat()
         f = log_dir / f"{today}.jsonl"
         f.write_text('{"event": "today"}\n')
         _rotate_sync(log_dir, retention_days=30)

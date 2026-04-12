@@ -17,24 +17,22 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
-
-from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.interfaces import IInvocable
 from citnega.packages.protocol.events.callable import CallablePolicyEvent
-from citnega.packages.protocol.interfaces.events import IEventEmitter
 from citnega.packages.shared.errors import (
     ApprovalDeniedError,
     ApprovalTimeoutError,
     CallableDepthError,
-    CallableTimeoutError,
-    NetworkNotAllowedError,
-    OutputTooLargeError,
     PathNotAllowedError,
 )
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.interfaces.events import IEventEmitter
 
 
 async def depth_check(
@@ -45,8 +43,13 @@ async def depth_check(
 ) -> None:
     """Reject if invocation depth exceeds policy.max_depth_allowed."""
     if context.depth > callable.policy.max_depth_allowed:
-        _emit_policy_event(emitter, context, "depth", "denied",
-                           f"depth={context.depth} > max={callable.policy.max_depth_allowed}")
+        _emit_policy_event(
+            emitter,
+            context,
+            "depth",
+            "denied",
+            f"depth={context.depth} > max={callable.policy.max_depth_allowed}",
+        )
         raise CallableDepthError(
             f"Callable '{callable.name}' invoked at depth {context.depth}, "
             f"max allowed is {callable.policy.max_depth_allowed}."
@@ -71,11 +74,9 @@ async def path_check(
         return
 
     # Substitute ${SESSION_ID} in allowed paths
-    from citnega.packages.storage.path_resolver import PathResolver
     allowed = [
         pathlib.Path(
-            p.replace("${SESSION_ID}", context.session_id)
-             .replace("~", str(pathlib.Path.home()))
+            p.replace("${SESSION_ID}", context.session_id).replace("~", str(pathlib.Path.home()))
         ).resolve()
         for p in callable.policy.allowed_paths
     ]
@@ -88,24 +89,20 @@ async def path_check(
         return
 
     path_values = [
-        v for k, v in data.items()
+        v
+        for k, v in data.items()
         if isinstance(v, str) and ("path" in k.lower() or "file" in k.lower())
     ]
 
     for pv in path_values:
         try:
-            resolved = pathlib.Path(
-                pv.replace("~", str(pathlib.Path.home()))
-            ).resolve()
-            if not any(
-                _is_within(resolved, allowed_root)
-                for allowed_root in allowed
-            ):
-                _emit_policy_event(emitter, context, "path", "denied",
-                                   f"path={pv!r} not in allowlist")
+            resolved = pathlib.Path(pv.replace("~", str(pathlib.Path.home()))).resolve()
+            if not any(_is_within(resolved, allowed_root) for allowed_root in allowed):
+                _emit_policy_event(
+                    emitter, context, "path", "denied", f"path={pv!r} not in allowlist"
+                )
                 raise PathNotAllowedError(
-                    f"Path {pv!r} is not within any allowed paths for "
-                    f"callable '{callable.name}'."
+                    f"Path {pv!r} is not within any allowed paths for callable '{callable.name}'."
                 )
         except (OSError, ValueError):
             # Path doesn't exist or can't be resolved — allow it through
@@ -142,7 +139,7 @@ async def approval_check(
     input: BaseModel,
     context: CallContext,
     emitter: IEventEmitter,
-    approval_manager: "ApprovalManager",  # type: ignore[name-defined]  # noqa: F821
+    approval_manager: ApprovalManager,  # type: ignore[name-defined]  # noqa: F821
 ) -> None:
     """
     If policy.requires_approval is True, pause until the user approves/denies.
@@ -153,34 +150,35 @@ async def approval_check(
         _emit_policy_event(emitter, context, "approval", "passed")
         return
 
+    import uuid as _uuid
+
     from citnega.packages.protocol.events.approval import (
         ApprovalRequestEvent,
         ApprovalTimeoutEvent,
     )
-    from citnega.packages.protocol.models.approvals import Approval, ApprovalStatus
+    from citnega.packages.protocol.models.approvals import ApprovalStatus
 
-    import uuid as _uuid
-    from datetime import datetime, timezone
-
-    approval_id  = str(_uuid.uuid4())
+    approval_id = str(_uuid.uuid4())
     input_summary = _summarise_input(input)
 
-    approval = await approval_manager.create_approval(
+    await approval_manager.create_approval(
         approval_id=approval_id,
         run_id=context.run_id,
         callable_name=callable.name,
         input_summary=input_summary,
     )
 
-    emitter.emit(ApprovalRequestEvent(
-        session_id=context.session_id,
-        run_id=context.run_id,
-        turn_id=context.turn_id,
-        callable_name=callable.name,
-        approval_id=approval_id,
-        input_summary=input_summary,
-        preview=input_summary[:200],
-    ))
+    emitter.emit(
+        ApprovalRequestEvent(
+            session_id=context.session_id,
+            run_id=context.run_id,
+            turn_id=context.turn_id,
+            callable_name=callable.name,
+            approval_id=approval_id,
+            input_summary=input_summary,
+            preview=input_summary[:200],
+        )
+    )
 
     timeout = context.session_config.approval_timeout_seconds
     try:
@@ -188,22 +186,20 @@ async def approval_check(
             approval_manager.wait_for_response(approval_id),
             timeout=float(timeout),
         )
-    except asyncio.TimeoutError:
-        emitter.emit(ApprovalTimeoutEvent(
-            session_id=context.session_id,
-            run_id=context.run_id,
-            approval_id=approval_id,
-        ))
-        _emit_policy_event(emitter, context, "approval", "denied", "timeout")
-        raise ApprovalTimeoutError(
-            f"Approval for '{callable.name}' timed out after {timeout}s."
+    except TimeoutError:
+        emitter.emit(
+            ApprovalTimeoutEvent(
+                session_id=context.session_id,
+                run_id=context.run_id,
+                approval_id=approval_id,
+            )
         )
+        _emit_policy_event(emitter, context, "approval", "denied", "timeout")
+        raise ApprovalTimeoutError(f"Approval for '{callable.name}' timed out after {timeout}s.")
 
     if result_approval.status == ApprovalStatus.DENIED:
         _emit_policy_event(emitter, context, "approval", "denied", "user denied")
-        raise ApprovalDeniedError(
-            f"User denied approval for '{callable.name}'."
-        )
+        raise ApprovalDeniedError(f"User denied approval for '{callable.name}'.")
 
     _emit_policy_event(emitter, context, "approval", "passed")
 
@@ -226,11 +222,13 @@ def _emit_policy_event(
     result: str,
     reason: str | None = None,
 ) -> None:
-    emitter.emit(CallablePolicyEvent(
-        session_id=context.session_id,
-        run_id=context.run_id,
-        turn_id=context.turn_id,
-        check_name=check_name,
-        result=result,
-        reason=reason,
-    ))
+    emitter.emit(
+        CallablePolicyEvent(
+            session_id=context.session_id,
+            run_id=context.run_id,
+            turn_id=context.turn_id,
+            check_name=check_name,
+            result=result,
+            reason=reason,
+        )
+    )

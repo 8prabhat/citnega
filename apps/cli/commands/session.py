@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 import typer
 
@@ -17,9 +16,9 @@ app = typer.Typer(help="Manage conversation sessions.")
 @app.command("new")
 @run_async
 async def session_new(
-    name:      str = typer.Option("default", "--name",      "-n", help="Session name."),
-    framework: str = typer.Option("stub",    "--framework", "-f", help="Framework adapter."),
-    model:     str = typer.Option("",        "--model",     "-m", help="Default model ID."),
+    name: str = typer.Option("default", "--name", "-n", help="Session name."),
+    framework: str = typer.Option("stub", "--framework", "-f", help="Framework adapter."),
+    model: str = typer.Option("", "--model", "-m", help="Default model ID."),
 ) -> None:
     """Create a new session and print its ID."""
     async with cli_bootstrap() as svc:
@@ -77,8 +76,8 @@ async def session_show(
 @app.command("delete")
 @run_async
 async def session_delete(
-    session_id: str  = typer.Argument(..., help="Session ID to delete."),
-    yes:        bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    session_id: str = typer.Argument(..., help="Session ID to delete."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
 ) -> None:
     """Delete a session and all its associated runs."""
     if not yes:

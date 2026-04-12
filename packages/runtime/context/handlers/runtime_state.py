@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from citnega.packages.protocol.interfaces.context import IContextHandler
 from citnega.packages.protocol.models.context import ContextObject, ContextSource
-from citnega.packages.protocol.models.runs import StateSnapshot
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.runs import StateSnapshot
+    from citnega.packages.protocol.models.sessions import Session
 
 
 def _estimate_tokens(text: str) -> int:
@@ -41,7 +45,7 @@ class RuntimeStateHandler(IContextHandler):
 
         snap = self._snapshot
         lines = [
-            f"Runtime state:",
+            "Runtime state:",
             f"  run_id={snap.current_run_id or 'none'}",
             f"  state={snap.run_state.value}",
             f"  framework={snap.framework_name}",
@@ -67,7 +71,7 @@ class RuntimeStateHandler(IContextHandler):
 
         return context.model_copy(
             update={
-                "sources": context.sources + [source],
+                "sources": [*context.sources, source],
                 "total_tokens": context.total_tokens + token_count,
                 "budget_remaining": context.budget_remaining - token_count,
             }

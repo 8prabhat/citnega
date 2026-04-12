@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Optional
 
 import typer
 
@@ -16,24 +14,26 @@ from citnega.packages.protocol.events.streaming import TokenEvent
 app = typer.Typer(help="Run a turn in a session.")
 
 # Events worth printing to the terminal
-_VERBOSE_TYPES = frozenset({
-    "RunStateEvent",
-    "CallableStartEvent",
-    "CallableEndEvent",
-    "ApprovalRequestEvent",
-    "RateLimitEvent",
-    "TokenEvent",
-    "RunCompleteEvent",
-})
+_VERBOSE_TYPES = frozenset(
+    {
+        "RunStateEvent",
+        "CallableStartEvent",
+        "CallableEndEvent",
+        "ApprovalRequestEvent",
+        "RateLimitEvent",
+        "TokenEvent",
+        "RunCompleteEvent",
+    }
+)
 
 
 @app.command("run")
 @run_async
 async def run_command(
-    session_id: str           = typer.Option(..., "--session", "-s", help="Session ID."),
-    prompt:     str           = typer.Option(..., "--prompt",  "-p", help="User input text."),
-    json_out:   bool          = typer.Option(False, "--json",  "-j", help="Emit raw JSON events."),
-    quiet:      bool          = typer.Option(False, "--quiet", "-q", help="Suppress event output."),
+    session_id: str = typer.Option(..., "--session", "-s", help="Session ID."),
+    prompt: str = typer.Option(..., "--prompt", "-p", help="User input text."),
+    json_out: bool = typer.Option(False, "--json", "-j", help="Emit raw JSON events."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress event output."),
 ) -> None:
     """Start a turn and stream its events to stdout until completion."""
     async with cli_bootstrap() as svc:

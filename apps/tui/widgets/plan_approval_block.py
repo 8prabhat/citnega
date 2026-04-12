@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Label
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class PlanApprovalBlock(Widget):
@@ -59,7 +63,7 @@ class PlanApprovalBlock(Widget):
         )
         with Widget(classes="button-row"):
             yield Button("▶ Proceed", id="btn-proceed", variant="success")
-            yield Button("✗ Cancel",  id="btn-cancel",  variant="error")
+            yield Button("✗ Cancel", id="btn-cancel", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         approved = event.button.id == "btn-proceed"

@@ -13,6 +13,6 @@ class GenericFrameworkEvent(BaseEvent):
     they do not know how to map.
     """
 
-    event_type:           str = "GenericFrameworkEvent"
+    event_type: str = "GenericFrameworkEvent"
     framework_event_type: str
-    payload:              dict[str, object]
+    payload: dict[str, object]

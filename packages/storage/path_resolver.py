@@ -13,8 +13,8 @@ import platformdirs  # only imported here — enforced by import-linter
 
 from citnega.packages.security.permissions import ensure_dir_permissions
 
-APP_NAME    = "citnega"
-APP_AUTHOR  = "citnega"
+APP_NAME = "citnega"
+APP_AUTHOR = "citnega"
 
 
 class PathResolver:
@@ -34,9 +34,7 @@ class PathResolver:
         if app_home is not None:
             self._app_home = app_home
         else:
-            self._app_home = Path(
-                platformdirs.user_data_dir(APP_NAME, APP_AUTHOR)
-            )
+            self._app_home = Path(platformdirs.user_data_dir(APP_NAME, APP_AUTHOR))
 
     @property
     def app_home(self) -> Path:
@@ -109,6 +107,7 @@ class PathResolver:
     def alembic_ini_path(self) -> Path:
         """Path to the Alembic ini relative to storage package."""
         from pathlib import Path as P
+
         return P(__file__).parent / "migrations" / "alembic.ini"
 
     def create_all(self) -> None:

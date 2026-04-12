@@ -13,9 +13,9 @@ app = typer.Typer(help="Respond to a pending approval request.")
 @app.command("approve")
 @run_async
 async def approve_command(
-    approval_id: str  = typer.Argument(..., help="Approval ID to resolve."),
-    deny:        bool = typer.Option(False, "--deny", "-d", help="Deny instead of approve."),
-    note:        str  = typer.Option("",    "--note", "-n", help="Optional note to record."),
+    approval_id: str = typer.Argument(..., help="Approval ID to resolve."),
+    deny: bool = typer.Option(False, "--deny", "-d", help="Deny instead of approve."),
+    note: str = typer.Option("", "--note", "-n", help="Optional note to record."),
 ) -> None:
     """
     Approve or deny a pending callable execution request.

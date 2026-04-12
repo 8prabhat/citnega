@@ -13,19 +13,22 @@ LangGraph integration strategy:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_runner import BaseFrameworkRunner
-from citnega.packages.adapters.base.cancellation import CancellationToken
-from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
-from citnega.packages.adapters.base.event_translator import EventTranslator
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
-from citnega.packages.protocol.models.context import ContextObject
 from citnega.packages.protocol.models.runs import RunState
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.cancellation import CancellationToken
+    from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
+    from citnega.packages.adapters.base.event_translator import EventTranslator
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class LangGraphRunner(BaseFrameworkRunner):
@@ -62,9 +65,11 @@ class LangGraphRunner(BaseFrameworkRunner):
 
         tools = []
         for c in self._callables:
+
             def _make_tool(cbl: IInvocable) -> Any:
                 async def _fn(**kwargs: object) -> dict[str, object]:
                     from citnega.packages.protocol.callables.context import CallContext
+
                     ctx = CallContext(
                         session_id=self._session.config.session_id,
                         run_id=self._current_run_id or "lg-direct",
@@ -75,25 +80,32 @@ class LangGraphRunner(BaseFrameworkRunner):
                     if result.output:
                         return result.output.model_dump()
                     return {"error": str(result.error) if result.error else "no output"}
+
                 return StructuredTool.from_function(
                     coroutine=_fn,
                     name=cbl.name,
                     description=cbl.description,
                     args_schema=cbl.input_schema,
                 )
+
             tools.append(_make_tool(c))
 
         # Use a simple dict-based model that accepts any model_id string
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import]
+
             llm = ChatGoogleGenerativeAI(model=self._model_id)
         except ImportError:
             try:
                 from langchain_openai import ChatOpenAI  # type: ignore[import]
+
                 llm = ChatOpenAI(model=self._model_id)
             except ImportError:
                 # Fallback: create a no-op LLM for testing
-                from langchain_core.language_models.fake import FakeListChatModel  # type: ignore[import]
+                from langchain_core.language_models.fake import (
+                    FakeListChatModel,  # type: ignore[import]
+                )
+
                 llm = FakeListChatModel(responses=["No LLM installed."])
 
         self._graph = create_react_agent(llm, tools=tools)
@@ -124,22 +136,24 @@ class LangGraphRunner(BaseFrameworkRunner):
                 if role in ("ai", "assistant"):
                     content = getattr(msg, "content", "")
                     if isinstance(content, str) and content:
-                        try:
-                            event_queue.put_nowait(TokenEvent(
-                                session_id=session_id,
-                                run_id=context.run_id,
-                                turn_id=context.run_id,
-                                token=content,
-                                finish_reason=None,
-                            ))
-                        except asyncio.QueueFull:
-                            pass
+                        with contextlib.suppress(asyncio.QueueFull):
+                            event_queue.put_nowait(
+                                TokenEvent(
+                                    session_id=session_id,
+                                    run_id=context.run_id,
+                                    turn_id=context.run_id,
+                                    token=content,
+                                    finish_reason=None,
+                                )
+                            )
 
             # Persist state for checkpointing
-            self._graph_state = {"messages": [
-                {"role": getattr(m, "type", "unknown"), "content": getattr(m, "content", "")}
-                for m in chunk.get("messages", [])
-            ]}
+            self._graph_state = {
+                "messages": [
+                    {"role": getattr(m, "type", "unknown"), "content": getattr(m, "content", "")}
+                    for m in chunk.get("messages", [])
+                ]
+            }
 
         return context.run_id
 
@@ -162,7 +176,5 @@ class LangGraphRunner(BaseFrameworkRunner):
             "session_id": self._session.config.session_id,
         }
 
-    async def _do_restore_checkpoint(
-        self, framework_state: dict[str, object]
-    ) -> None:
+    async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
         self._graph_state = framework_state.get("graph_state", {})  # type: ignore[assignment]

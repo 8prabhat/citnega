@@ -12,10 +12,13 @@ Event logs in logs/events/<run_id>.jsonl are kept indefinitely
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 import gzip
 import shutil
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 async def rotate_app_logs(
@@ -34,8 +37,8 @@ def _rotate_sync(log_dir: Path, retention_days: int) -> None:
     if not log_dir.exists():
         return
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=retention_days)
-    today  = datetime.now(tz=timezone.utc).date().isoformat()
+    cutoff = datetime.now(tz=UTC) - timedelta(days=retention_days)
+    today = datetime.now(tz=UTC).date().isoformat()
 
     for log_file in sorted(log_dir.glob("*.jsonl")):
         stem = log_file.stem  # "2026-04-07"
@@ -43,7 +46,7 @@ def _rotate_sync(log_dir: Path, retention_days: int) -> None:
             continue  # never touch today's log
 
         try:
-            file_date = datetime.fromisoformat(stem).replace(tzinfo=timezone.utc)
+            file_date = datetime.fromisoformat(stem).replace(tzinfo=UTC)
         except ValueError:
             continue  # skip non-date filenames
 
@@ -62,7 +65,7 @@ def _rotate_sync(log_dir: Path, retention_days: int) -> None:
     for gz_file in sorted(log_dir.glob("*.jsonl.gz")):
         stem = gz_file.stem.removesuffix(".jsonl")
         try:
-            file_date = datetime.fromisoformat(stem).replace(tzinfo=timezone.utc)
+            file_date = datetime.fromisoformat(stem).replace(tzinfo=UTC)
         except ValueError:
             continue
         if file_date < cutoff:

@@ -20,11 +20,11 @@ async def migrate_command(
 
     Creates the database file if it does not yet exist.
     """
-    from citnega.packages.storage.database import DatabaseFactory  # noqa: PLC0415
+    from citnega.packages.storage.database import DatabaseFactory
 
-    resolver        = PathResolver()
-    db_path         = resolver.db_path
-    alembic_ini     = resolver.alembic_ini_path()
+    resolver = PathResolver()
+    db_path = resolver.db_path
+    alembic_ini = resolver.alembic_ini_path()
 
     typer.echo(f"Database: {db_path}")
     typer.echo(f"Alembic:  {alembic_ini}")
@@ -37,10 +37,10 @@ async def migrate_command(
         )
         raise typer.Exit(code=1)
 
-    db = DatabaseFactory(db_path)
+    DatabaseFactory(db_path)
     try:
-        from alembic import command          # noqa: PLC0415
-        from alembic.config import Config    # noqa: PLC0415
+        from alembic import command
+        from alembic.config import Config
 
         cfg = Config(str(alembic_ini))
         cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")

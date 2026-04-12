@@ -58,3 +58,12 @@ max_sessions_shown = 20
 
 # Automatically rename a new session from the text of the first user message.
 auto_name_from_first_message = true
+
+# ── Workspace (user-created agents / tools / workflows) ────────────────────────
+[workspace]
+# Absolute path to the folder where user-created agents, tools, and workflows
+# are stored.  Empty string = use the directory where citnega was launched (CWD).
+workfolder_path = ""
+
+# Automatically reload workspace artifacts on startup.
+auto_refresh = false

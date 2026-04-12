@@ -7,16 +7,18 @@ We normalise to a 0–1 float where 1.0 = best match.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
-from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
-from citnega.packages.storage.database import DatabaseFactory
+
+if TYPE_CHECKING:
+    from citnega.packages.storage.database import DatabaseFactory
 
 
 def _parse_dt(s: str) -> datetime:
-    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(s).replace(tzinfo=UTC)
 
 
 def _row_to_item(row: dict[str, Any]) -> KBItem:
@@ -88,8 +90,8 @@ async def fts_search(
     # Normalise scores: most negative raw → highest normalised
     if rows:
         raw_scores = [r["score"] for r in rows]
-        min_score  = min(raw_scores)
-        max_score  = max(raw_scores)
+        min_score = min(raw_scores)
+        max_score = max(raw_scores)
         score_range = max_score - min_score if max_score != min_score else 1.0
 
         for row in rows:
@@ -101,11 +103,13 @@ async def fts_search(
                     continue
             # Normalise: best (most negative) → 1.0, worst → 0.0
             norm_score = 1.0 - (row["score"] - min_score) / score_range
-            results.append(KBSearchResult(
-                item=item,
-                score=round(norm_score, 4),
-                snippet=_snippet(item.content),
-            ))
+            results.append(
+                KBSearchResult(
+                    item=item,
+                    score=round(norm_score, 4),
+                    snippet=_snippet(item.content),
+                )
+            )
 
     return results
 
@@ -119,9 +123,10 @@ def _escape_fts5(query: str) -> str:
       (FTS5 uses AND by default, which fails for conversational queries like
       "What is the speed of light?" where "What" is not in the indexed content).
     """
-    import re  # noqa: PLC0415
+    import re
+
     # Strip non-word characters except spaces
-    words = re.sub(r'[^\w\s]', ' ', query, flags=re.UNICODE).split()
+    words = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE).split()
     if not words:
         return '""'
     # Single word — pass through directly

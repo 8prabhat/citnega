@@ -8,9 +8,7 @@ that implements the /v1/chat/completions endpoint.
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
-
-import httpx
+from typing import TYPE_CHECKING
 
 from citnega.packages.model_gateway.providers.base_provider import BaseProvider
 from citnega.packages.protocol.models.model_gateway import (
@@ -20,6 +18,11 @@ from citnega.packages.protocol.models.model_gateway import (
     ModelRequest,
     ModelResponse,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    import httpx
 
 
 def _to_oai_messages(messages: list[ModelMessage]) -> list[dict[str, object]]:
@@ -58,9 +61,9 @@ class OpenAICompatibleProvider(BaseProvider):
 
     async def _do_generate(self, request: ModelRequest) -> ModelResponse:
         payload: dict[str, object] = {
-            "model":       self._model_info.model_name,
-            "messages":    _to_oai_messages(request.messages),
-            "stream":      False,
+            "model": self._model_info.model_name,
+            "messages": _to_oai_messages(request.messages),
+            "stream": False,
             "temperature": request.temperature,
         }
         if request.max_tokens:
@@ -88,19 +91,17 @@ class OpenAICompatibleProvider(BaseProvider):
             tool_calls=message.get("tool_calls") or [],
             finish_reason=choice.get("finish_reason", "stop"),
             usage={
-                "prompt_tokens":     usage.get("prompt_tokens", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens":      usage.get("total_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
             },
         )
 
-    async def _do_stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]:
+    async def _do_stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
         payload: dict[str, object] = {
-            "model":       self._model_info.model_name,
-            "messages":    _to_oai_messages(request.messages),
-            "stream":      True,
+            "model": self._model_info.model_name,
+            "messages": _to_oai_messages(request.messages),
+            "stream": True,
             "temperature": request.temperature,
         }
         if request.max_tokens:

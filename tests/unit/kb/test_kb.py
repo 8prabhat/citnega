@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import hashlib
+from typing import TYPE_CHECKING
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 
-import pytest
-
-from citnega.packages.kb.ingestion import build_items, chunk_text, content_hash
 from citnega.packages.kb.export import export_jsonl, export_markdown
+from citnega.packages.kb.ingestion import build_items, chunk_text, content_hash
 from citnega.packages.protocol.models.kb import KBItem, KBSourceType
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # content_hash
 # ---------------------------------------------------------------------------
+
 
 class TestContentHash:
     def test_deterministic(self) -> None:
@@ -28,13 +29,14 @@ class TestContentHash:
         assert content_hash("foo") != content_hash("bar")
 
     def test_sha256_hex(self) -> None:
-        expected = hashlib.sha256("test".encode()).hexdigest()
+        expected = hashlib.sha256(b"test").hexdigest()
         assert content_hash("test") == expected
 
 
 # ---------------------------------------------------------------------------
 # chunk_text
 # ---------------------------------------------------------------------------
+
 
 class TestChunkText:
     def test_short_text_single_chunk(self) -> None:
@@ -76,6 +78,7 @@ class TestChunkText:
 # build_items
 # ---------------------------------------------------------------------------
 
+
 class TestBuildItems:
     def test_single_short_text(self) -> None:
         items = build_items("Short.", title="T", source_type=KBSourceType.NOTE)
@@ -113,8 +116,9 @@ class TestBuildItems:
 # export helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_item(content: str = "test content") -> KBItem:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return KBItem(
         item_id=str(uuid.uuid4()),
         title="Test Item",
@@ -139,11 +143,12 @@ class TestExportJSONL:
         items = [_make_item(), _make_item("b"), _make_item("c")]
         dest = tmp_path / "kb.jsonl"
         export_jsonl(items, dest)
-        lines = [l for l in dest.read_text().splitlines() if l.strip()]
+        lines = [ln for ln in dest.read_text().splitlines() if ln.strip()]
         assert len(lines) == 3
 
     def test_json_parseable(self, tmp_path: Path) -> None:
         import json
+
         item = _make_item()
         dest = tmp_path / "kb.jsonl"
         export_jsonl([item], dest)

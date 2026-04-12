@@ -132,8 +132,7 @@ class TokenBucketRateLimiter:
                     retry_after=round(wait, 2),
                 )
                 raise RateLimitExceededError(
-                    f"RPM limit exceeded for {provider}/{model_id}. "
-                    f"Retry after {wait:.1f}s."
+                    f"RPM limit exceeded for {provider}/{model_id}. Retry after {wait:.1f}s."
                 )
 
         total_tokens = float(prompt_tokens + completion_tokens)
@@ -148,8 +147,7 @@ class TokenBucketRateLimiter:
                     retry_after=round(wait, 2),
                 )
                 raise RateLimitExceededError(
-                    f"TPM limit exceeded for {provider}/{model_id}. "
-                    f"Retry after {wait:.1f}s."
+                    f"TPM limit exceeded for {provider}/{model_id}. Retry after {wait:.1f}s."
                 )
 
     def available_rpm(self, provider: str, model_id: str) -> float:

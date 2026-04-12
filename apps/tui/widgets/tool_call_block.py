@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.widget import Widget
 from textual.widgets import Collapsible, Label, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ToolCallBlock(Widget):
@@ -59,7 +64,7 @@ class ToolCallBlock(Widget):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self._tool_name     = tool_name
+        self._tool_name = tool_name
         self._input_summary = input_summary
 
     def compose(self) -> ComposeResult:
@@ -74,18 +79,14 @@ class ToolCallBlock(Widget):
 
     def set_result(self, output: str) -> None:
         """Update the output area with a successful result (event-loop safe)."""
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#tool-output", Static).update(output)
-        except Exception:
-            pass
 
     def set_error(self, error: str) -> None:
         """Mark this block as failed and show the error (event-loop safe)."""
         try:
             self.add_class("error")
-            self.query_one(".tool-header", Label).update(
-                f"✗ {self._tool_name} (error)"
-            )
+            self.query_one(".tool-header", Label).update(f"✗ {self._tool_name} (error)")
             self.query_one("#tool-output", Static).update(f"Error: {error}")
         except Exception:
             pass

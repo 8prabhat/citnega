@@ -13,16 +13,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.events import CanonicalEvent, RunCompleteEvent
 from citnega.packages.protocol.interfaces.events import IEventEmitter
 from citnega.packages.security.scrubber import scrub_dict
-from citnega.packages.shared.errors import StorageError
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.events import CanonicalEvent
 
 _QUEUE_MAXSIZE = 256
 
@@ -40,7 +43,7 @@ class EventEmitter(IEventEmitter):
 
     def __init__(self, event_log_dir: Path | None = None) -> None:
         self._queues: dict[str, asyncio.Queue[CanonicalEvent]] = {}
-        self._lock   = threading.Lock()
+        self._lock = threading.Lock()
         self._event_log_dir = event_log_dir
 
     # ── IEventEmitter ──────────────────────────────────────────────────────────
@@ -48,16 +51,14 @@ class EventEmitter(IEventEmitter):
     def emit(self, event: CanonicalEvent) -> None:
         """Emit an event to the run's queue (non-blocking)."""
         run_id = event.run_id
-        queue  = self._get_or_create_queue(run_id)
+        queue = self._get_or_create_queue(run_id)
 
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
             # Drop oldest and retry — consumers are falling behind
-            try:
+            with contextlib.suppress(asyncio.QueueEmpty):
                 queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:

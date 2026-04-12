@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from citnega.packages.config.loaders import _deep_merge, load_registry_toml, load_settings
-from citnega.packages.config.settings import Settings
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestLoadSettings:
@@ -20,9 +21,7 @@ class TestLoadSettings:
     def test_user_config_overrides_defaults(self, tmp_path: Path) -> None:
         config_dir = tmp_path / "config"
         config_dir.mkdir()
-        (config_dir / "settings.toml").write_text(
-            '[runtime]\nframework = "crewai"\n'
-        )
+        (config_dir / "settings.toml").write_text('[runtime]\nframework = "crewai"\n')
         settings = load_settings(app_home=tmp_path)
         assert settings.runtime.framework == "crewai"
 
@@ -65,19 +64,19 @@ class TestLoadRegistryToml:
 
 class TestDeepMerge:
     def test_flat_merge(self) -> None:
-        base     = {"a": 1, "b": 2}
+        base = {"a": 1, "b": 2}
         override = {"b": 99, "c": 3}
         _deep_merge(base, override)
         assert base == {"a": 1, "b": 99, "c": 3}
 
     def test_nested_merge(self) -> None:
-        base     = {"x": {"a": 1, "b": 2}}
+        base = {"x": {"a": 1, "b": 2}}
         override = {"x": {"b": 99}}
         _deep_merge(base, override)
         assert base == {"x": {"a": 1, "b": 99}}
 
     def test_non_dict_override_replaces(self) -> None:
-        base     = {"x": {"a": 1}}
+        base = {"x": {"a": 1}}
         override = {"x": "string"}
         _deep_merge(base, override)
         assert base["x"] == "string"

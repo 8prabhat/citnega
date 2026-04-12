@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.models.context import ContextObject
-from citnega.packages.protocol.models.sessions import Session
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class IContextHandler(ABC):

@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
-from citnega.packages.protocol.events import CanonicalEvent
-from citnega.packages.protocol.models import Session, StateSnapshot
-from citnega.packages.protocol.models.checkpoints import CheckpointMeta
+if TYPE_CHECKING:
+    import asyncio
+
+    from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models import Session, StateSnapshot
+    from citnega.packages.protocol.models.checkpoints import CheckpointMeta
 
 
 class AdapterConfig(BaseModel):
-    framework_name:      str
-    default_model_id:    str
-    framework_specific:  dict[str, Any] = Field(default_factory=dict)
+    framework_name: str
+    default_model_id: str
+    framework_specific: dict[str, Any] = Field(default_factory=dict)
 
 
 class IFrameworkAdapter(ABC):
@@ -39,15 +41,15 @@ class IFrameworkAdapter(ABC):
         self,
         session: Session,
         callables: list[IInvocable],
-        model_gateway: "IModelGateway",  # type: ignore[name-defined]  # noqa: F821
-    ) -> "IFrameworkRunner": ...
+        model_gateway: IModelGateway,  # type: ignore[name-defined]  # noqa: F821
+    ) -> IFrameworkRunner: ...
 
     @abstractmethod
     async def shutdown(self) -> None: ...
 
     @property
     @abstractmethod
-    def callable_factory(self) -> "ICallableFactory": ...
+    def callable_factory(self) -> ICallableFactory: ...
 
 
 class IFrameworkRunner(ABC):
@@ -57,7 +59,7 @@ class IFrameworkRunner(ABC):
     async def run_turn(
         self,
         user_input: str,
-        context: "ContextObject",  # type: ignore[name-defined]  # noqa: F821
+        context: ContextObject,  # type: ignore[name-defined]  # noqa: F821
         event_queue: asyncio.Queue[CanonicalEvent],
     ) -> str:
         """Execute one turn. Returns the run_id."""

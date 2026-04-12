@@ -17,21 +17,24 @@ pre-execution checks (1–3, 6).
 from __future__ import annotations
 
 import asyncio
-
-from pydantic import BaseModel
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.interfaces.events import IEventEmitter
 from citnega.packages.protocol.interfaces.policy import IPolicyEnforcer
-from citnega.packages.runtime.policy.approval_manager import ApprovalManager
 from citnega.packages.runtime.policy.checks import (
     approval_check,
     depth_check,
     network_check,
     path_check,
 )
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.interfaces.events import IEventEmitter
+    from citnega.packages.runtime.policy.approval_manager import ApprovalManager
 
 
 class PolicyEnforcer(IPolicyEnforcer):
@@ -80,9 +83,7 @@ class PolicyEnforcer(IPolicyEnforcer):
         await network_check(callable, input, context, self._emitter)
 
         # 6. Approval gate (runs last so trivial violations are caught first)
-        await approval_check(
-            callable, input, context, self._emitter, self._approval_manager
-        )
+        await approval_check(callable, input, context, self._emitter, self._approval_manager)
 
         runtime_logger.debug(
             "policy_enforce_passed",
@@ -112,30 +113,34 @@ class PolicyEnforcer(IPolicyEnforcer):
 
         limit = callable.policy.max_output_bytes
         if output_bytes > limit:
-            emitter.emit(CallablePolicyEvent(
-                session_id=context.session_id,
-                run_id=context.run_id,
-                turn_id=context.turn_id,
-                check_name="output_size",
-                result="denied",
-                reason=f"output={output_bytes}B > max={limit}B",
-            ))
+            emitter.emit(
+                CallablePolicyEvent(
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    turn_id=context.turn_id,
+                    check_name="output_size",
+                    result="denied",
+                    reason=f"output={output_bytes}B > max={limit}B",
+                )
+            )
             raise OutputTooLargeError(
                 f"Output of '{callable.name}' is {output_bytes:,} bytes, "
                 f"exceeding the {limit:,}-byte limit."
             )
-        emitter.emit(CallablePolicyEvent(
-            session_id=context.session_id,
-            run_id=context.run_id,
-            turn_id=context.turn_id,
-            check_name="output_size",
-            result="passed",
-        ))
+        emitter.emit(
+            CallablePolicyEvent(
+                session_id=context.session_id,
+                run_id=context.run_id,
+                turn_id=context.turn_id,
+                check_name="output_size",
+                result="passed",
+            )
+        )
 
     @staticmethod
     async def run_with_timeout(
         callable: IInvocable,
-        coro: "asyncio.coroutine",  # type: ignore[type-arg]
+        coro: asyncio.coroutine,  # type: ignore[type-arg]
         context: CallContext,
         emitter: IEventEmitter,
     ) -> object:
@@ -151,23 +156,27 @@ class PolicyEnforcer(IPolicyEnforcer):
         timeout = callable.policy.timeout_seconds
         try:
             result = await asyncio.wait_for(coro, timeout=float(timeout))
-        except asyncio.TimeoutError:
-            emitter.emit(CallablePolicyEvent(
+        except TimeoutError:
+            emitter.emit(
+                CallablePolicyEvent(
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    turn_id=context.turn_id,
+                    check_name="timeout",
+                    result="denied",
+                    reason=f"exceeded {timeout}s",
+                )
+            )
+            raise CallableTimeoutError(
+                f"Callable '{callable.name}' exceeded its timeout of {timeout}s."
+            )
+        emitter.emit(
+            CallablePolicyEvent(
                 session_id=context.session_id,
                 run_id=context.run_id,
                 turn_id=context.turn_id,
                 check_name="timeout",
-                result="denied",
-                reason=f"exceeded {timeout}s",
-            ))
-            raise CallableTimeoutError(
-                f"Callable '{callable.name}' exceeded its timeout of {timeout}s."
+                result="passed",
             )
-        emitter.emit(CallablePolicyEvent(
-            session_id=context.session_id,
-            run_id=context.run_id,
-            turn_id=context.turn_id,
-            check_name="timeout",
-            result="passed",
-        ))
+        )
         return result

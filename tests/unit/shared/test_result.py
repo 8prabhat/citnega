@@ -56,7 +56,7 @@ class TestErr:
         assert "Err" in repr(Err(ValueError("e")))
 
     def test_equality_same_type(self) -> None:
-        assert Err(ValueError("a")) == Err(ValueError("b"))   # same type
+        assert Err(ValueError("a")) == Err(ValueError("b"))  # same type
 
     def test_equality_different_type(self) -> None:
         assert Err(ValueError("a")) != Err(TypeError("a"))

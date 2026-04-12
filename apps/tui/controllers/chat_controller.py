@@ -10,29 +10,32 @@ The controller:
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from textual.containers import VerticalScroll
 
 from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 from citnega.apps.tui.widgets.message_block import MessageBlock
+from citnega.apps.tui.widgets.option_picker_block import OptionPickerBlock
 from citnega.apps.tui.widgets.plan_approval_block import PlanApprovalBlock
 from citnega.apps.tui.widgets.streaming_block import StreamingBlock
 from citnega.apps.tui.widgets.thinking_block import ThinkingBlock
 from citnega.apps.tui.widgets.tool_call_block import ToolCallBlock
 from citnega.apps.tui.workers.event_consumer import (
     ApprovalRequested,
+    EventConsumerWorker,
     RunFinished,
     RunStarted,
     ThinkingReceived,
+    TokenReceived,
     ToolCallFinished,
     ToolCallStarted,
-    TokenReceived,
-    EventConsumerWorker,
 )
 
 if TYPE_CHECKING:
     from textual.app import App
+
     from citnega.packages.runtime.app_service import ApplicationService
 
 
@@ -45,12 +48,12 @@ class ChatController:
 
     def __init__(
         self,
-        app: "App",
-        service: "ApplicationService",
+        app: App,
+        service: ApplicationService,
         session_id: str,
     ) -> None:
-        self._app        = app
-        self._service    = service
+        self._app = app
+        self._service = service
         self._session_id = session_id
 
         # Active streaming block (one at a time — sequential turns)
@@ -68,16 +71,33 @@ class ChatController:
         # Plan mode state machine
         # None → awaiting_approval → executing → None
         self._plan_state: str | None = None
+        # Pending picker callbacks: widget_id → async callable(value, label)
+        self._picker_callbacks: dict[str, object] = {}
+        # Multi-step wizard intercept — set by workspace slash commands
+        self._pending_wizard = None  # WizardState | None
+        self._wizard_data: dict = {}
 
     # ── User input routing ─────────────────────────────────────────────────────
 
     async def handle_user_input(self, text: str) -> None:
         """
         Route user input:
+          - Active wizard → consumed by wizard (multi-step free-text flows)
           - Starts with "/" → slash command
           - Mode is "plan" and not awaiting approval → plan draft phase
           - Otherwise → normal turn
         """
+        try:
+            await self._handle_user_input_inner(text)
+        except Exception as exc:
+            self._app.notify(f"Input error: {exc}", severity="error", timeout=8)
+
+    async def _handle_user_input_inner(self, text: str) -> None:
+        if self._pending_wizard is not None:
+            wizard, self._pending_wizard = self._pending_wizard, None
+            await wizard.on_input(text, self)
+            return
+
         if text.startswith("/"):
             await self._handle_slash(text)
             return
@@ -98,7 +118,8 @@ class ChatController:
 
     async def _start_plan_draft(self, text: str) -> None:
         """Phase 1 of plan mode: generate plan only, then ask for approval."""
-        from citnega.packages.runtime.session_modes import PlanMode  # noqa: PLC0415
+        from citnega.packages.runtime.session_modes import PlanMode
+
         self._plan_state = "awaiting_approval"
         self._service.set_session_plan_phase(self._session_id, PlanMode.PHASE_DRAFT)
         await self._append_message("user", text)
@@ -117,33 +138,32 @@ class ChatController:
             await self._append_message("system", f"Error starting turn: {exc}")
             return
 
-        self._streaming_block = StreamingBlock()
-        scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
-        await scroll.mount(self._streaming_block)
-        self._app.call_after_refresh(scroll.scroll_end)
+        try:
+            self._streaming_block = StreamingBlock()
+            scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
+            await scroll.mount(self._streaming_block)
+            self._app.call_after_refresh(scroll.scroll_end)
+        except Exception as exc:
+            self._app.notify(
+                f"UI error mounting response block: {exc}", severity="error", timeout=8
+            )
+            return
 
         self._consumer = EventConsumerWorker(self._app, self._service, run_id)
         self._consumer.start()
 
-    async def on_plan_approval_block_resolved(
-        self, message: PlanApprovalBlock.Resolved
-    ) -> None:
+    async def on_plan_approval_block_resolved(self, message: PlanApprovalBlock.Resolved) -> None:
         """Called when the user clicks Proceed or Cancel on the plan block."""
-        from citnega.packages.runtime.session_modes import PlanMode  # noqa: PLC0415
+        from citnega.packages.runtime.session_modes import PlanMode
+
         if message.approved:
             self._plan_state = "executing"
-            self._service.set_session_plan_phase(
-                self._session_id, PlanMode.PHASE_EXECUTE
-            )
+            self._service.set_session_plan_phase(self._session_id, PlanMode.PHASE_EXECUTE)
             await self._run_turn("Execute the plan above step by step.")
         else:
             self._plan_state = None
-            self._service.set_session_plan_phase(
-                self._session_id, PlanMode.PHASE_DRAFT
-            )
-            await self._append_message(
-                "system", "Plan cancelled. You can refine your request."
-            )
+            self._service.set_session_plan_phase(self._session_id, PlanMode.PHASE_DRAFT)
+            await self._append_message("system", "Plan cancelled. You can refine your request.")
 
     # ── TUI message handlers (called by App.on_*) ──────────────────────────────
 
@@ -191,7 +211,8 @@ class ChatController:
             self._streaming_block = None
 
         # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
+        from citnega.apps.tui.widgets.status_bar import StatusBar
+
         status = self._app.screen.query_one(StatusBar)
         status.run_state = "idle"
 
@@ -216,7 +237,7 @@ class ChatController:
     async def on_tool_call_started(self, message: ToolCallStarted) -> None:
         block = ToolCallBlock(
             tool_name=message.callable_name,
-            input_summary=f"event_id: {message.event_id[:8]}",
+            input_summary=message.input_summary or f"run:{message.run_id[:8]}",
         )
         self._open_tool_blocks[message.callable_name] = block
         scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
@@ -252,9 +273,13 @@ class ChatController:
             await self._append_message("system", f"Approval error: {exc}")
 
     def on_run_started(self, message: RunStarted) -> None:
-        from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
-        status = self._app.screen.query_one(StatusBar)
-        status.run_state = "running"
+        from citnega.apps.tui.widgets.status_bar import StatusBar
+
+        try:
+            status = self._app.screen.query_one(StatusBar)
+            status.run_state = "running"
+        except Exception:
+            pass
 
     # ── Popup ──────────────────────────────────────────────────────────────────
 
@@ -266,14 +291,13 @@ class ChatController:
 
     def dismiss_popup(self) -> None:
         if self._popup is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._popup.remove()
-            except Exception:
-                pass
             self._popup = None
 
     def _show_slash_popup(self) -> None:
-        from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup  # noqa: PLC0415
+        from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup
+
         cmds = list(self._slash_commands.keys())
         popup = SlashCommandPopup(commands=cmds)
         self._popup = popup
@@ -293,6 +317,55 @@ class ChatController:
         await scroll.mount(block)
         self._app.call_after_refresh(scroll.scroll_end)
 
+    async def _append_picker(
+        self,
+        title: str,
+        options: list[tuple[str, str]],
+        on_select,
+        on_dismiss=None,
+    ) -> None:
+        """
+        Mount an interactive ``OptionPickerBlock`` in the chat scroll.
+
+        Args:
+            title:      Heading shown above the list.
+            options:    ``[(value, display_label), ...]``
+            on_select:  Async callable ``(value: str, label: str) -> None``
+                        invoked when the user picks an option.
+            on_dismiss: Optional async callable ``() -> None`` invoked on Esc.
+        """
+        import uuid as _uuid
+
+        widget_id = f"picker-{_uuid.uuid4().hex[:8]}"
+        block = OptionPickerBlock(title=title, options=options, id=widget_id)
+        self._picker_callbacks[widget_id] = (on_select, on_dismiss)
+        scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
+        try:
+            hint = scroll.query_one("#empty-hint")
+            await hint.remove()
+        except Exception:
+            pass
+        await scroll.mount(block)
+        self._app.call_after_refresh(scroll.scroll_end)
+
+    async def on_option_picker_block_selected(self, message: OptionPickerBlock.Selected) -> None:
+        """Routed from CitnegaApp — a picker option was chosen."""
+        callbacks = self._picker_callbacks.pop(message.picker_id, None)
+        if callbacks:
+            on_select, _ = callbacks
+            if on_select is not None:
+                await on_select(message.value, message.label)
+
+    async def on_option_picker_block_dismissed(self, message: OptionPickerBlock.Dismissed) -> None:
+        """Routed from CitnegaApp — user pressed Escape on a picker."""
+        callbacks = self._picker_callbacks.pop(message.picker_id, None)
+        if callbacks:
+            _, on_dismiss = callbacks
+            if on_dismiss is not None:
+                await on_dismiss()
+            else:
+                await self._append_message("system", "Selection cancelled.")
+
     async def _handle_slash(self, text: str) -> None:
         parts = text[1:].split()
         cmd_name = parts[0].lower() if parts else ""
@@ -300,8 +373,7 @@ class ChatController:
         handler = self._slash_commands.get(cmd_name)
         if handler is None:
             await self._append_message(
-                "system",
-                f"Unknown command /{cmd_name}. Type /help for available commands."
+                "system", f"Unknown command /{cmd_name}. Type /help for available commands."
             )
             return
         await handler.execute(args, self)
@@ -314,19 +386,27 @@ class ChatController:
 
 # ── Slash command registry factory ────────────────────────────────────────────
 
+
 def _build_slash_registry(app, service, session_id, controller):
-    from citnega.apps.tui.slash_commands.builtin import (  # noqa: PLC0415
+    from citnega.apps.tui.slash_commands.builtin import (
         AgentCommand,
         ApproveCommand,
         CancelCommand,
         ClearCommand,
         CompactCommand,
         HelpCommand,
-        ModelCommand,
         ModeCommand,
+        ModelCommand,
         NewSessionCommand,
         SessionsCommand,
         ThinkCommand,
+    )
+    from citnega.apps.tui.slash_commands.workspace import (
+        CreateAgentCommand,
+        CreateToolCommand,
+        CreateWorkflowCommand,
+        RefreshCommand,
+        SetWorkfolderCommand,
     )
 
     cmds = [
@@ -341,5 +421,11 @@ def _build_slash_registry(app, service, session_id, controller):
         NewSessionCommand(service=service),
         SessionsCommand(service=service),
         ThinkCommand(service=service),
+        # Workspace commands
+        SetWorkfolderCommand(service=service),
+        RefreshCommand(service=service),
+        CreateToolCommand(service=service),
+        CreateAgentCommand(service=service),
+        CreateWorkflowCommand(service=service),
     ]
     return {cmd.name: cmd for cmd in cmds}

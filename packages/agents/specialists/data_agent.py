@@ -2,27 +2,31 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class DataAgentInput(BaseModel):
-    task:        str  = Field(description="Data analysis or processing task.")
-    data:        str  = Field(default="", description="Inline data (CSV, JSON, text table, etc.)")
-    script:      str  = Field(default="", description="Optional script to run.")
+    task: str = Field(description="Data analysis or processing task.")
+    data: str = Field(default="", description="Inline data (CSV, JSON, text table, etc.)")
+    script: str = Field(default="", description="Optional script to run.")
     output_format: str = Field(default="text", description="'text' | 'json' | 'csv' | 'markdown'")
 
 
 class DataAgent(SpecialistBase):
-    name          = "data_agent"
-    description   = "Analyses data, runs scripts, and produces structured output."
+    name = "data_agent"
+    description = "Analyses data, runs scripts, and produces structured output."
     callable_type = CallableType.SPECIALIST
-    input_schema  = DataAgentInput
+    input_schema = DataAgentInput
     output_schema = SpecialistOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=120.0,
         requires_approval=False,
         network_allowed=False,
@@ -45,6 +49,7 @@ class DataAgent(SpecialistBase):
             shell_tool = self._get_tool("run_shell")
             if shell_tool:
                 from citnega.packages.tools.builtin.run_shell import RunShellInput
+
                 res = await shell_tool.invoke(
                     RunShellInput(command=input.script, timeout=60.0),
                     child_ctx,

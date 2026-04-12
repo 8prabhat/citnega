@@ -6,6 +6,6 @@ from citnega.packages.protocol.events.base import BaseEvent
 
 
 class CheckpointEvent(BaseEvent):
-    event_type:    str = "CheckpointEvent"
+    event_type: str = "CheckpointEvent"
     checkpoint_id: str
-    file_path:     str
+    file_path: str

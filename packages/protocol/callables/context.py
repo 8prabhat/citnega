@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.protocol.models.sessions import SessionConfig
 
 if TYPE_CHECKING:
-    from citnega.packages.protocol.interfaces.model_gateway import IModelGateway  # noqa: F401 (used in docstrings/comments)
+    from citnega.packages.protocol.callables.types import CallableType
+    from citnega.packages.protocol.interfaces.model_gateway import (
+        IModelGateway,  # noqa: F401 (used in docstrings/comments)
+    )
 
 
 class CallContext(BaseModel):
@@ -24,15 +28,15 @@ class CallContext(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    session_id:      str
-    run_id:          str
-    turn_id:         str
-    depth:           int  = 0            # invocation depth within a turn
+    session_id: str
+    run_id: str
+    turn_id: str
+    depth: int = 0  # invocation depth within a turn
     parent_callable: str | None = None
-    session_config:  SessionConfig
-    model_gateway:   Any = None   # IModelGateway | None — injected for agents only
-    deadline:        float | None = None              # monotonic clock deadline
-    metadata:        dict[str, Any] = Field(default_factory=dict)
+    session_config: SessionConfig
+    model_gateway: Any = None  # IModelGateway | None — injected for agents only
+    deadline: float | None = None  # monotonic clock deadline
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     # Internal cleanup handlers registered by tools that spawn subprocesses
     _cleanup_handlers: list[Callable[[], None]] = []
@@ -44,16 +48,14 @@ class CallContext(BaseModel):
     def run_cleanups(self) -> None:
         """Execute all registered cleanup handlers (best-effort)."""
         for fn in self._cleanup_handlers:
-            try:
+            with contextlib.suppress(Exception):
                 fn()
-            except Exception:
-                pass
 
     def child(
         self,
         callable_name: str,
-        callable_type: CallableType,  # noqa: ARG002
-    ) -> "CallContext":
+        callable_type: CallableType,
+    ) -> CallContext:
         """Create a child context with incremented depth."""
         return CallContext(
             session_id=self.session_id,
@@ -66,5 +68,3 @@ class CallContext(BaseModel):
             deadline=self.deadline,
             metadata=dict(self.metadata),
         )
-
-

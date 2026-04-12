@@ -7,12 +7,13 @@ artifact is accessible at a known location.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.models.kb import KBItem
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.kb import KBItem
 
 
 def export_jsonl(items: list[KBItem], dest: Path) -> Path:
@@ -38,9 +39,7 @@ def export_markdown(items: list[KBItem], dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("w", encoding="utf-8") as fh:
         fh.write("# Citnega Knowledge Base Export\n\n")
-        fh.write(
-            f"*Exported: {datetime.now(tz=timezone.utc).isoformat()}*\n\n"
-        )
+        fh.write(f"*Exported: {datetime.now(tz=UTC).isoformat()}*\n\n")
         for item in items:
             fh.write(f"## {item.title}\n\n")
             if item.tags:
@@ -49,11 +48,11 @@ def export_markdown(items: list[KBItem], dest: Path) -> Path:
             # Indent as a block quote
             quoted = "\n".join(f"> {line}" for line in item.content.splitlines())
             fh.write(quoted + "\n\n")
-            fh.write(f"---\n\n")
+            fh.write("---\n\n")
     return dest
 
 
 def default_export_path(kb_exports_dir: Path, fmt: str = "jsonl") -> Path:
     """Return a timestamped export path inside *kb_exports_dir*."""
-    stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    stamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S")
     return kb_exports_dir / f"kb_export_{stamp}.{fmt}"

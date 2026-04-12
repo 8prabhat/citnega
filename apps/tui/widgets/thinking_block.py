@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ThinkingBlock(Widget):
@@ -46,7 +51,7 @@ class ThinkingBlock(Widget):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._buffer    = ""
+        self._buffer = ""
         self._finalized = False
 
     def compose(self) -> ComposeResult:
@@ -63,10 +68,8 @@ class ThinkingBlock(Widget):
     def append_token(self, token: str) -> None:
         """Append one reasoning token to the display (called from event loop)."""
         self._buffer += token
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#thinking-content", Static).update(self._buffer)
-        except Exception:
-            pass
 
     def finalize(self) -> None:
         """
@@ -85,10 +88,8 @@ class ThinkingBlock(Widget):
         except Exception:
             pass
         # Ensure final content is shown if expanded
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#thinking-content", Static).update(self._buffer)
-        except Exception:
-            pass
 
     @property
     def has_content(self) -> bool:

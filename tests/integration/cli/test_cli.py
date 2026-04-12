@@ -12,8 +12,9 @@ Strategy:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
+from typing import TYPE_CHECKING
 import uuid
-from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -21,6 +22,10 @@ from typer.testing import CliRunner
 from citnega.apps.cli.main import app
 from citnega.packages.protocol.models.sessions import SessionConfig
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.context import ContextObject
 
 # ---------------------------------------------------------------------------
 # CliRunner instance (no mix_stderr so stdout is clean for assertions)
@@ -33,6 +38,7 @@ runner = CliRunner()
 # ApplicationService fixture — real SQLite, stub adapter
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def service(tmp_path: Path):
     """
@@ -41,10 +47,8 @@ def service(tmp_path: Path):
     Skips Alembic migrations — creates tables inline with raw DDL so that
     Phase 6 tests don't depend on the migrations being applied.
     """
-    import aiosqlite
 
     from citnega.packages.protocol.interfaces.context import IContextHandler
-    from citnega.packages.protocol.models.context import ContextObject
     from citnega.packages.protocol.models.sessions import Session
     from citnega.packages.runtime.app_service import ApplicationService
     from citnega.packages.runtime.context.assembler import ContextAssembler
@@ -101,20 +105,21 @@ def service(tmp_path: Path):
                 await db.execute(ddl)
 
         session_repo = SessionRepository(db)
-        run_repo     = RunRepository(db)
-        session_mgr  = SessionManager(session_repo)
-        run_mgr      = RunManager(run_repo)
+        run_repo = RunRepository(db)
+        session_mgr = SessionManager(session_repo)
+        run_mgr = RunManager(run_repo)
 
-        emitter      = EventEmitter()
+        emitter = EventEmitter()
         approval_mgr = ApprovalManager()
-        enforcer     = PolicyEnforcer(emitter, approval_mgr)
-        adapter      = StubFrameworkAdapter()
-        registry     = BaseRegistry()
+        PolicyEnforcer(emitter, approval_mgr)
+        adapter = StubFrameworkAdapter()
+        registry = BaseRegistry()
 
         class PassThrough(IContextHandler):
             @property
             def name(self) -> str:
                 return "pass_through"
+
             async def enrich(self, ctx: ContextObject, s: Session) -> ContextObject:
                 return ctx
 
@@ -152,6 +157,7 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 # ApplicationService integration tests
 # ---------------------------------------------------------------------------
+
 
 class TestSessionLifecycle:
     def test_create_and_list(self, service) -> None:
@@ -210,7 +216,6 @@ class TestRunTurn:
         assert run_id  # non-empty string
 
     def test_run_turn_streams_complete_event(self, service) -> None:
-        from citnega.packages.protocol.events.lifecycle import RunCompleteEvent
 
         cfg = SessionConfig(
             session_id=str(uuid.uuid4()),
@@ -238,7 +243,6 @@ class TestRunTurn:
             _run(service.run_turn("no-such-session", "hi"))
 
     def test_state_snapshot_idle(self, service) -> None:
-        from citnega.packages.protocol.models.runs import RunState
 
         cfg = SessionConfig(
             session_id=str(uuid.uuid4()),
@@ -248,7 +252,9 @@ class TestRunTurn:
         )
         _run(service.create_session(cfg))
         # Wait for any background task to finish
-        import time; time.sleep(0.1)
+        import time
+
+        time.sleep(0.1)
         snapshot = _run(service.get_state_snapshot(cfg.session_id))
         # Could be PENDING (idle) or COMPLETED if the background task already ran
         assert snapshot.session_id == cfg.session_id
@@ -268,16 +274,17 @@ class TestKBStubs:
         assert results == []
 
     def test_add_kb_raises_not_implemented(self, service) -> None:
+        from datetime import datetime
+
         from citnega.packages.protocol.models.kb import KBItem, KBSourceType
-        from datetime import datetime, timezone
 
         item = KBItem(
             item_id=str(uuid.uuid4()),
             title="test",
             content="test content",
             source_type=KBSourceType.NOTE,
-            created_at=datetime.now(tz=timezone.utc),
-            updated_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
+            updated_at=datetime.now(tz=UTC),
             content_hash="abc123",
         )
         with pytest.raises(NotImplementedError):
@@ -287,6 +294,7 @@ class TestKBStubs:
 # ---------------------------------------------------------------------------
 # CLI smoke tests (no storage required)
 # ---------------------------------------------------------------------------
+
 
 class TestCLIHelp:
     def test_help(self) -> None:

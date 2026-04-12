@@ -7,12 +7,16 @@ pass the shared LSP suite — it is the reference implementation.
 
 from __future__ import annotations
 
-from pathlib import Path
+from datetime import UTC
+from typing import TYPE_CHECKING
 
 import pytest
 
 from tests.adapters.shared_suite import AdapterLSPBase
 from tests.fixtures.stub_adapter import StubFrameworkAdapter
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestStubAdapterLSP(AdapterLSPBase):
@@ -25,7 +29,7 @@ class TestStubAdapterLSP(AdapterLSPBase):
     @pytest.mark.asyncio
     async def test_run_turn_completes(self, tmp_path: Path) -> None:
         import asyncio
-        from datetime import datetime, timezone
+        from datetime import datetime
         import uuid
 
         from citnega.packages.protocol.models.context import ContextObject
@@ -39,20 +43,22 @@ class TestStubAdapterLSP(AdapterLSPBase):
             session_id=session.config.session_id,
             run_id=str(uuid.uuid4()),
             user_input="hello",
-            assembled_at=datetime.now(tz=timezone.utc),
+            assembled_at=datetime.now(tz=UTC),
             budget_remaining=4096,
         )
         run_id = await runner.run_turn("hello", ctx, queue)
         assert run_id == ctx.run_id
 
     def _session_helper(self, framework: str):  # type: ignore[return]
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from citnega.packages.protocol.models.sessions import Session, SessionConfig
+
         cfg = SessionConfig(
             session_id="stub-test",
             name="stub",
             framework=framework,
             default_model_id="x",
         )
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         return Session(config=cfg, created_at=now, last_active_at=now)

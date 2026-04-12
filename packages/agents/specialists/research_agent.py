@@ -2,26 +2,30 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class ResearchInput(BaseModel):
-    query:       str  = Field(description="Research question or topic.")
-    depth:       str  = Field(default="standard", description="'quick' | 'standard' | 'deep'")
-    max_sources: int  = Field(default=5)
+    query: str = Field(description="Research question or topic.")
+    depth: str = Field(default="standard", description="'quick' | 'standard' | 'deep'")
+    max_sources: int = Field(default=5)
 
 
 class ResearchAgent(SpecialistBase):
-    name          = "research_agent"
-    description   = "Researches topics via web search and URL fetching."
+    name = "research_agent"
+    description = "Researches topics via web search and URL fetching."
     callable_type = CallableType.SPECIALIST
-    input_schema  = ResearchInput
+    input_schema = ResearchInput
     output_schema = SpecialistOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=120.0,
         requires_approval=False,
         network_allowed=True,
@@ -45,6 +49,7 @@ class ResearchAgent(SpecialistBase):
         search_results = ""
         if search_tool:
             from citnega.packages.tools.builtin.search_web import SearchWebInput
+
             child_ctx = context.child(self.name, self.callable_type)
             result = await search_tool.invoke(
                 SearchWebInput(query=input.query, max_results=input.max_sources),

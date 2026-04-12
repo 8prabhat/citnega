@@ -15,13 +15,16 @@ Handler chain (configured in settings.toml [context].handlers):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.context import IContextAssembler, IContextHandler
 from citnega.packages.protocol.models.context import ContextObject
-from citnega.packages.protocol.models.sessions import Session
 from citnega.packages.shared.errors import CitnegaError
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class ContextAssembler(IContextAssembler):
@@ -60,7 +63,7 @@ class ContextAssembler(IContextAssembler):
             session_id=session.config.session_id,
             run_id=run_id,
             user_input=user_input,
-            assembled_at=datetime.now(tz=timezone.utc),
+            assembled_at=datetime.now(tz=UTC),
             budget_remaining=max_tokens,
         )
 

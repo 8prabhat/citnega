@@ -9,11 +9,10 @@ the event is never silently dropped.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from citnega.packages.protocol.events import CanonicalEvent, GenericFrameworkEvent
-from citnega.packages.protocol.events.base import BaseEvent
-
 
 # Type alias: a translator takes a raw framework event and the base
 # correlation fields and returns a CanonicalEvent | None.

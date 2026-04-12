@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.kb import KBItem, KBSearchResult, KBSourceType
 
 
 class IKnowledgeStore(ABC):

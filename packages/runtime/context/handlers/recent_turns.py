@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.models.context import ContextObject, ContextSource
-from citnega.packages.protocol.models.sessions import Session
 from citnega.packages.protocol.interfaces.context import IContextHandler
-from citnega.packages.storage.repositories.message_repo import MessageRepository
+from citnega.packages.protocol.models.context import ContextObject, ContextSource
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.sessions import Session
+    from citnega.packages.storage.repositories.message_repo import MessageRepository
 
 
 def _estimate_tokens(text: str) -> int:
@@ -66,7 +70,7 @@ class RecentTurnsHandler(IContextHandler):
 
         return context.model_copy(
             update={
-                "sources": context.sources + [source],
+                "sources": [*context.sources, source],
                 "total_tokens": context.total_tokens + token_count,
                 "budget_remaining": context.budget_remaining - token_count,
             }

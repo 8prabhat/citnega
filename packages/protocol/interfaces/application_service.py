@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.callables.types import CallableMetadata
-from citnega.packages.protocol.events import CanonicalEvent
-from citnega.packages.protocol.models import (
-    KBItem,
-    KBSearchResult,
-    ModelInfo,
-    RunSummary,
-    Session,
-    SessionConfig,
-    StateSnapshot,
-)
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from citnega.packages.protocol.callables.types import CallableMetadata
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models import (
+        KBItem,
+        KBSearchResult,
+        ModelInfo,
+        RunSummary,
+        Session,
+        SessionConfig,
+        StateSnapshot,
+    )
 
 
 class IApplicationService(ABC):
@@ -101,6 +104,17 @@ class IApplicationService(ABC):
 
     @abstractmethod
     async def import_session(self, path: Path) -> Session: ...
+
+    # ── Workspace / hot-reload ────────────────────────────────────────────────
+
+    @abstractmethod
+    def register_callable(self, callable_obj: object) -> None: ...
+
+    @abstractmethod
+    async def hot_reload_workfolder(self, workfolder: Path, loader: object) -> dict: ...
+
+    @abstractmethod
+    def save_workspace_path(self, path: str) -> None: ...
 
     # ── Registry queries ───────────────────────────────────────────────────────
 

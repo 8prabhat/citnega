@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.models.model_gateway import (
-    ModelChunk,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-)
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from citnega.packages.protocol.models.model_gateway import (
+        ModelChunk,
+        ModelInfo,
+        ModelRequest,
+        ModelResponse,
+    )
 
 
 class IModelGateway(ABC):
@@ -20,9 +23,7 @@ class IModelGateway(ABC):
     async def generate(self, request: ModelRequest) -> ModelResponse: ...
 
     @abstractmethod
-    async def stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]: ...
+    async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]: ...
 
     @abstractmethod
     async def list_models(self) -> list[ModelInfo]: ...
@@ -47,9 +48,7 @@ class IModelProvider(ABC):
     async def generate(self, request: ModelRequest) -> ModelResponse: ...
 
     @abstractmethod
-    async def stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]: ...
+    async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]: ...
 
     @abstractmethod
     async def health_check(self) -> str:

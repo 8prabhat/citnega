@@ -10,10 +10,10 @@ The App owns:
 
 from __future__ import annotations
 
-import uuid
 from typing import TYPE_CHECKING
+import uuid
 
-from textual.app import App, ComposeResult
+from textual.app import App
 
 from citnega.apps.tui.screens.chat_screen import (
     ChatScreen,
@@ -21,22 +21,21 @@ from citnega.apps.tui.screens.chat_screen import (
     ToggleSlashPopup,
     UserInputSubmitted,
 )
-from citnega.apps.tui.screens.session_picker import (
-    SessionPickerScreen,
-)
-from citnega.apps.tui.widgets.approval_block import ApprovalBlock
-from citnega.apps.tui.widgets.plan_approval_block import PlanApprovalBlock
-from citnega.apps.tui.workers.event_consumer import (
-    ApprovalRequested,
-    RunFinished,
-    RunStarted,
-    ThinkingReceived,
-    TokenReceived,
-    ToolCallFinished,
-    ToolCallStarted,
-)
+from citnega.apps.tui.screens.session_picker import SessionPickerScreen
 
 if TYPE_CHECKING:
+    from citnega.apps.tui.widgets.approval_block import ApprovalBlock
+    from citnega.apps.tui.widgets.option_picker_block import OptionPickerBlock
+    from citnega.apps.tui.widgets.plan_approval_block import PlanApprovalBlock
+    from citnega.apps.tui.workers.event_consumer import (
+        ApprovalRequested,
+        RunFinished,
+        RunStarted,
+        ThinkingReceived,
+        TokenReceived,
+        ToolCallFinished,
+        ToolCallStarted,
+    )
     from citnega.packages.runtime.app_service import ApplicationService
 
 
@@ -57,13 +56,13 @@ class CitnegaApp(App):
     def __init__(
         self,
         *,
-        service: "ApplicationService | None" = None,
+        service: ApplicationService | None = None,
         session_id: str | None = None,
         theme_name: str = "dark",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self._service: "ApplicationService | None" = service
+        self._service: ApplicationService | None = service
         self._session_id: str | None = session_id
         self._theme_name = theme_name
         self._controller = None
@@ -74,7 +73,8 @@ class CitnegaApp(App):
     async def on_mount(self) -> None:
         # 1. Bootstrap the service if not injected
         if self._service is None:
-            from citnega.apps.cli.bootstrap import cli_bootstrap  # noqa: PLC0415
+            from citnega.apps.cli.bootstrap import cli_bootstrap
+
             self._bootstrap_ctx = cli_bootstrap()
             try:
                 self._service = await self._bootstrap_ctx.__aenter__()
@@ -90,9 +90,10 @@ class CitnegaApp(App):
             return
 
         # 3. Otherwise show the session picker
-        from citnega.packages.config.loaders import load_settings  # noqa: PLC0415
+        from citnega.packages.config.loaders import load_settings
+
         settings = load_settings()
-        limit    = settings.conversation.max_sessions_shown
+        limit = settings.conversation.max_sessions_shown
 
         try:
             all_sessions = await self._service.list_sessions()
@@ -110,14 +111,14 @@ class CitnegaApp(App):
         await self.push_screen(picker)
 
     async def on_session_picker_screen_session_selected(
-        self, message: "SessionPickerScreen.SessionSelected"
+        self, message: SessionPickerScreen.SessionSelected
     ) -> None:
         """User picked a session from the picker — resume it."""
         await self.pop_screen()
         await self._start_chat_with_session(message.session_id)
 
     async def on_session_picker_screen_new_session_requested(
-        self, message: "SessionPickerScreen.NewSessionRequested"
+        self, message: SessionPickerScreen.NewSessionRequested
     ) -> None:
         """User pressed 'n' in the picker — start a fresh session."""
         await self.pop_screen()
@@ -127,7 +128,8 @@ class CitnegaApp(App):
         """Push ChatScreen and wire up the controller for *session_id*."""
         await self.push_screen(ChatScreen())
 
-        from citnega.packages.protocol.models.sessions import SessionConfig  # noqa: PLC0415
+        from citnega.packages.protocol.models.sessions import SessionConfig
+
         try:
             if session_id is None:
                 config = SessionConfig(
@@ -142,6 +144,8 @@ class CitnegaApp(App):
                 try:
                     session = await self._service.get_session(session_id)
                     self._session_id = session.config.session_id
+                    # Warm up the runner so conversation history is in-memory
+                    await self._service.ensure_runner(self._session_id)
                 except Exception:
                     # Session not found — create fresh
                     self.notify(f"Session {session_id!r} not found; starting fresh.")
@@ -158,12 +162,15 @@ class CitnegaApp(App):
             return
 
         # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
+        from citnega.apps.tui.widgets.status_bar import StatusBar
+
         try:
             status = self.screen.query_one(StatusBar)
             status.session_id = self._session_id
-            status.framework  = self._service.list_frameworks()[0] if self._service else "direct"
-            active_model = self._service.get_session_model(self._session_id) if self._service else ""
+            status.framework = self._service.list_frameworks()[0] if self._service else "direct"
+            active_model = (
+                self._service.get_session_model(self._session_id) if self._service else ""
+            )
             if active_model:
                 status.model = active_model
             elif self._service:
@@ -174,7 +181,8 @@ class CitnegaApp(App):
             pass
 
         # Create controller
-        from citnega.apps.tui.controllers.chat_controller import ChatController  # noqa: PLC0415
+        from citnega.apps.tui.controllers.chat_controller import ChatController
+
         self._controller = ChatController(
             app=self,
             service=self._service,
@@ -206,9 +214,7 @@ class CitnegaApp(App):
         if self._controller is not None:
             await self._controller.on_approval_block_resolved(message)
 
-    async def on_plan_approval_block_resolved(
-        self, message: PlanApprovalBlock.Resolved
-    ) -> None:
+    async def on_plan_approval_block_resolved(self, message: PlanApprovalBlock.Resolved) -> None:
         if self._controller is not None:
             await self._controller.on_plan_approval_block_resolved(message)
 
@@ -240,10 +246,18 @@ class CitnegaApp(App):
         if self._controller is not None:
             await self._controller.on_approval_requested(message)
 
+    async def on_option_picker_block_selected(self, message: OptionPickerBlock.Selected) -> None:
+        if self._controller is not None:
+            await self._controller.on_option_picker_block_selected(message)
+
+    async def on_option_picker_block_dismissed(self, message: OptionPickerBlock.Dismissed) -> None:
+        if self._controller is not None:
+            await self._controller.on_option_picker_block_dismissed(message)
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     @property
-    def service(self) -> "ApplicationService | None":
+    def service(self) -> ApplicationService | None:
         return self._service
 
     @property
@@ -252,6 +266,13 @@ class CitnegaApp(App):
 
 
 def main() -> None:
+    import sys
+
+    # On Windows, Textual requires the ProactorEventLoop for subprocess support.
+    if sys.platform == "win32":
+        import asyncio
+
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     CitnegaApp().run()
 
 

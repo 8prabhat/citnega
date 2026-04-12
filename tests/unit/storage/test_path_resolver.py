@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestPathResolver:
@@ -49,9 +50,7 @@ class TestPathResolver:
 
     def test_path_template_substitution(self, tmp_path: Path) -> None:
         resolver = PathResolver(app_home=tmp_path)
-        result = resolver.resolve_path_template(
-            "~/citnega/${SESSION_ID}/output", "my-session"
-        )
+        result = resolver.resolve_path_template("~/citnega/${SESSION_ID}/output", "my-session")
         assert result == "~/citnega/my-session/output"
 
     def test_alembic_ini_exists(self, tmp_path: Path) -> None:

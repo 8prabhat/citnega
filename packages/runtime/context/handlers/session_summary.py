@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.context import IContextHandler
 from citnega.packages.protocol.models.context import ContextObject, ContextSource
 from citnega.packages.protocol.models.runs import TERMINAL_RUN_STATES
-from citnega.packages.protocol.models.sessions import Session
-from citnega.packages.storage.repositories.run_repo import RunRepository
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.sessions import Session
+    from citnega.packages.storage.repositories.run_repo import RunRepository
 
 
 def _estimate_tokens(text: str) -> int:
@@ -57,8 +61,7 @@ class SessionSummaryHandler(IContextHandler):
         ]
         for r in runs[:5]:
             ts = r.started_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"  [{ts}] run={r.run_id[:8]} state={r.state.value} "
-                          f"turns={r.turn_count}")
+            lines.append(f"  [{ts}] run={r.run_id[:8]} state={r.state.value} turns={r.turn_count}")
 
         content = "\n".join(lines)
         token_count = _estimate_tokens(content)
@@ -78,7 +81,7 @@ class SessionSummaryHandler(IContextHandler):
 
         return context.model_copy(
             update={
-                "sources": context.sources + [source],
+                "sources": [*context.sources, source],
                 "total_tokens": context.total_tokens + token_count,
                 "budget_remaining": context.budget_remaining - token_count,
             }

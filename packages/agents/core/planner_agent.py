@@ -18,23 +18,26 @@ of all step outputs.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCoreAgent
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class PlannerInput(BaseModel):
-    goal:       str  = Field(description="High-level goal or complex task.")
+    goal: str = Field(description="High-level goal or complex task.")
     constraints: str = Field(default="", description="Optional constraints on the plan.")
-    max_steps:  int  = Field(default=5)
+    max_steps: int = Field(default=5)
 
 
 class PlannerOutput(BaseModel):
-    response:   str         = Field(description="Final synthesised response.")
-    plan_steps: list[str]   = Field(default_factory=list)
+    response: str = Field(description="Final synthesised response.")
+    plan_steps: list[str] = Field(default_factory=list)
     step_outputs: list[str] = Field(default_factory=list)
 
 
@@ -65,21 +68,19 @@ def _parse_plan(text: str) -> list[tuple[str, str]]:
 
 
 class PlannerAgent(BaseCoreAgent):
-    name          = "planner_agent"
-    description   = "Decomposes complex tasks into plans and executes them via specialists."
+    name = "planner_agent"
+    description = "Decomposes complex tasks into plans and executes them via specialists."
     callable_type = CallableType.CORE
-    input_schema  = PlannerInput
+    input_schema = PlannerInput
     output_schema = PlannerOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=600.0,
         requires_approval=False,
         network_allowed=True,
         max_depth_allowed=5,
     )
 
-    async def _execute(
-        self, input: PlannerInput, context: CallContext
-    ) -> PlannerOutput:
+    async def _execute(self, input: PlannerInput, context: CallContext) -> PlannerOutput:
         if context.model_gateway is None:
             return PlannerOutput(
                 response="(model gateway unavailable)",
@@ -141,15 +142,13 @@ class PlannerAgent(BaseCoreAgent):
             result = await specialist.invoke(spec_input, child_ctx)
             if result.success and result.output:
                 out = result.output  # type: ignore[attr-defined]
-                step_outputs.append(
-                    getattr(out, "response", str(out))
-                )
+                step_outputs.append(getattr(out, "response", str(out)))
             else:
                 step_outputs.append(f"(step failed: {result.error})")
 
         # Step 3: synthesise
         synthesis_parts = [f"Goal: {input.goal}", "Step outputs:"]
-        for label, out in zip(step_labels, step_outputs):
+        for label, out in zip(step_labels, step_outputs, strict=False):
             synthesis_parts.append(f"  [{label}]\n  {out}")
 
         final_response = await context.model_gateway.generate(

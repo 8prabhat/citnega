@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ApprovalBlock(Widget):
@@ -55,10 +60,11 @@ class ApprovalBlock(Widget):
 
     class Resolved(Message):
         """Emitted when the user clicks Approve or Deny."""
+
         def __init__(self, approval_id: str, approved: bool) -> None:
             super().__init__()
             self.approval_id = approval_id
-            self.approved    = approved
+            self.approved = approved
 
     def __init__(
         self,
@@ -68,17 +74,17 @@ class ApprovalBlock(Widget):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self._approval_id    = approval_id
-        self._callable_name  = callable_name
-        self._input_summary  = input_summary
-        self._resolved       = False
+        self._approval_id = approval_id
+        self._callable_name = callable_name
+        self._input_summary = input_summary
+        self._resolved = False
 
     def compose(self) -> ComposeResult:
         yield Label(f"⚠ Approval required: {self._callable_name}", classes="approval-header")
         yield Static(self._input_summary, classes="approval-summary", markup=False)
         with Widget(id="approval-buttons"):
             yield Button("Approve", variant="success", id="btn-approve")
-            yield Button("Deny",    variant="error",   id="btn-deny")
+            yield Button("Deny", variant="error", id="btn-deny")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._resolved:
@@ -94,7 +100,5 @@ class ApprovalBlock(Widget):
         verb = "Approved" if approved else "Denied"
         header.update(f"{'✓' if approved else '✗'} {verb}: {self._callable_name}")
         # Hide buttons
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#approval-buttons").display = False
-        except Exception:
-            pass

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.models.model_gateway import ModelMessage
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.model_gateway import ModelMessage
 
 
 class ITokenCounter(ABC):

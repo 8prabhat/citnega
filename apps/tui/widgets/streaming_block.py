@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class StreamingBlock(Widget):
@@ -55,7 +60,7 @@ class StreamingBlock(Widget):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._buffer    = ""
+        self._buffer = ""
         self._finalized = False
 
     def compose(self) -> ComposeResult:
@@ -87,10 +92,8 @@ class StreamingBlock(Widget):
         self._finalized = True
 
         # Hide the cursor
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#stream-cursor", Label).display = False
-        except Exception:
-            pass
 
         # Swap plain-text widget → Markdown renderer
         try:
@@ -103,10 +106,8 @@ class StreamingBlock(Widget):
         await self.mount(Markdown(md_content, id="stream-md"))
 
         # Scroll parent to show the fully rendered block
-        try:
+        with contextlib.suppress(Exception):
             self.scroll_visible(animate=False)
-        except Exception:
-            pass
 
     @property
     def text(self) -> str:

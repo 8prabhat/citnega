@@ -12,15 +12,12 @@ Routes ModelRequest to the appropriate IModelProvider:
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
-from citnega.packages.model_gateway.rate_limiter import TokenBucketRateLimiter
-from citnega.packages.model_gateway.registry import ModelRegistry
 from citnega.packages.model_gateway.routing import HybridRoutingPolicy
 from citnega.packages.model_gateway.token_counter import CompositeTokenCounter
 from citnega.packages.observability.logging_setup import model_gateway_logger
 from citnega.packages.protocol.events.rate_limit import RateLimitEvent
-from citnega.packages.protocol.interfaces.events import IEventEmitter
 from citnega.packages.protocol.interfaces.model_gateway import IModelGateway, IModelProvider
 from citnega.packages.protocol.models.model_gateway import (
     ModelChunk,
@@ -34,6 +31,13 @@ from citnega.packages.shared.errors import (
     NoHealthyProviderError,
     RateLimitExceededError,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from citnega.packages.model_gateway.rate_limiter import TokenBucketRateLimiter
+    from citnega.packages.model_gateway.registry import ModelRegistry
+    from citnega.packages.protocol.interfaces.events import IEventEmitter
 
 
 class ModelGateway(IModelGateway):
@@ -75,9 +79,7 @@ class ModelGateway(IModelGateway):
         if request.model_id:
             provider = self._providers.get(request.model_id)
             if provider is None:
-                raise ModelCapabilityError(
-                    f"Model {request.model_id!r} is not registered."
-                )
+                raise ModelCapabilityError(f"Model {request.model_id!r} is not registered.")
             return provider
 
         needs = request.needs or TaskNeeds()
@@ -98,17 +100,17 @@ class ModelGateway(IModelGateway):
         prompt_tokens = self._token_counter.count_messages(request.messages)
 
         try:
-            await self._rate_limiter.acquire(
-                provider_type, model_id, prompt_tokens=prompt_tokens
+            await self._rate_limiter.acquire(provider_type, model_id, prompt_tokens=prompt_tokens)
+        except RateLimitExceededError:
+            self._emitter.emit(
+                RateLimitEvent(
+                    session_id=self._session_id,
+                    run_id=self._run_id,
+                    callable_name=model_id,
+                    provider=provider_type,
+                    wait_seconds=0.0,
+                )
             )
-        except RateLimitExceededError as exc:
-            self._emitter.emit(RateLimitEvent(
-                session_id=self._session_id,
-                run_id=self._run_id,
-                callable_name=model_id,
-                provider=provider_type,
-                wait_seconds=0.0,
-            ))
             raise
 
         model_gateway_logger.debug(
@@ -122,7 +124,8 @@ class ModelGateway(IModelGateway):
             self._registry.update_health(model_id, "healthy")
             # Account for completion tokens in rate limiter (TPM only, not RPM)
             await self._rate_limiter.acquire(
-                provider_type, model_id,
+                provider_type,
+                model_id,
                 completion_tokens=response.usage.get("completion_tokens", 0),
                 charge_rpm=False,
             )
@@ -131,26 +134,24 @@ class ModelGateway(IModelGateway):
             self._registry.update_health(model_id, "degraded")
             raise
 
-    async def stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]:
+    async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
         provider = self._resolve_provider(request)
         model_id = provider.model_info.model_id
         provider_type = provider.model_info.provider_type
 
         prompt_tokens = self._token_counter.count_messages(request.messages)
         try:
-            await self._rate_limiter.acquire(
-                provider_type, model_id, prompt_tokens=prompt_tokens
+            await self._rate_limiter.acquire(provider_type, model_id, prompt_tokens=prompt_tokens)
+        except RateLimitExceededError:
+            self._emitter.emit(
+                RateLimitEvent(
+                    session_id=self._session_id,
+                    run_id=self._run_id,
+                    callable_name=model_id,
+                    provider=provider_type,
+                    wait_seconds=0.0,
+                )
             )
-        except RateLimitExceededError as exc:
-            self._emitter.emit(RateLimitEvent(
-                session_id=self._session_id,
-                run_id=self._run_id,
-                callable_name=model_id,
-                provider=provider_type,
-                wait_seconds=0.0,
-            ))
             raise
 
         try:
@@ -166,6 +167,7 @@ class ModelGateway(IModelGateway):
 
     async def health_check_all(self) -> dict[str, str]:
         """Run health checks on all registered providers concurrently."""
+
         async def _check(model_id: str, provider: IModelProvider) -> tuple[str, str]:
             status = await provider.health_check()
             self._registry.update_health(model_id, status)

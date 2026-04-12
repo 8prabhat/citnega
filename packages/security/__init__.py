@@ -19,10 +19,10 @@ __all__ = [
     "EnvVarKeyStore",
     "KeyringKeyStore",
     "LogScrubber",
-    "scrub_dict",
-    "ensure_dir_permissions",
-    "ensure_file_permissions",
     "check_dir_permissions",
     "check_file_permissions",
+    "ensure_dir_permissions",
+    "ensure_file_permissions",
+    "scrub_dict",
     "secure_write",
 ]

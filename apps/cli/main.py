@@ -35,10 +35,10 @@ app = typer.Typer(
 )
 
 app.add_typer(session.app, name="session", help="Manage conversation sessions.")
-app.add_typer(run.app,     name="run",     help="Execute a turn in a session.")
+app.add_typer(run.app, name="run", help="Execute a turn in a session.")
 app.add_typer(approve.app, name="approve", help="Respond to a pending approval request.")
-app.add_typer(kb.app,      name="kb",      help="Knowledge base operations (Phase 8).")
-app.add_typer(config.app,  name="config",  help="Validate or display configuration.")
+app.add_typer(kb.app, name="kb", help="Knowledge base operations (Phase 8).")
+app.add_typer(config.app, name="config", help="Validate or display configuration.")
 app.add_typer(migrate.app, name="migrate", help="Run database migrations.")
 
 

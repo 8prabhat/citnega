@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING
 
-import pytest
 import pytest_asyncio
 
 from citnega.packages.storage.database import DatabaseFactory
 from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from pathlib import Path
 
 
 @pytest_asyncio.fixture

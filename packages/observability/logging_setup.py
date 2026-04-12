@@ -10,29 +10,27 @@ Sets up structlog with:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import logging
 import sys
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from citnega.packages.security.scrubber import LogScrubber
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 _LOG_SCHEMA_VERSION = 1
 
 
-def _add_schema_version(
-    logger: Any, method: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+def _add_schema_version(logger: Any, method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     event_dict["schema_version"] = _LOG_SCHEMA_VERSION
     return event_dict
 
 
-def _add_logger_name(
-    logger: Any, method: str, event_dict: dict[str, Any]
-) -> dict[str, Any]:
+def _add_logger_name(logger: Any, method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
     if "logger" not in event_dict and logger is not None:
         event_dict["logger"] = getattr(logger, "name", str(logger))
     return event_dict
@@ -61,7 +59,7 @@ def configure_logging(
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         _add_schema_version,
-        scrubber,                          # redact before any output
+        scrubber,  # redact before any output
     ]
 
     if log_dir is not None:
@@ -69,9 +67,7 @@ def configure_logging(
 
     # Route through stdlib logging so handlers can be file-based
     structlog.configure(
-        processors=shared_processors + [
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
+        processors=[*shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -91,7 +87,7 @@ def configure_logging(
 
     # File handler → daily JSONL
     if log_dir is not None:
-        today = datetime.now(tz=timezone.utc).date().isoformat()
+        today = datetime.now(tz=UTC).date().isoformat()
         log_file = log_dir / f"{today}.jsonl"
         file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
         file_handler.setFormatter(formatter)
@@ -116,10 +112,10 @@ def get_logger(name: str) -> Any:
 
 
 # Named loggers as module-level singletons — import and use directly.
-runtime_logger       = structlog.get_logger("citnega.runtime")
+runtime_logger = structlog.get_logger("citnega.runtime")
 model_gateway_logger = structlog.get_logger("citnega.model_gateway")
-storage_logger       = structlog.get_logger("citnega.storage")
-kb_logger            = structlog.get_logger("citnega.kb")
-security_logger      = structlog.get_logger("citnega.security")
-tui_logger           = structlog.get_logger("citnega.tui")
-cli_logger           = structlog.get_logger("citnega.cli")
+storage_logger = structlog.get_logger("citnega.storage")
+kb_logger = structlog.get_logger("citnega.kb")
+security_logger = structlog.get_logger("citnega.security")
+tui_logger = structlog.get_logger("citnega.tui")
+cli_logger = structlog.get_logger("citnega.cli")

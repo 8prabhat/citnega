@@ -8,12 +8,14 @@ connection, and serialises writes through an asyncio.Lock.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 
 from citnega.packages.shared.errors import MigrationError, StorageError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _PRAGMAS = [
     "PRAGMA journal_mode = WAL",
@@ -140,8 +142,6 @@ class DatabaseFactory:
             cfg.set_main_option("sqlalchemy.url", f"sqlite:///{self._db_path}")
             command.upgrade(cfg, "head")
         except Exception as exc:
-            raise MigrationError(
-                f"Alembic migration failed: {exc}", original=exc
-            ) from exc
+            raise MigrationError(f"Alembic migration failed: {exc}", original=exc) from exc
         finally:
             await self.connect()

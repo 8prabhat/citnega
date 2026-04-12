@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from citnega.packages.protocol.interfaces.slash_command import ISlashCommand
 
-if TYPE_CHECKING:
-    pass
-
 
 class HelpCommand(ISlashCommand):
-    name      = "help"
+    name = "help"
     help_text = "Show available slash commands."
 
     async def execute(self, args: list[str], app_context: Any) -> None:
@@ -22,7 +19,7 @@ class HelpCommand(ISlashCommand):
 
 
 class CancelCommand(ISlashCommand):
-    name      = "cancel"
+    name = "cancel"
     help_text = "Cancel the currently running turn."
 
     def __init__(self, service: Any) -> None:
@@ -43,7 +40,7 @@ class CancelCommand(ISlashCommand):
 
 
 class ClearCommand(ISlashCommand):
-    name      = "clear"
+    name = "clear"
     help_text = "Clear the chat window."
 
     async def execute(self, args: list[str], app_context: Any) -> None:
@@ -52,7 +49,7 @@ class ClearCommand(ISlashCommand):
 
 
 class ModelCommand(ISlashCommand):
-    name      = "model"
+    name = "model"
     help_text = "Show or switch the active model. Usage: /model [model_id]"
 
     def __init__(self, service: Any) -> None:
@@ -60,117 +57,144 @@ class ModelCommand(ISlashCommand):
 
     async def execute(self, args: list[str], app_context: Any) -> None:
         models = self._service.list_models()
+        session_id = getattr(app_context, "_session_id", None)
+        active_id = self._service.get_session_model(session_id) if session_id else None
+
         if not args:
-            # Show list of available models
+            # ── Interactive picker ─────────────────────────────────────────
             if not models:
                 await app_context._append_message(
-                    "system",
-                    "No models available. Check packages/model_gateway/models.yaml."
+                    "system", "No models available. Check packages/model_gateway/models.yaml."
                 )
                 return
 
-            session_id = getattr(app_context, "_session_id", None)
-            active_id  = self._service.get_session_model(session_id) if session_id else None
+            options = [
+                (
+                    m.model_id,
+                    f"{'* ' if m.model_id == active_id else '  '}"
+                    f"{m.model_id}  (priority={m.priority})",
+                )
+                for m in models
+            ]
 
-            lines = ["Available models (sorted by priority):"]
-            for m in models:
-                marker = " *" if m.model_id == active_id else "  "
-                lines.append(f"{marker} {m.model_id:<30} (priority={m.priority})")
-            if active_id:
-                lines.append(f"\nActive: {active_id}")
-            lines.append("\nUsage: /model <model_id>")
-            await app_context._append_message("system", "\n".join(lines))
-        else:
-            # Switch model
-            requested = args[0]
+            async def _on_select(value: str, label: str) -> None:
+                await self._switch_model(app_context, session_id, value)
+
+            await app_context._append_picker(
+                title=f"Select model  [active: {active_id or 'none'}]",
+                options=options,
+                on_select=_on_select,
+            )
+            # Also show the manual hint as plain text
             model_ids = [m.model_id for m in models]
-            if requested not in model_ids:
-                await app_context._append_message(
-                    "system",
-                    f"Unknown model '{requested}'.\nAvailable: {', '.join(model_ids)}"
-                )
-                return
+            await app_context._append_message(
+                "system",
+                f"Tip: you can also type  /model <model_id>  directly.\n"
+                f"Available: {', '.join(model_ids)}",
+            )
+            return
 
-            session_id = getattr(app_context, "_session_id", None)
-            if not session_id:
-                await app_context._append_message("system", "No active session.")
-                return
+        # ── Manual / scripted path: /model <model_id> ─────────────────────
+        await self._switch_model(app_context, session_id, args[0])
 
+    async def _switch_model(self, app_context: Any, session_id: str | None, model_id: str) -> None:
+        models = self._service.list_models()
+        model_ids = [m.model_id for m in models]
+        if model_id not in model_ids:
+            await app_context._append_message(
+                "system", f"Unknown model '{model_id}'.\nAvailable: {', '.join(model_ids)}"
+            )
+            return
+        if not session_id:
+            await app_context._append_message("system", "No active session.")
+            return
+        try:
+            await self._service.set_session_model(session_id, model_id)
+            await app_context._append_message("system", f"Switched to model: {model_id}")
             try:
-                await self._service.set_session_model(session_id, requested)
-                await app_context._append_message(
-                    "system", f"Switched to model: {requested}"
-                )
-                # Refresh status bar
-                try:
-                    from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
-                    status = app_context._app.screen.query_one(StatusBar)
-                    status.set_model(requested)
-                except Exception:
-                    pass
-            except Exception as exc:
-                await app_context._append_message("system", f"Model switch failed: {exc}")
+                from citnega.apps.tui.widgets.status_bar import StatusBar
+
+                status = app_context._app.screen.query_one(StatusBar)
+                status.set_model(model_id)
+            except Exception:
+                pass
+        except Exception as exc:
+            await app_context._append_message("system", f"Model switch failed: {exc}")
 
 
 class ModeCommand(ISlashCommand):
-    name      = "mode"
+    name = "mode"
     help_text = "Show or switch session mode. Usage: /mode [chat|plan|explore]"
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
-        from citnega.packages.runtime.session_modes import all_modes  # noqa: PLC0415
+        from citnega.packages.runtime.session_modes import all_modes
 
         session_id = getattr(app_context, "_session_id", None)
+        current = self._service.get_session_mode(session_id) if session_id else "chat"
 
         if not args:
-            # Show available modes and current selection
-            current = self._service.get_session_mode(session_id) if session_id else "chat"
-            lines = ["Available modes:"]
-            for m in all_modes():
-                marker = " *" if m.name == current else "  "
-                lines.append(f"{marker} {m.name:<10} — {m.description}")
-            lines.append(f"\nActive: {current}")
-            lines.append("\nUsage: /mode <mode_name>")
-            await app_context._append_message("system", "\n".join(lines))
-            return
+            # ── Interactive picker ─────────────────────────────────────────
+            options = [
+                (
+                    m.name,
+                    f"{'* ' if m.name == current else '  '}{m.name:<10}  — {m.description}",
+                )
+                for m in all_modes()
+            ]
 
-        requested = args[0].lower()
-        valid     = [m.name for m in all_modes()]
-        if requested not in valid:
+            async def _on_select(value: str, label: str) -> None:
+                await self._switch_mode(app_context, session_id, value)
+
+            await app_context._append_picker(
+                title=f"Select mode  [active: {current}]",
+                options=options,
+                on_select=_on_select,
+            )
             await app_context._append_message(
                 "system",
-                f"Unknown mode '{requested}'. Available: {', '.join(valid)}"
+                f"Tip: you can also type  /mode <name>  directly.\n"
+                f"Available: {', '.join(m.name for m in all_modes())}",
             )
             return
 
+        # ── Manual path: /mode <name> ──────────────────────────────────────
+        await self._switch_mode(app_context, session_id, args[0].lower())
+
+    async def _switch_mode(self, app_context: Any, session_id: str | None, requested: str) -> None:
+        from citnega.packages.runtime.session_modes import all_modes, get_mode
+
+        valid = [m.name for m in all_modes()]
+        if requested not in valid:
+            await app_context._append_message(
+                "system", f"Unknown mode '{requested}'. Available: {', '.join(valid)}"
+            )
+            return
         if not session_id:
             await app_context._append_message("system", "No active session.")
             return
-
         try:
             await self._service.set_session_mode(session_id, requested)
-            # Reflect in status bar
-            from citnega.packages.runtime.session_modes import get_mode  # noqa: PLC0415
             mode_obj = get_mode(requested)
             try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
+                from citnega.apps.tui.widgets.status_bar import StatusBar
+
                 status = app_context._app.screen.query_one(StatusBar)
                 status.set_mode(mode_obj.display_label)
             except Exception:
                 pass
             label = mode_obj.display_label or "[CHAT]"
             await app_context._append_message(
-                "system",
-                f"{label} Mode active — {mode_obj.description}"
+                "system", f"{label} Mode active — {mode_obj.description}"
             )
         except Exception as exc:
             await app_context._append_message("system", f"Mode switch failed: {exc}")
 
 
 class ThinkCommand(ISlashCommand):
-    name      = "think"
+    name = "think"
     help_text = "Toggle thinking tokens. Usage: /think [on|off|auto]"
 
     def __init__(self, service: Any) -> None:
@@ -192,8 +216,7 @@ class ThinkCommand(ISlashCommand):
             else:
                 status = "off (forced)"
             await app_context._append_message(
-                "system",
-                f"Thinking: {status}\n\nUsage: /think on | /think off | /think auto"
+                "system", f"Thinking: {status}\n\nUsage: /think on | /think off | /think auto"
             )
             return
 
@@ -206,23 +229,20 @@ class ThinkCommand(ISlashCommand):
             value = None
         else:
             await app_context._append_message(
-                "system",
-                f"Unknown option '{arg}'. Use: /think on | /think off | /think auto"
+                "system", f"Unknown option '{arg}'. Use: /think on | /think off | /think auto"
             )
             return
 
         try:
             await self._service.set_session_thinking(session_id, value)
             label = {True: "on", False: "off", None: "auto"}[value]
-            await app_context._append_message(
-                "system", f"Thinking set to: {label}"
-            )
+            await app_context._append_message("system", f"Thinking set to: {label}")
         except Exception as exc:
             await app_context._append_message("system", f"Failed: {exc}")
 
 
 class ApproveCommand(ISlashCommand):
-    name      = "approve"
+    name = "approve"
     help_text = "Approve a pending tool call. Usage: /approve <approval_id> [--deny]"
 
     def __init__(self, service: Any) -> None:
@@ -230,24 +250,20 @@ class ApproveCommand(ISlashCommand):
 
     async def execute(self, args: list[str], app_context: Any) -> None:
         if not args:
-            await app_context._append_message(
-                "system", "Usage: /approve <approval_id> [--deny]"
-            )
+            await app_context._append_message("system", "Usage: /approve <approval_id> [--deny]")
             return
         approval_id = args[0]
         deny = "--deny" in args
         try:
             await self._service.respond_to_approval(approval_id, approved=not deny)
             verb = "denied" if deny else "approved"
-            await app_context._append_message(
-                "system", f"Approval {approval_id[:8]} {verb}."
-            )
+            await app_context._append_message("system", f"Approval {approval_id[:8]} {verb}.")
         except Exception as exc:
             await app_context._append_message("system", f"Approval error: {exc}")
 
 
 class AgentCommand(ISlashCommand):
-    name      = "agent"
+    name = "agent"
     help_text = "List available agents and tools. Usage: /agent [agents|tools]"
 
     def __init__(self, service: Any) -> None:
@@ -284,24 +300,23 @@ class AgentCommand(ISlashCommand):
                     lines.append("No tools registered.")
 
         if sub not in ("all", "agents", "tools"):
-            await app_context._append_message(
-                "system", "Usage: /agent [agents|tools]"
-            )
+            await app_context._append_message("system", "Usage: /agent [agents|tools]")
             return
 
         await app_context._append_message("system", "\n".join(lines))
 
 
 class NewSessionCommand(ISlashCommand):
-    name      = "new"
+    name = "new"
     help_text = "Clear the current chat and start a fresh session."
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
-        import uuid  # noqa: PLC0415
-        from citnega.packages.protocol.models.sessions import SessionConfig  # noqa: PLC0415
+        import uuid
+
+        from citnega.packages.protocol.models.sessions import SessionConfig
 
         try:
             cfg = SessionConfig(
@@ -322,7 +337,8 @@ class NewSessionCommand(ISlashCommand):
 
             # Update status bar
             try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
+                from citnega.apps.tui.widgets.status_bar import StatusBar
+
                 status = app_context._app.screen.query_one(StatusBar)
                 status.session_id = session.config.session_id
             except Exception:
@@ -331,14 +347,14 @@ class NewSessionCommand(ISlashCommand):
             await app_context._append_message(
                 "system",
                 f"New session started: {session.config.session_id[:8]}…\n"
-                "Previous session is still available via /sessions."
+                "Previous session is still available via /sessions.",
             )
         except Exception as exc:
             await app_context._append_message("system", f"Failed to create session: {exc}")
 
 
 class SessionsCommand(ISlashCommand):
-    name      = "sessions"
+    name = "sessions"
     help_text = "Show all sessions or switch to one. Usage: /sessions [session_id]"
 
     def __init__(self, service: Any) -> None:
@@ -352,7 +368,7 @@ class SessionsCommand(ISlashCommand):
             return
 
         if args:
-            # Switch to specified session
+            # ── Manual path: /sessions <id_prefix> ────────────────────────
             target_prefix = args[0].lower()
             match = next(
                 (s for s in sessions if s.config.session_id.startswith(target_prefix)),
@@ -363,44 +379,77 @@ class SessionsCommand(ISlashCommand):
                     "system", f"No session matching '{target_prefix}'."
                 )
                 return
-            sid = match.config.session_id
-            app_context._session_id = sid
-            if hasattr(app_context._app, "_session_id"):
-                app_context._app._session_id = sid
-            screen = app_context._app.screen
-            screen.action_clear_chat()
-            try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar  # noqa: PLC0415
-                status = app_context._app.screen.query_one(StatusBar)
-                status.session_id = sid
-            except Exception:
-                pass
-            await app_context._append_message(
-                "system",
-                f"Switched to session {sid[:8]}… ({match.config.name})"
-            )
+            await self._switch_session(app_context, match)
             return
 
-        # List sessions
+        # ── Interactive picker ─────────────────────────────────────────────
         if not sessions:
-            await app_context._append_message("system", "No sessions found.")
+            await app_context._append_message("system", "No sessions found. Use /new to start one.")
             return
 
         current = getattr(app_context, "_session_id", None)
-        lines = [f"Sessions ({len(sessions)}):"]
+        from citnega.apps.tui.screens.session_picker import _format_age
+
+        # Sort most-recently-active first
+        sessions.sort(key=lambda s: s.last_active_at or "", reverse=True)
+
+        options = []
         for s in sessions:
-            marker = " *" if s.config.session_id == current else "  "
-            from citnega.apps.tui.screens.session_picker import _format_age  # noqa: PLC0415
             age = _format_age(s.last_active_at) if s.last_active_at else "?"
-            lines.append(
-                f"{marker} {s.config.session_id[:8]:<10} {s.config.name:<25} {age}"
-            )
-        lines.append("\nUsage: /sessions <id_prefix>  to switch")
-        await app_context._append_message("system", "\n".join(lines))
+            marker = "* " if s.config.session_id == current else "  "
+            label = f"{marker}{s.config.name:<28}  {s.config.session_id[:8]}  {age}"
+            options.append((s.config.session_id, label))
+
+        async def _on_select(value: str, label: str) -> None:
+            target = next((s for s in sessions if s.config.session_id == value), None)
+            if target:
+                await self._switch_session(app_context, target)
+
+        await app_context._append_picker(
+            title=f"Select session  [{len(sessions)} total]",
+            options=options,
+            on_select=_on_select,
+        )
+        await app_context._append_message(
+            "system", "Tip: you can also type  /sessions <id_prefix>  directly."
+        )
+
+    async def _switch_session(self, app_context: Any, session) -> None:
+        sid = session.config.session_id
+        app_context._session_id = sid
+        if hasattr(app_context._app, "_session_id"):
+            app_context._app._session_id = sid
+        app_context._app.screen.action_clear_chat()
+        try:
+            from citnega.apps.tui.widgets.status_bar import StatusBar
+
+            status = app_context._app.screen.query_one(StatusBar)
+            status.session_id = sid
+        except Exception:
+            pass
+
+        # ── Load and render conversation history ───────────────────────────
+        try:
+            messages = self._service.get_conversation_messages(sid)
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if not content:
+                    continue
+                if role in ("user", "assistant"):
+                    await app_context._append_message(role, content)
+                elif role == "system" and content.startswith("[Compacted"):
+                    await app_context._append_message("system", content)
+        except Exception:
+            pass
+
+        await app_context._append_message(
+            "system", f"Switched to: {session.config.name}  [{sid[:8]}…]"
+        )
 
 
 class CompactCommand(ISlashCommand):
-    name      = "compact"
+    name = "compact"
     help_text = "Compact the conversation history. Usage: /compact [keep_recent_count]"
 
     def __init__(self, service: Any) -> None:
@@ -433,7 +482,7 @@ class CompactCommand(ISlashCommand):
                     "system",
                     f"Compacted {archived} messages.\n"
                     f"Remaining: {stats['message_count']} messages "
-                    f"(~{stats['token_estimate']} tokens)."
+                    f"(~{stats['token_estimate']} tokens).",
                 )
         except Exception as exc:
             await app_context._append_message("system", f"Compact failed: {exc}")

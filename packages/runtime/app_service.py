@@ -10,29 +10,34 @@ CLI bootstrap (Phase 6).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.callables.types import CallableMetadata
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.lifecycle import RunCompleteEvent
 from citnega.packages.protocol.interfaces.application_service import IApplicationService
-from citnega.packages.protocol.models import (
-    KBItem,
-    KBSearchResult,
-    ModelInfo,
-    RunSummary,
-    Session,
-    SessionConfig,
-    StateSnapshot,
-)
 from citnega.packages.protocol.models.approvals import ApprovalStatus
-from citnega.packages.runtime.core_runtime import CoreRuntime
-from citnega.packages.runtime.events.emitter import EventEmitter
-from citnega.packages.runtime.policy.approval_manager import ApprovalManager
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from citnega.packages.protocol.callables.types import CallableMetadata
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models import (
+        KBItem,
+        KBSearchResult,
+        ModelInfo,
+        RunSummary,
+        Session,
+        SessionConfig,
+        StateSnapshot,
+    )
+    from citnega.packages.runtime.core_runtime import CoreRuntime
+    from citnega.packages.runtime.events.emitter import EventEmitter
+    from citnega.packages.runtime.policy.approval_manager import ApprovalManager
 
 # ── sentinel ──────────────────────────────────────────────────────────────────
-_STREAM_TIMEOUT = 60.0   # seconds to wait for the next event before giving up
+_STREAM_TIMEOUT = 60.0  # seconds to wait for the next event before giving up
 
 
 class ApplicationService(IApplicationService):
@@ -50,18 +55,24 @@ class ApplicationService(IApplicationService):
         emitter: EventEmitter,
         approval_manager: ApprovalManager,
         *,
-        model_gateway=None,    # IModelGateway | None
-        kb_store=None,         # IKnowledgeStore | None — None until Phase 8 wiring
+        model_gateway=None,  # IModelGateway | None
+        kb_store=None,  # IKnowledgeStore | None — None until Phase 8 wiring
         tool_registry: dict | None = None,
         agent_registry: dict | None = None,
+        enforcer=None,  # IPolicyEnforcer — needed by DynamicLoader for hot-reload
+        tracer=None,  # ITracer          — needed by DynamicLoader for hot-reload
+        app_home: Path | None = None,
     ) -> None:
-        self._runtime          = runtime
-        self._emitter          = emitter
+        self._runtime = runtime
+        self._emitter = emitter
         self._approval_manager = approval_manager
-        self._model_gateway    = model_gateway
-        self._kb_store         = kb_store
-        self._tool_registry    = tool_registry or {}
-        self._agent_registry   = agent_registry or {}
+        self._model_gateway = model_gateway
+        self._kb_store = kb_store
+        self._tool_registry = tool_registry or {}
+        self._agent_registry = agent_registry or {}
+        self._enforcer = enforcer
+        self._tracer = tracer
+        self._app_home = app_home
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -93,16 +104,15 @@ class ApplicationService(IApplicationService):
             pass  # auto-compact failure must never surface to the user
 
         # Auto-rename new session from first user message
-        try:
+        with contextlib.suppress(Exception):
             await self._maybe_auto_rename(session_id, user_input)
-        except Exception:
-            pass
 
         return run_id
 
     async def _maybe_auto_compact(self, session_id: str) -> None:
         """Trigger compaction when configured thresholds are exceeded."""
-        from citnega.packages.config.loaders import load_settings  # noqa: PLC0415
+        from citnega.packages.config.loaders import load_settings
+
         settings = load_settings()
         cfg = settings.conversation
 
@@ -110,11 +120,18 @@ class ApplicationService(IApplicationService):
             return
 
         stats = self.get_conversation_stats(session_id)
-        msg_over   = cfg.compact_threshold_messages > 0 and stats["message_count"]   >= cfg.compact_threshold_messages
-        token_over = cfg.compact_threshold_tokens   > 0 and stats["token_estimate"]  >= cfg.compact_threshold_tokens
+        msg_over = (
+            cfg.compact_threshold_messages > 0
+            and stats["message_count"] >= cfg.compact_threshold_messages
+        )
+        token_over = (
+            cfg.compact_threshold_tokens > 0
+            and stats["token_estimate"] >= cfg.compact_threshold_tokens
+        )
 
         if msg_over or token_over:
-            from citnega.packages.observability.logging_setup import runtime_logger  # noqa: PLC0415
+            from citnega.packages.observability.logging_setup import runtime_logger
+
             runtime_logger.info(
                 "auto_compact_triggered",
                 session_id=session_id,
@@ -125,13 +142,14 @@ class ApplicationService(IApplicationService):
 
     async def _maybe_auto_rename(self, session_id: str, user_input: str) -> None:
         """Rename a brand-new session to the first user message text."""
-        from citnega.packages.config.loaders import load_settings  # noqa: PLC0415
+        from citnega.packages.config.loaders import load_settings
+
         settings = load_settings()
         if not settings.conversation.auto_name_from_first_message:
             return
 
         stats = self.get_conversation_stats(session_id)
-        if stats["message_count"] != 2:   # user + assistant = first turn
+        if stats["message_count"] != 2:  # user + assistant = first turn
             return
 
         try:
@@ -162,7 +180,7 @@ class ApplicationService(IApplicationService):
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=_STREAM_TIMEOUT)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     break
                 yield event
                 if isinstance(event, RunCompleteEvent):
@@ -302,8 +320,8 @@ class ApplicationService(IApplicationService):
         if runner is not None and hasattr(runner, "_conv"):
             conv = runner._conv
             return {
-                "message_count":    conv.message_count,
-                "token_estimate":   conv.token_estimate,
+                "message_count": conv.message_count,
+                "token_estimate": conv.token_estimate,
                 "compaction_count": conv.compaction_count,
             }
         return {"message_count": 0, "token_estimate": 0, "compaction_count": 0}
@@ -321,7 +339,8 @@ class ApplicationService(IApplicationService):
 
         Returns the number of messages archived (0 if nothing to compact).
         """
-        from citnega.packages.config.loaders import load_settings  # noqa: PLC0415
+        from citnega.packages.config.loaders import load_settings
+
         settings = load_settings()
         cfg = settings.conversation
 
@@ -345,8 +364,7 @@ class ApplicationService(IApplicationService):
 
     async def _generate_compact_summary(self, runner, conv) -> str:
         """Ask the model to summarise the conversation for compaction."""
-        from citnega.packages.model_gateway.provider_factory import ProviderFactory  # noqa: PLC0415
-        from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest  # noqa: PLC0415
+        from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
 
         messages = conv.get_messages()
         if not messages:
@@ -355,7 +373,7 @@ class ApplicationService(IApplicationService):
         # Build a condensed transcript
         lines = []
         for m in messages:
-            role    = m.get("role", "?")
+            role = m.get("role", "?")
             content = m.get("content", "")[:400]  # truncate long messages
             lines.append(f"{role}: {content}")
         transcript = "\n".join(lines[-60:])  # cap at last 60 messages
@@ -367,7 +385,6 @@ class ApplicationService(IApplicationService):
         )
 
         model_id = conv.active_model_id
-        factory  = runner._factory
         try:
             provider, _ = runner._resolve_provider(model_id)
         except Exception:
@@ -376,8 +393,11 @@ class ApplicationService(IApplicationService):
         req = ModelRequest(
             model_id=model_id,
             messages=[
-                ModelMessage(role="system",    content="You are a helpful summariser."),
-                ModelMessage(role="user",      content=f"Conversation transcript:\n\n{transcript}\n\n{summarise_msg}"),
+                ModelMessage(role="system", content="You are a helpful summariser."),
+                ModelMessage(
+                    role="user",
+                    content=f"Conversation transcript:\n\n{transcript}\n\n{summarise_msg}",
+                ),
             ],
             stream=False,
             temperature=0.3,
@@ -400,7 +420,7 @@ class ApplicationService(IApplicationService):
         except Exception:
             return
         new_config = session.config.model_copy(update={"name": name})
-        updated    = session.model_copy(update={"config": new_config})
+        updated = session.model_copy(update={"config": new_config})
         await self._runtime._session_manager._repo.save(updated)
 
     def _get_runner(self, session_id: str):
@@ -410,20 +430,128 @@ class ApplicationService(IApplicationService):
             return adapter.get_runner(session_id)
         return None
 
+    # ── Session conversation access ───────────────────────────────────────────
+
+    def get_conversation_messages(self, session_id: str) -> list[dict]:
+        """
+        Return the stored message list for *session_id*.
+
+        Tries the in-memory runner first (fast path); falls back to a direct
+        disk read of ``conversation.json`` so callers don't need a warm runner.
+        """
+        runner = self._get_runner(session_id)
+        if runner is not None and hasattr(runner, "_conv"):
+            return runner._conv.get_messages()
+
+        # Fallback: read directly from disk
+        adapter = self._runtime._adapter
+        sessions_dir = getattr(adapter, "_sessions_dir", None)
+        if sessions_dir is not None:
+            import json
+
+            conv_file = Path(sessions_dir) / session_id / "conversation.json"
+            if conv_file.exists():
+                try:
+                    data = json.loads(conv_file.read_text(encoding="utf-8"))
+                    return data.get("messages", [])
+                except Exception:
+                    pass
+        return []
+
+    async def ensure_runner(self, session_id: str) -> None:
+        """
+        Ensure a framework runner exists for *session_id*.
+
+        Safe to call even if a runner already exists — it is a no-op in that
+        case.  Used on session open so ``get_conversation_messages()`` always
+        returns up-to-date in-memory data.
+        """
+        if self._get_runner(session_id) is not None:
+            return
+        try:
+            session = await self.get_session(session_id)
+            if session is not None:
+                await self._runtime._adapter.create_runner(
+                    session,
+                    self._runtime._registry.list_all(),
+                    None,
+                )
+        except Exception:
+            pass
+
+    # ── Workspace / hot-reload ────────────────────────────────────────────────
+
+    def register_callable(self, callable_obj: object) -> None:
+        """
+        Register a callable live (overwriting any previous entry with the same name).
+
+        Updates all three registries so the callable is immediately available
+        for tool-calling AND appears in list_tools() / list_agents().
+        """
+        from citnega.packages.protocol.callables.types import CallableType
+
+        name = getattr(callable_obj, "name", None)
+        if not name:
+            raise ValueError("Callable has no 'name' attribute.")
+
+        # Register in the unified callable registry used by the runner
+        self._runtime._registry.register(name, callable_obj, overwrite=True)  # type: ignore[attr-defined]
+
+        callable_type = getattr(callable_obj, "callable_type", None)
+        if callable_type == CallableType.TOOL:
+            self._tool_registry[name] = callable_obj  # type: ignore[assignment]
+        else:
+            # SPECIALIST, CORE, or workflow — goes into agent registry
+            self._agent_registry[name] = callable_obj  # type: ignore[assignment]
+
+    async def hot_reload_workfolder(
+        self,
+        workfolder: Path,
+        loader: object,
+    ) -> dict:
+        """
+        Scan *workfolder* for new/changed callables and register them all.
+
+        Args:
+            workfolder: Absolute path to the user's workfolder.
+            loader:     A ``DynamicLoader`` instance with injected dependencies.
+
+        Returns:
+            ``{"registered": [name, ...], "errors": ["name: msg", ...]}``
+        """
+        from citnega.packages.workspace.writer import WorkspaceWriter
+
+        writer = WorkspaceWriter(workfolder)
+        loaded: dict = loader.load_workfolder(writer)  # type: ignore[attr-defined]
+
+        registered: list[str] = []
+        errors: list[str] = []
+        for name, obj in loaded.items():
+            try:
+                self.register_callable(obj)
+                registered.append(name)
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+
+        return {"registered": registered, "errors": errors}
+
+    def save_workspace_path(self, path: str) -> None:
+        """Persist *path* as the workfolder in ``<app_home>/config/workspace.toml``."""
+        if self._app_home is not None:
+            from citnega.packages.config.loaders import save_workspace_settings
+
+            save_workspace_settings(path, self._app_home)
+
     # ── Registry queries ───────────────────────────────────────────────────────
 
     def list_agents(self) -> list[CallableMetadata]:
         return [
-            v.get_metadata()
-            for v in self._agent_registry.values()
-            if hasattr(v, "get_metadata")
+            v.get_metadata() for v in self._agent_registry.values() if hasattr(v, "get_metadata")
         ]
 
     def list_tools(self) -> list[CallableMetadata]:
         return [
-            v.get_metadata()
-            for v in self._tool_registry.values()
-            if hasattr(v, "get_metadata")
+            v.get_metadata() for v in self._tool_registry.values() if hasattr(v, "get_metadata")
         ]
 
     def list_frameworks(self) -> list[str]:
@@ -434,7 +562,10 @@ class ApplicationService(IApplicationService):
         adapter = self._runtime._adapter
         if hasattr(adapter, "_yaml_config"):
             try:
-                from citnega.packages.model_gateway.provider_factory import _make_model_info  # noqa: PLC0415
+                from citnega.packages.model_gateway.provider_factory import (
+                    _make_model_info,
+                )
+
                 return [
                     _make_model_info(entry)
                     for entry in sorted(adapter._yaml_config.models, key=lambda m: -m.priority)
@@ -451,7 +582,8 @@ class ApplicationService(IApplicationService):
 
         # 3. Fallback: load directly from the bundled model_registry.toml
         try:
-            from citnega.packages.model_gateway.registry import ModelRegistry  # noqa: PLC0415
+            from citnega.packages.model_gateway.registry import ModelRegistry
+
             reg = ModelRegistry()
             reg.load()
             return list(reg.list_all())

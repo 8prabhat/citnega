@@ -2,32 +2,36 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.base import BaseAgent
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class ReviewerInput(BaseModel):
     content: str = Field(description="Content to review.")
-    domain:  str = Field(default="general", description="Domain context for the review.")
+    domain: str = Field(default="general", description="Domain context for the review.")
 
 
 class ReviewerOutput(BaseModel):
-    strengths:      list[str] = Field(default_factory=list)
-    issues:         list[str] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
-    verdict:        str = Field(description="Approved / Needs revision / Rejected")
-    raw_review:     str = Field(description="Full review text.")
+    verdict: str = Field(description="Approved / Needs revision / Rejected")
+    raw_review: str = Field(description="Full review text.")
 
 
 class SpecialistReviewerAgent(BaseAgent):
-    agent_id      = "specialist_reviewer"
-    name          = "specialist_reviewer_agent"
-    description   = "Reviews domain specialist outputs for accuracy, completeness, and quality."
+    agent_id = "specialist_reviewer"
+    name = "specialist_reviewer_agent"
+    description = "Reviews domain specialist outputs for accuracy, completeness, and quality."
     callable_type = CallableType.SPECIALIST
-    input_schema  = ReviewerInput
+    input_schema = ReviewerInput
     output_schema = ReviewerOutput
 
     SYSTEM_PROMPT = (
@@ -47,11 +51,14 @@ class SpecialistReviewerAgent(BaseAgent):
             ls = line.strip()
             lsl = ls.lower()
             if "strength" in lsl:
-                current_section = "strengths"; current = strengths
+                current_section = "strengths"
+                current = strengths
             elif "issue" in lsl or "weakness" in lsl or "problem" in lsl:
-                current_section = "issues"; current = issues
+                current_section = "issues"
+                current = issues
             elif "recommend" in lsl or "suggestion" in lsl:
-                current_section = "recs"; current = recs
+                current_section = "recs"
+                current = recs
             elif "verdict" in lsl or "approved" in ls or "rejected" in ls or "revision" in lsl:
                 verdict = ls.replace("**", "").replace("Verdict:", "").strip() or "Needs revision"
             elif ls.startswith(("-", "•", "*")) and current_section:

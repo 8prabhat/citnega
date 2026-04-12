@@ -50,9 +50,9 @@ class ShutdownCoordinator:
 
     def __init__(
         self,
-        runtime: "CoreRuntime",
-        emitter: "EventEmitter",
-        db: "DatabaseFactory",
+        runtime: CoreRuntime,
+        emitter: EventEmitter,
+        db: DatabaseFactory,
     ) -> None:
         self._runtime = runtime
         self._emitter = emitter
@@ -152,7 +152,6 @@ class ShutdownCoordinator:
         """
         queues = {}
         try:
-            import threading  # noqa: PLC0415
             with self._emitter._lock:
                 queues = dict(self._emitter._queues)
         except Exception:
@@ -174,16 +173,14 @@ class ShutdownCoordinator:
                     break
                 await asyncio.sleep(0.05)
 
-        drain_tasks = [
-            asyncio.create_task(_drain_one(rid, q)) for rid, q in queues.items()
-        ]
+        drain_tasks = [asyncio.create_task(_drain_one(rid, q)) for rid, q in queues.items()]
         if drain_tasks:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*drain_tasks, return_exceptions=True),
                     timeout=_DRAIN_TIMEOUT + 1.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 runtime_logger.warning("shutdown_drain_global_timeout")
 
         runtime_logger.info("shutdown_queues_drained")

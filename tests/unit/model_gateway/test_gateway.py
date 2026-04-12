@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from citnega.packages.model_gateway.gateway import ModelGateway
+from citnega.packages.model_gateway.providers.ollama import OllamaProvider
+from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider
 from citnega.packages.model_gateway.rate_limiter import TokenBucketRateLimiter
 from citnega.packages.model_gateway.registry import ModelRegistry
 from citnega.packages.model_gateway.routing import (
@@ -19,9 +18,7 @@ from citnega.packages.model_gateway.routing import (
     NoSuitableModelError,
     StaticPriorityPolicy,
 )
-from citnega.packages.model_gateway.token_counter import CharApproxCounter, CompositeTokenCounter
-from citnega.packages.model_gateway.providers.ollama import OllamaProvider
-from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider
+from citnega.packages.model_gateway.token_counter import CharApproxCounter
 from citnega.packages.protocol.models.model_gateway import (
     ModelCapabilityFlags,
     ModelInfo,
@@ -33,10 +30,10 @@ from citnega.packages.protocol.models.model_gateway import (
 from citnega.packages.runtime.events.emitter import EventEmitter
 from citnega.packages.shared.errors import RateLimitExceededError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _model_info(
     model_id: str = "test-model",
@@ -82,6 +79,7 @@ def _mock_emitter() -> EventEmitter:
 # ModelRegistry
 # ---------------------------------------------------------------------------
 
+
 class TestModelRegistry:
     def test_register_and_get(self) -> None:
         reg = ModelRegistry()
@@ -117,6 +115,7 @@ class TestModelRegistry:
 # StaticPriorityPolicy
 # ---------------------------------------------------------------------------
 
+
 class TestStaticPriorityPolicy:
     def test_filters_unhealthy(self) -> None:
         policy = StaticPriorityPolicy()
@@ -136,7 +135,7 @@ class TestStaticPriorityPolicy:
             _model_info("local", local=True),
         ]
         result = policy.select(models, TaskNeeds(local_only=True))
-        assert all(m.model_info.local if hasattr(m, 'model_info') else m.local for m in result)
+        assert all(m.model_info.local if hasattr(m, "model_info") else m.local for m in result)
 
     def test_priority_order(self) -> None:
         policy = StaticPriorityPolicy()
@@ -160,6 +159,7 @@ class TestStaticPriorityPolicy:
 # ---------------------------------------------------------------------------
 # HybridRoutingPolicy
 # ---------------------------------------------------------------------------
+
 
 class TestHybridRoutingPolicy:
     def test_select_best(self) -> None:
@@ -187,6 +187,7 @@ class TestHybridRoutingPolicy:
 # TokenBucketRateLimiter
 # ---------------------------------------------------------------------------
 
+
 class TestTokenBucketRateLimiter:
     @pytest.mark.asyncio
     async def test_within_limit_passes(self) -> None:
@@ -213,6 +214,7 @@ class TestTokenBucketRateLimiter:
 # CharApproxCounter
 # ---------------------------------------------------------------------------
 
+
 class TestCharApproxCounter:
     def test_count_non_empty(self) -> None:
         counter = CharApproxCounter()
@@ -235,6 +237,7 @@ class TestCharApproxCounter:
 # ---------------------------------------------------------------------------
 # OllamaProvider (mock HTTP)
 # ---------------------------------------------------------------------------
+
 
 class TestOllamaProvider:
     @pytest.mark.asyncio
@@ -288,15 +291,18 @@ class TestOllamaProvider:
 # OpenAICompatibleProvider (mock HTTP)
 # ---------------------------------------------------------------------------
 
+
 class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
     async def test_generate_success(self) -> None:
         info = _model_info("gpt-4o", provider_type="openai_compatible", local=False)
         response_body = {
-            "choices": [{
-                "message": {"role": "assistant", "content": "Hi there!"},
-                "finish_reason": "stop",
-            }],
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "Hi there!"},
+                    "finish_reason": "stop",
+                }
+            ],
             "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
         }
         async with respx.mock:
@@ -305,7 +311,9 @@ class TestOpenAICompatibleProvider:
             )
             async with httpx.AsyncClient() as client:
                 provider = OpenAICompatibleProvider(
-                    info, base_url="https://api.openai.com/v1", api_key="sk-test",
+                    info,
+                    base_url="https://api.openai.com/v1",
+                    api_key="sk-test",
                     http_client=client,
                 )
                 result = await provider.generate(_request("gpt-4o"))
@@ -319,22 +327,25 @@ class TestOpenAICompatibleProvider:
         call_count = 0
 
         async with respx.mock:
+
             def _handler(request: httpx.Request) -> httpx.Response:
                 nonlocal call_count
                 call_count += 1
                 if call_count < 3:
                     return httpx.Response(500, text="Internal Server Error")
-                return httpx.Response(200, json={
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-                })
+                return httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                )
 
-            respx.post("https://api.openai.com/v1/chat/completions").mock(
-                side_effect=_handler
-            )
+            respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_handler)
             async with httpx.AsyncClient() as client:
                 provider = OpenAICompatibleProvider(
-                    info, base_url="https://api.openai.com/v1",
+                    info,
+                    base_url="https://api.openai.com/v1",
                     http_client=client,
                 )
                 with patch("asyncio.sleep", new_callable=AsyncMock):
@@ -348,6 +359,7 @@ class TestOpenAICompatibleProvider:
 # ModelGateway (end-to-end with mock provider)
 # ---------------------------------------------------------------------------
 
+
 class TestModelGateway:
     def _make_gateway(self) -> tuple[ModelGateway, MagicMock]:
         registry = ModelRegistry()
@@ -355,16 +367,26 @@ class TestModelGateway:
         emitter = _mock_emitter()
         gw = ModelGateway(registry, rl, emitter)
 
-        mock_provider = MagicMock(spec=["generate", "stream_generate", "health_check",
-                                         "model_info", "supports", "count_tokens"])
+        mock_provider = MagicMock(
+            spec=[
+                "generate",
+                "stream_generate",
+                "health_check",
+                "model_info",
+                "supports",
+                "count_tokens",
+            ]
+        )
         info = _model_info("test-model")
         mock_provider.model_info = info
-        mock_provider.generate = AsyncMock(return_value=ModelResponse(
-            model_id="test-model",
-            content="test response",
-            finish_reason="stop",
-            usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-        ))
+        mock_provider.generate = AsyncMock(
+            return_value=ModelResponse(
+                model_id="test-model",
+                content="test response",
+                finish_reason="stop",
+                usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            )
+        )
         registry.register(info)
         gw.register_provider(mock_provider)
         return gw, mock_provider
@@ -380,6 +402,7 @@ class TestModelGateway:
     async def test_generate_unknown_model_raises(self) -> None:
         gw, _ = self._make_gateway()
         from citnega.packages.shared.errors import ModelCapabilityError
+
         with pytest.raises(ModelCapabilityError):
             await gw.generate(_request("nonexistent-model"))
 
@@ -408,10 +431,14 @@ class TestModelGateway:
         info = _model_info("rate-model")
         mock_provider = MagicMock()
         mock_provider.model_info = info
-        mock_provider.generate = AsyncMock(return_value=ModelResponse(
-            model_id="rate-model", content="ok", finish_reason="stop",
-            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        ))
+        mock_provider.generate = AsyncMock(
+            return_value=ModelResponse(
+                model_id="rate-model",
+                content="ok",
+                finish_reason="stop",
+                usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            )
+        )
         registry.register(info)
         gw.register_provider(mock_provider)
 

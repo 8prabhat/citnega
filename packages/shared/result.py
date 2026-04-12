@@ -64,7 +64,7 @@ class Ok(Result[T, E]):
     def unwrap_err(self) -> NoReturn:
         raise ValueError(f"Called unwrap_err() on Ok({self._value!r})")
 
-    def unwrap_or(self, default: T) -> T:  # noqa: ARG002
+    def unwrap_or(self, default: T) -> T:
         return self._value
 
     def __repr__(self) -> str:

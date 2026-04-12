@@ -17,7 +17,7 @@ scattered across agent modules.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.base import BaseCallable
@@ -36,17 +36,17 @@ class AgentRegistry:
 
     def __init__(
         self,
-        enforcer: "IPolicyEnforcer",
-        emitter:  "IEventEmitter",
-        tracer:   "ITracer",
-        tools:    "dict[str, IInvocable] | None" = None,
+        enforcer: IPolicyEnforcer,
+        emitter: IEventEmitter,
+        tracer: ITracer,
+        tools: dict[str, IInvocable] | None = None,
     ) -> None:
         self._enforcer = enforcer
-        self._emitter  = emitter
-        self._tracer   = tracer
-        self._tools    = tools or {}
+        self._emitter = emitter
+        self._tracer = tracer
+        self._tools = tools or {}
 
-    def build_all(self) -> "dict[str, IInvocable]":
+    def build_all(self) -> dict[str, IInvocable]:
         """Instantiate every registered agent and return as name→instance dict."""
         agents: dict[str, IInvocable] = {}
         for agent in self._create_agents():
@@ -55,37 +55,43 @@ class AgentRegistry:
 
     # ── Private ───────────────────────────────────────────────────────────────
 
-    def _make(self, cls: "Type[BaseCallable]") -> "IInvocable":
+    def _make(self, cls: type[BaseCallable]) -> IInvocable:
         """Create an agent instance with standard injected deps + tools."""
         return cls(self._enforcer, self._emitter, self._tracer, self._tools)
 
-    def _create_agents(self) -> "list[IInvocable]":
+    def _create_agents(self) -> list[IInvocable]:
         # ── Core agents ───────────────────────────────────────────────────────
-        from citnega.packages.agents.core.router       import RouterAgent       # noqa: PLC0415
-        from citnega.packages.agents.core.reasoning    import ReasoningAgent    # noqa: PLC0415
-        from citnega.packages.agents.core.validator    import ValidatorAgent    # noqa: PLC0415
-        from citnega.packages.agents.core.writer       import WriterAgent       # noqa: PLC0415
-        from citnega.packages.agents.core.retriever    import RetrieverAgent    # noqa: PLC0415
-        from citnega.packages.agents.core.tool_executor import ToolExecutorAgent  # noqa: PLC0415
-
         # ── Existing core agents ──────────────────────────────────────────────
-        from citnega.packages.agents.core.conversation_agent import ConversationAgent  # noqa: PLC0415
-        from citnega.packages.agents.core.planner_agent      import PlannerAgent       # noqa: PLC0415
+        from citnega.packages.agents.core.conversation_agent import (
+            ConversationAgent,
+        )
+        from citnega.packages.agents.core.planner_agent import PlannerAgent
+        from citnega.packages.agents.core.reasoning import ReasoningAgent
+        from citnega.packages.agents.core.retriever import RetrieverAgent
+        from citnega.packages.agents.core.router import RouterAgent
+        from citnega.packages.agents.core.tool_executor import ToolExecutorAgent
+        from citnega.packages.agents.core.validator import ValidatorAgent
+        from citnega.packages.agents.core.writer import WriterAgent
 
         # ── Domain specialists ────────────────────────────────────────────────
-        from citnega.packages.agents.domain import ALL_DOMAIN_AGENTS  # noqa: PLC0415
+        from citnega.packages.agents.domain import ALL_DOMAIN_AGENTS
 
         # ── Role agents ───────────────────────────────────────────────────────
-        from citnega.packages.agents.roles import ALL_ROLE_AGENTS  # noqa: PLC0415
+        from citnega.packages.agents.roles import ALL_ROLE_AGENTS
 
         # ── Existing specialists ───────────────────────────────────────────────
-        from citnega.packages.agents.specialists import ALL_SPECIALISTS  # noqa: PLC0415
+        from citnega.packages.agents.specialists import ALL_SPECIALISTS
 
         all_classes = [
             # Core
-            RouterAgent, ReasoningAgent, ValidatorAgent, WriterAgent,
-            RetrieverAgent, ToolExecutorAgent,
-            ConversationAgent, PlannerAgent,
+            RouterAgent,
+            ReasoningAgent,
+            ValidatorAgent,
+            WriterAgent,
+            RetrieverAgent,
+            ToolExecutorAgent,
+            ConversationAgent,
+            PlannerAgent,
             # Domain
             *ALL_DOMAIN_AGENTS,
             # Roles

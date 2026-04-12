@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,6 +14,9 @@ from citnega.packages.security.permissions import (
     ensure_file_permissions,
     secure_write,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestDirectoryPermissions:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from citnega.packages.protocol.models.approvals import Approval, ApprovalStatus
@@ -10,11 +10,11 @@ from citnega.packages.storage.repositories.base import BaseRepository
 
 
 def _parse_dt(s: str) -> datetime:
-    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(s).replace(tzinfo=UTC)
 
 
 class ApprovalRepository(BaseRepository[Approval]):
-    _table    = "approvals"
+    _table = "approvals"
     _id_field = "approval_id"
 
     def _from_row(self, row: dict[str, Any]) -> Approval:
@@ -31,14 +31,14 @@ class ApprovalRepository(BaseRepository[Approval]):
 
     def _to_row(self, entity: Approval) -> dict[str, Any]:
         return {
-            "approval_id":   entity.approval_id,
-            "run_id":        entity.run_id,
+            "approval_id": entity.approval_id,
+            "run_id": entity.run_id,
             "callable_name": entity.callable_name,
             "input_summary": entity.input_summary,
-            "requested_at":  entity.requested_at.isoformat(),
-            "responded_at":  entity.responded_at.isoformat() if entity.responded_at else None,
-            "status":        entity.status.value,
-            "user_note":     entity.user_note,
+            "requested_at": entity.requested_at.isoformat(),
+            "responded_at": entity.responded_at.isoformat() if entity.responded_at else None,
+            "status": entity.status.value,
+            "user_note": entity.user_note,
         }
 
     async def save(self, entity: Approval) -> Approval:

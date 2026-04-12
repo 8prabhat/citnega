@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.binding import Binding
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class SlashCommandPopup(Widget):
@@ -42,22 +46,19 @@ class SlashCommandPopup(Widget):
         self._commands = commands
 
     def compose(self) -> ComposeResult:
-        items = [
-            ListItem(Label(f"/{cmd}"), id=f"slash-{cmd}")
-            for cmd in self._commands
-        ]
+        items = [ListItem(Label(f"/{cmd}"), id=f"slash-{cmd}") for cmd in self._commands]
         yield ListView(*items, id="popup-list")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """User selected a command — insert it into the chat input."""
-        from textual.widgets import Input  # noqa: PLC0415
+        from textual.widgets import Input
 
         cmd_label = event.item.query_one(Label).renderable
-        cmd_text  = str(cmd_label)
+        cmd_text = str(cmd_label)
 
         try:
             inp = self.app.query_one("#chat-input", Input)
-            inp.value  = cmd_text + " "
+            inp.value = cmd_text + " "
             inp.cursor_position = len(inp.value)
             inp.focus()
         except Exception:

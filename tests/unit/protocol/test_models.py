@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from citnega.packages.protocol.models import (
+    TERMINAL_RUN_STATES,
+    VALID_RUN_TRANSITIONS,
     Approval,
     ApprovalStatus,
-    CheckpointMeta,
     ContextObject,
-    ContextSource,
     KBItem,
-    KBSearchResult,
     KBSourceType,
     Message,
     MessageRole,
     ModelCapabilityFlags,
-    ModelChunk,
     ModelInfo,
     ModelMessage,
     ModelRequest,
-    ModelResponse,
     RunState,
     RunSummary,
     Session,
@@ -30,13 +25,11 @@ from citnega.packages.protocol.models import (
     SessionState,
     StateSnapshot,
     TaskNeeds,
-    TERMINAL_RUN_STATES,
-    VALID_RUN_TRANSITIONS,
 )
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 class TestSessionModels:
@@ -183,9 +176,7 @@ class TestModelGatewayModels:
         assert info.health_status == "unknown"
 
     def test_model_request_defaults(self) -> None:
-        req = ModelRequest(messages=[
-            ModelMessage(role="user", content="hello")
-        ])
+        req = ModelRequest(messages=[ModelMessage(role="user", content="hello")])
         assert req.stream is True
         assert req.temperature == 0.7
         assert req.model_id is None

@@ -43,21 +43,25 @@ class CitnegaError(Exception):
 
 # ── Configuration and startup ──────────────────────────────────────────────────
 
+
 class ConfigError(CitnegaError):
     error_code = "CONFIG_ERROR"
 
 
 class MissingConfigError(ConfigError):
     """Required configuration key or file is absent."""
+
     error_code = "CONFIG_MISSING"
 
 
 class InvalidConfigError(ConfigError):
     """Configuration value is present but invalid."""
+
     error_code = "CONFIG_INVALID"
 
 
 # ── Framework adapter ──────────────────────────────────────────────────────────
+
 
 class AdapterError(CitnegaError):
     error_code = "ADAPTER_ERROR"
@@ -65,20 +69,24 @@ class AdapterError(CitnegaError):
 
 class UnknownFrameworkError(AdapterError):
     """No adapter registered for the requested framework name."""
+
     error_code = "ADAPTER_UNKNOWN"
 
 
 class AdapterInitError(AdapterError):
     """Framework adapter failed to initialise."""
+
     error_code = "ADAPTER_INIT_FAILED"
 
 
 class FrameworkRunnerError(AdapterError):
     """Error during session-scoped runner execution."""
+
     error_code = "ADAPTER_RUNNER_ERROR"
 
 
 # ── Callable execution ─────────────────────────────────────────────────────────
+
 
 class CallableError(CitnegaError):
     error_code = "CALLABLE_ERROR"
@@ -86,62 +94,75 @@ class CallableError(CitnegaError):
 
 class UnhandledCallableError(CallableError):
     """An unexpected exception escaped a callable's _execute()."""
+
     error_code = "CALLABLE_UNHANDLED"
 
 
 class CallableNotFoundError(CallableError):
     """No callable registered under the requested name."""
+
     error_code = "CALLABLE_NOT_FOUND"
 
 
 class CallableValidationError(CallableError):
     """Input to a callable failed Pydantic validation."""
+
     error_code = "CALLABLE_VALIDATION"
 
 
 # ── Policy enforcement ─────────────────────────────────────────────────────────
 
+
 class CallablePolicyError(CallableError):
     """Base for all policy violations (subclass of CallableError)."""
+
     error_code = "POLICY_ERROR"
 
 
 class CallableTimeoutError(CallablePolicyError):
     """Callable exceeded its allowed execution time."""
+
     error_code = "POLICY_TIMEOUT"
 
 
 class CallableDepthError(CallablePolicyError):
     """Callable attempted to recurse beyond the configured depth limit."""
+
     error_code = "POLICY_DEPTH"
 
 
 class PathNotAllowedError(CallablePolicyError):
     """Callable attempted to access a path outside its allowlist."""
+
     error_code = "POLICY_PATH"
 
 
 class NetworkNotAllowedError(CallablePolicyError):
     """Callable attempted network access when not permitted."""
+
     error_code = "POLICY_NETWORK"
 
 
 class OutputTooLargeError(CallablePolicyError):
     """Callable output exceeded the configured byte limit."""
+
     error_code = "POLICY_OUTPUT_SIZE"
 
 
 class ApprovalDeniedError(CallablePolicyError):
     """User explicitly denied the approval request."""
+
     error_code = "POLICY_APPROVAL_DENIED"
 
 
 class ApprovalTimeoutError(CallablePolicyError):
     """Approval request timed out without a user response."""
+
     error_code = "POLICY_APPROVAL_TIMEOUT"
 
 
 # ── Model gateway ──────────────────────────────────────────────────────────────
+
 
 class ModelGatewayError(CitnegaError):
     error_code = "GATEWAY_ERROR"
@@ -149,25 +170,30 @@ class ModelGatewayError(CitnegaError):
 
 class NoHealthyProviderError(ModelGatewayError):
     """No model provider is healthy and able to serve the request."""
+
     error_code = "GATEWAY_NO_PROVIDER"
 
 
 class RateLimitExceededError(ModelGatewayError):
     """Rate limit wait would exceed the request timeout."""
+
     error_code = "GATEWAY_RATE_LIMIT"
 
 
 class ProviderHTTPError(ModelGatewayError):
     """HTTP-level error from a model provider endpoint."""
+
     error_code = "GATEWAY_HTTP"
 
 
 class ModelCapabilityError(ModelGatewayError):
     """No provider supports the required capability."""
+
     error_code = "GATEWAY_CAPABILITY"
 
 
 # ── Storage ────────────────────────────────────────────────────────────────────
+
 
 class StorageError(CitnegaError):
     error_code = "STORAGE_ERROR"
@@ -175,20 +201,24 @@ class StorageError(CitnegaError):
 
 class MigrationError(StorageError):
     """Alembic migration failed."""
+
     error_code = "STORAGE_MIGRATION"
 
 
 class RepositoryError(StorageError):
     """Database repository operation failed."""
+
     error_code = "STORAGE_REPO"
 
 
 class ArtifactError(StorageError):
     """Filesystem artifact store operation failed."""
+
     error_code = "STORAGE_ARTIFACT"
 
 
 # ── Knowledge base ─────────────────────────────────────────────────────────────
+
 
 class KnowledgeBaseError(CitnegaError):
     error_code = "KB_ERROR"
@@ -196,17 +226,20 @@ class KnowledgeBaseError(CitnegaError):
 
 class KBItemNotFoundError(KnowledgeBaseError):
     """Requested KB item does not exist."""
+
     error_code = "KB_NOT_FOUND"
 
 
 class KBIndexError(KnowledgeBaseError):
     """FTS5 index operation failed."""
+
     error_code = "KB_INDEX"
 
 
 # ── Runtime and session ────────────────────────────────────────────────────────
 
-class RuntimeError(CitnegaError):  # noqa: A001 (shadows builtin intentionally)
+
+class RuntimeError(CitnegaError):
     error_code = "RUNTIME_ERROR"
 
 
@@ -220,10 +253,12 @@ class RunNotFoundError(RuntimeError):
 
 class InvalidRunStateError(RuntimeError):
     """A run state transition was attempted that is not allowed."""
+
     error_code = "RUN_STATE_INVALID"
 
 
 # ── Service layer ──────────────────────────────────────────────────────────────
+
 
 class ServiceError(CitnegaError):
     error_code = "SERVICE_ERROR"
@@ -231,12 +266,14 @@ class ServiceError(CitnegaError):
 
 # ── Security ───────────────────────────────────────────────────────────────────
 
+
 class SecurityError(CitnegaError):
     error_code = "SECURITY_ERROR"
 
 
 class KeyStoreError(SecurityError):
     """Key store read/write operation failed."""
+
     error_code = "SECURITY_KEYSTORE"
 
 
@@ -244,10 +281,10 @@ class KeyStoreError(SecurityError):
 
 #: Maps error_code prefixes to CLI exit codes.
 EXIT_CODE_MAP: dict[str, int] = {
-    "CONFIG_":    2,
-    "ADAPTER_":   3,
-    "GATEWAY_":   4,
-    "STORAGE_":   5,
+    "CONFIG_": 2,
+    "ADAPTER_": 3,
+    "GATEWAY_": 4,
+    "STORAGE_": 5,
 }
 
 

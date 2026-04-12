@@ -33,30 +33,26 @@ Covered assertions:
 
 from __future__ import annotations
 
-import asyncio
-import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+import uuid
 
 import pytest
 
-from citnega.packages.adapters.base.cancellation import CancellationToken
-from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.callables.results import InvokeResult
 from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
-from citnega.packages.protocol.events import CanonicalEvent
-from citnega.packages.protocol.events.streaming import TokenEvent
-from citnega.packages.protocol.interfaces.adapter import AdapterConfig, IFrameworkAdapter, IFrameworkRunner
+from citnega.packages.protocol.interfaces.adapter import (
+    AdapterConfig,
+    IFrameworkAdapter,
+    IFrameworkRunner,
+)
 from citnega.packages.protocol.models.context import ContextObject
-from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
-
+from citnega.packages.protocol.models.sessions import Session, SessionConfig
 
 # ---------------------------------------------------------------------------
 # Helpers shared by all adapter tests
 # ---------------------------------------------------------------------------
+
 
 def _session(session_id: str = "test-sess", framework: str = "stub") -> Session:
     cfg = SessionConfig(
@@ -66,7 +62,7 @@ def _session(session_id: str = "test-sess", framework: str = "stub") -> Session:
         default_model_id="test-model",
         max_context_tokens=4096,
     )
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return Session(config=cfg, created_at=now, last_active_at=now)
 
 
@@ -75,7 +71,7 @@ def _context(session: Session) -> ContextObject:
         session_id=session.config.session_id,
         run_id=str(uuid.uuid4()),
         user_input="Hello",
-        assembled_at=datetime.now(tz=timezone.utc),
+        assembled_at=datetime.now(tz=UTC),
         budget_remaining=4096,
     )
 
@@ -87,6 +83,7 @@ def _adapter_config(model_id: str = "test-model", framework: str = "stub") -> Ad
 # ---------------------------------------------------------------------------
 # Core LSP assertions (used by all adapter tests via inheritance)
 # ---------------------------------------------------------------------------
+
 
 class AdapterLSPBase:
     """
@@ -135,14 +132,13 @@ class AdapterLSPBase:
 
     def test_callable_factory_not_none(self, tmp_path: Path) -> None:
         from citnega.packages.protocol.interfaces.adapter import ICallableFactory
+
         adapter = self._make_adapter(tmp_path)
         factory = adapter.callable_factory
         assert factory is not None
         assert isinstance(factory, ICallableFactory)
 
-    def test_callable_factory_create_tool_returns_descriptor(
-        self, tmp_path: Path
-    ) -> None:
+    def test_callable_factory_create_tool_returns_descriptor(self, tmp_path: Path) -> None:
         adapter = self._make_adapter(tmp_path)
         factory = adapter.callable_factory
         mock_callable = _make_mock_invocable()
@@ -177,6 +173,7 @@ class AdapterLSPBase:
     @pytest.mark.asyncio
     async def test_get_state_snapshot_structure(self, tmp_path: Path) -> None:
         from citnega.packages.protocol.models.runs import StateSnapshot
+
         adapter = self._make_adapter(tmp_path)
         await adapter.initialize(_adapter_config(framework=adapter.framework_name))
         session = _session(framework=adapter.framework_name)
@@ -215,6 +212,7 @@ class AdapterLSPBase:
         # After cancel, get_state_snapshot should reflect CANCELLED
         snapshot = await runner.get_state_snapshot()
         from citnega.packages.protocol.models.runs import RunState
+
         assert snapshot.run_state in (RunState.CANCELLED, RunState.EXECUTING)
 
     # ------------------------------------------------------------------
@@ -258,6 +256,7 @@ class AdapterLSPBase:
 
     def test_translate_unknown_event_returns_generic(self, tmp_path: Path) -> None:
         from citnega.packages.protocol.events import GenericFrameworkEvent
+
         adapter = self._make_adapter(tmp_path)
         factory = adapter.callable_factory
 
@@ -273,9 +272,11 @@ class AdapterLSPBase:
 # Mock callable for factory tests
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_invocable(name: str = "test_tool") -> IInvocable:
     """Return a minimal IInvocable mock."""
     from unittest.mock import MagicMock
+
     from pydantic import BaseModel
 
     class _Input(BaseModel):

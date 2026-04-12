@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
 from citnega.packages.shared.errors import SessionNotFoundError
-from citnega.packages.storage.repositories.session_repo import SessionRepository
+
+if TYPE_CHECKING:
+    from citnega.packages.storage.repositories.session_repo import SessionRepository
 
 
 class SessionManager:
@@ -17,7 +20,7 @@ class SessionManager:
         self._repo = session_repo
 
     async def create(self, config: SessionConfig) -> Session:
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         session = Session(
             config=config,
             created_at=now,
@@ -43,7 +46,7 @@ class SessionManager:
         session = await self.get(session_id)
         updated = session.model_copy(
             update={
-                "last_active_at": datetime.now(tz=timezone.utc),
+                "last_active_at": datetime.now(tz=UTC),
                 "run_count": session.run_count + 1,
                 "state": SessionState.RUNNING,
             }

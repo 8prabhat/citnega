@@ -13,11 +13,9 @@ The stub:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
-from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.interfaces.adapter import (
     AdapterConfig,
     ICallableFactory,
@@ -25,9 +23,13 @@ from citnega.packages.protocol.interfaces.adapter import (
     IFrameworkRunner,
 )
 from citnega.packages.protocol.models.checkpoints import CheckpointMeta
-from citnega.packages.protocol.models.context import ContextObject
 from citnega.packages.protocol.models.runs import RunState, StateSnapshot
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class StubCallableFactory(ICallableFactory):
@@ -43,7 +45,8 @@ class StubCallableFactory(ICallableFactory):
         return callable
 
     def translate_event(self, framework_event: Any) -> CanonicalEvent | None:
-        from citnega.packages.protocol.events import GenericFrameworkEvent  # noqa: PLC0415
+        from citnega.packages.protocol.events import GenericFrameworkEvent
+
         return GenericFrameworkEvent(
             session_id="",
             run_id="",
@@ -86,23 +89,29 @@ class StubFrameworkRunner(IFrameworkRunner):
         if self.sleep_seconds > 0:
             await asyncio.sleep(self.sleep_seconds)
 
-        self.turns_run.append({
-            "user_input": user_input,
-            "run_id": context.run_id,
-            "session_id": context.session_id,
-        })
+        self.turns_run.append(
+            {
+                "user_input": user_input,
+                "run_id": context.run_id,
+                "session_id": context.session_id,
+            }
+        )
 
         # Emit a stub response so the TUI has tokens to display
-        from citnega.packages.protocol.events.streaming import TokenEvent  # noqa: PLC0415
-        import uuid as _uuid  # noqa: PLC0415
+        import uuid as _uuid
+
+        from citnega.packages.protocol.events.streaming import TokenEvent
+
         reply = f"[stub] You said: {user_input}"
         for word in reply.split():
-            await event_queue.put(TokenEvent(
-                session_id=context.session_id,
-                run_id=context.run_id,
-                turn_id=str(_uuid.uuid4()),
-                token=word + " ",
-            ))
+            await event_queue.put(
+                TokenEvent(
+                    session_id=context.session_id,
+                    run_id=context.run_id,
+                    turn_id=str(_uuid.uuid4()),
+                    token=word + " ",
+                )
+            )
             await asyncio.sleep(0.02)  # simulate streaming delay
 
         return context.run_id
@@ -125,13 +134,14 @@ class StubFrameworkRunner(IFrameworkRunner):
             context_token_count=0,
             checkpoint_available=False,
             framework_name="stub",
-            captured_at=datetime.now(tz=timezone.utc),
+            captured_at=datetime.now(tz=UTC),
         )
 
     async def save_checkpoint(self, run_id: str) -> CheckpointMeta:
-        import json as _json  # noqa: PLC0415
-        import tempfile as _tf  # noqa: PLC0415
-        import uuid as _uuid  # noqa: PLC0415
+        import json as _json
+        import tempfile as _tf
+        import uuid as _uuid
+
         state = {"run_id": run_id, "session_id": self._session.config.session_id}
         payload = _json.dumps(state).encode()
         # Write to a real temp file so size_bytes > 0
@@ -142,7 +152,7 @@ class StubFrameworkRunner(IFrameworkRunner):
             checkpoint_id=str(_uuid.uuid4()),
             session_id=self._session.config.session_id,
             run_id=run_id,
-            created_at=datetime.now(tz=timezone.utc),
+            created_at=datetime.now(tz=UTC),
             framework_name="stub",
             file_path=fpath,
             size_bytes=len(payload),

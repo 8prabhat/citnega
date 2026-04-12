@@ -16,22 +16,25 @@ Deduplication:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import hashlib
 import re
+from typing import TYPE_CHECKING
 import uuid
-from datetime import datetime, timezone
-from typing import Iterator
 
 from citnega.packages.protocol.models.kb import KBItem, KBSourceType
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _DEFAULT_MAX_TOKENS = 512
-_CHARS_PER_TOKEN    = 4
+_CHARS_PER_TOKEN = 4
 
 
 # ── Public helpers ────────────────────────────────────────────────────────────
+
 
 def content_hash(text: str) -> str:
     """Return the SHA-256 hex digest of *text* (UTF-8 encoded)."""
@@ -95,6 +98,7 @@ def _split_long(text: str, max_chars: int) -> Iterator[str]:
 
 # ── Item builder ──────────────────────────────────────────────────────────────
 
+
 def build_items(
     text: str,
     title: str,
@@ -110,22 +114,24 @@ def build_items(
     ingestion.  Each chunk gets its own ``item_id`` and ``content_hash``.
     """
     chunks = chunk_text(text, max_tokens=max_tokens)
-    now    = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     items: list[KBItem] = []
 
     for i, chunk in enumerate(chunks):
-        chunk_title = title if len(chunks) == 1 else f"{title} [{i+1}/{len(chunks)}]"
-        items.append(KBItem(
-            item_id=str(uuid.uuid4()),
-            title=chunk_title,
-            content=chunk,
-            source_type=source_type,
-            source_session_id=source_session_id,
-            source_run_id=source_run_id,
-            tags=tags or [],
-            created_at=now,
-            updated_at=now,
-            content_hash=content_hash(chunk),
-        ))
+        chunk_title = title if len(chunks) == 1 else f"{title} [{i + 1}/{len(chunks)}]"
+        items.append(
+            KBItem(
+                item_id=str(uuid.uuid4()),
+                title=chunk_title,
+                content=chunk,
+                source_type=source_type,
+                source_session_id=source_session_id,
+                source_run_id=source_run_id,
+                tags=tags or [],
+                created_at=now,
+                updated_at=now,
+                content_hash=content_hash(chunk),
+            )
+        )
 
     return items

@@ -13,16 +13,20 @@ Sources with higher priority values survive trimming.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.context import IContextHandler
-from citnega.packages.protocol.models.context import ContextObject, ContextSource
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.context import ContextObject, ContextSource
+    from citnega.packages.protocol.models.sessions import Session
 
 _PRIORITY: dict[str, int] = {
     "recent_turns": 100,
-    "state":        80,
-    "summary":      60,
-    "kb":           40,
+    "state": 80,
+    "summary": 60,
+    "kb": 40,
 }
 
 _DEFAULT_PRIORITY = 20
@@ -54,9 +58,7 @@ class TokenBudgetHandler(IContextHandler):
 
         if context.total_tokens <= budget:
             # No trimming needed
-            return context.model_copy(
-                update={"budget_remaining": budget - context.total_tokens}
-            )
+            return context.model_copy(update={"budget_remaining": budget - context.total_tokens})
 
         # Sort by priority (highest first), then trim from the back
         sources = sorted(context.sources, key=_priority, reverse=True)

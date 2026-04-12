@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.models.model_gateway import TaskNeeds
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.models.model_gateway import TaskNeeds
 
 
 class IRoutingPolicy(ABC):

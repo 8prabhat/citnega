@@ -47,8 +47,7 @@ class BaseRegistry(Generic[T]):
         with self._lock:
             if name in self._items and not overwrite:
                 raise ValueError(
-                    f"[{self._name}] '{name}' is already registered. "
-                    "Use overwrite=True to replace."
+                    f"[{self._name}] '{name}' is already registered. Use overwrite=True to replace."
                 )
             self._items[name] = item
 
@@ -61,9 +60,7 @@ class BaseRegistry(Generic[T]):
         """
         with self._lock:
             if name not in self._items:
-                raise CallableNotFoundError(
-                    f"[{self._name}] No item registered under '{name}'."
-                )
+                raise CallableNotFoundError(f"[{self._name}] No item registered under '{name}'.")
             return self._items[name]
 
     def get(self, name: str) -> T | None:

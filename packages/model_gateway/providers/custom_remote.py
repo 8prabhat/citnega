@@ -23,18 +23,20 @@ from __future__ import annotations
 
 import json
 import os
-from typing import AsyncIterator
-
-import httpx
+from typing import TYPE_CHECKING
 
 from citnega.packages.model_gateway.providers.base_provider import BaseProvider
 from citnega.packages.protocol.models.model_gateway import (
     ModelChunk,
     ModelInfo,
-    ModelMessage,
     ModelRequest,
     ModelResponse,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    import httpx
 
 
 class CustomRemoteProvider(BaseProvider):
@@ -66,7 +68,7 @@ class CustomRemoteProvider(BaseProvider):
         cls,
         model_info: ModelInfo,
         http_client: httpx.AsyncClient | None = None,
-    ) -> "CustomRemoteProvider":
+    ) -> CustomRemoteProvider:
         """Build from the model_info.framework_specific dict."""
         fs: dict = {}  # type: ignore[type-arg]
         base_url = fs.get("base_url", "http://localhost:8080")
@@ -89,20 +91,18 @@ class CustomRemoteProvider(BaseProvider):
 
     def _build_payload(self, request: ModelRequest) -> dict[str, object]:
         if self._request_format == "simple":
-            prompt = "\n".join(
-                f"{m.role}: {m.content}" for m in request.messages
-            )
+            prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
             return {
-                "prompt":     prompt,
+                "prompt": prompt,
                 "max_tokens": request.max_tokens or 1024,
                 "temperature": request.temperature,
             }
         # default: openai format
         return {
-            "model":       self._model_info.model_name,
-            "messages":    [{"role": m.role, "content": m.content} for m in request.messages],
+            "model": self._model_info.model_name,
+            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
             "temperature": request.temperature,
-            "stream":      False,
+            "stream": False,
         }
 
     async def _do_generate(self, request: ModelRequest) -> ModelResponse:
@@ -127,17 +127,16 @@ class CustomRemoteProvider(BaseProvider):
             content=content,
             tool_calls=[],
             finish_reason=data.get("choices", [{}])[0].get("finish_reason", "stop")
-            if self._request_format == "openai" else "stop",
+            if self._request_format == "openai"
+            else "stop",
             usage={
-                "prompt_tokens":     usage.get("prompt_tokens", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens":      usage.get("total_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
             },
         )
 
-    async def _do_stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]:
+    async def _do_stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
         payload = {**self._build_payload(request), "stream": True}
         async with self._http_client.stream(
             "POST",
@@ -161,9 +160,7 @@ class CustomRemoteProvider(BaseProvider):
 
     async def _do_health_check(self) -> str:
         try:
-            resp = await self._http_client.get(
-                f"{self._base_url}{self._health_path}", timeout=3.0
-            )
+            resp = await self._http_client.get(f"{self._base_url}{self._health_path}", timeout=3.0)
             return "healthy" if resp.status_code < 400 else "degraded"
         except Exception:
             return "down"

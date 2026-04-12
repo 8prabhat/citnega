@@ -2,30 +2,34 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class FileAgentInput(BaseModel):
-    task:      str  = Field(description="File operation task description.")
-    file_path: str  = Field(default="", description="Primary file path (if applicable).")
-    content:   str  = Field(default="", description="Content to write (if applicable).")
-    operation: str  = Field(
+    task: str = Field(description="File operation task description.")
+    file_path: str = Field(default="", description="Primary file path (if applicable).")
+    content: str = Field(default="", description="Content to write (if applicable).")
+    operation: str = Field(
         default="auto",
         description="'read' | 'write' | 'list' | 'search' | 'auto'",
     )
 
 
 class FileAgent(SpecialistBase):
-    name          = "file_agent"
-    description   = "Handles filesystem operations: read, write, list, and search files."
+    name = "file_agent"
+    description = "Handles filesystem operations: read, write, list, and search files."
     callable_type = CallableType.SPECIALIST
-    input_schema  = FileAgentInput
+    input_schema = FileAgentInput
     output_schema = SpecialistOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=60.0,
         requires_approval=False,
         allowed_paths=["${SESSION_ID}"],
@@ -61,6 +65,7 @@ class FileAgent(SpecialistBase):
             tool = self._get_tool("read_file")
             if tool:
                 from citnega.packages.tools.builtin.read_file import ReadFileInput
+
                 res = await tool.invoke(ReadFileInput(file_path=input.file_path), child_ctx)
                 if res.success and res.output:
                     result_text = res.output.result  # type: ignore[attr-defined]
@@ -70,6 +75,7 @@ class FileAgent(SpecialistBase):
             tool = self._get_tool("write_file")
             if tool:
                 from citnega.packages.tools.builtin.write_file import WriteFileInput
+
                 res = await tool.invoke(
                     WriteFileInput(file_path=input.file_path, content=input.content),
                     child_ctx,
@@ -82,6 +88,7 @@ class FileAgent(SpecialistBase):
             tool = self._get_tool("list_dir")
             if tool:
                 from citnega.packages.tools.builtin.list_dir import ListDirInput
+
                 res = await tool.invoke(ListDirInput(dir_path=input.file_path), child_ctx)
                 if res.success and res.output:
                     result_text = res.output.result  # type: ignore[attr-defined]

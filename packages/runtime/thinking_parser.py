@@ -29,8 +29,7 @@ stream).  Do not reuse across turns.
 
 from __future__ import annotations
 
-
-_OPEN_TAG  = "<think>"
+_OPEN_TAG = "<think>"
 _CLOSE_TAG = "</think>"
 _MAX_TAG_LEN = max(len(_OPEN_TAG), len(_CLOSE_TAG))
 
@@ -64,7 +63,7 @@ class ThinkingStreamParser:
 
     def __init__(self) -> None:
         self._in_thinking = False
-        self._pending     = ""
+        self._pending = ""
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -79,8 +78,8 @@ class ThinkingStreamParser:
         results: list[tuple[bool, str]] = []
 
         while self._pending:
-            tag   = _CLOSE_TAG if self._in_thinking else _OPEN_TAG
-            pos   = self._pending.find(tag)
+            tag = _CLOSE_TAG if self._in_thinking else _OPEN_TAG
+            pos = self._pending.find(tag)
 
             if pos == -1:
                 # Tag not found — flush what is definitely not a partial tag
@@ -88,16 +87,16 @@ class ThinkingStreamParser:
                 if safe > 0:
                     results.append((self._in_thinking, self._pending[:safe]))
                     self._pending = self._pending[safe:]
-                break   # rest must wait for more chunks
+                break  # rest must wait for more chunks
             else:
                 # Tag found — flush everything before it, then toggle mode
                 if pos > 0:
                     results.append((self._in_thinking, self._pending[:pos]))
-                self._pending    = self._pending[pos + len(tag):]
+                self._pending = self._pending[pos + len(tag) :]
                 self._in_thinking = not self._in_thinking
                 # Continue loop — there may be another tag in the remainder
 
-        return [(is_t, t) for (is_t, t) in results if t]   # drop empty strings
+        return [(is_t, t) for (is_t, t) in results if t]  # drop empty strings
 
     def flush(self) -> list[tuple[bool, str]]:
         """
@@ -110,7 +109,7 @@ class ThinkingStreamParser:
         if not self._pending:
             return []
         result = [(self._in_thinking, self._pending)]
-        self._pending     = ""
+        self._pending = ""
         self._in_thinking = False
         return result
 

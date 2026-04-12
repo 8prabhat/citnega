@@ -8,10 +8,14 @@ health check (GET /health) and guided decoding support.
 
 from __future__ import annotations
 
-import httpx
+from typing import TYPE_CHECKING
 
 from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider
-from citnega.packages.protocol.models.model_gateway import ModelInfo
+
+if TYPE_CHECKING:
+    import httpx
+
+    from citnega.packages.protocol.models.model_gateway import ModelInfo
 
 
 class VLLMProvider(OpenAICompatibleProvider):

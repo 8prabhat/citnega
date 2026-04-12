@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class StatusBar(Widget):
@@ -33,15 +37,15 @@ class StatusBar(Widget):
     """
 
     session_id: reactive[str] = reactive("—")
-    framework:  reactive[str] = reactive("direct")
-    run_state:  reactive[str] = reactive("idle")
-    model:      reactive[str] = reactive("")
-    mode:       reactive[str] = reactive("")   # e.g. "[PLAN]" or ""
+    framework: reactive[str] = reactive("direct")
+    run_state: reactive[str] = reactive("idle")
+    model: reactive[str] = reactive("")
+    mode: reactive[str] = reactive("")  # e.g. "[PLAN]" or ""
 
     def compose(self) -> ComposeResult:
         yield Label("", id="status-session", classes="status-session")
-        yield Label("", id="status-state",   classes="status-state")
-        yield Label("", id="status-model",   classes="status-model")
+        yield Label("", id="status-state", classes="status-state")
+        yield Label("", id="status-model", classes="status-model")
 
     def watch_session_id(self, value: str) -> None:
         short = value[:8] if len(value) > 8 else value

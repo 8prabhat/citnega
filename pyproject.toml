@@ -42,8 +42,6 @@ dev = [
 citnega     = "citnega.apps.tui.app:main"
 citnega-cli = "citnega.apps.cli.main:main"
 
-[tool.uv.workspace]
-members = ["packages/*", "apps/*"]
 
 [build-system]
 requires      = ["hatchling"]
@@ -67,7 +65,7 @@ pythonpath   = ["."]
 
 # ── Coverage ───────────────────────────────────────────────────────────────────
 [tool.coverage.run]
-source   = ["packages"]
+source   = ["citnega"]
 omit     = ["*/migrations/*", "*/tests/*"]
 
 [tool.coverage.report]

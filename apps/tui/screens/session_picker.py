@@ -15,16 +15,18 @@ act without needing to import this screen directly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Label
 
 if TYPE_CHECKING:
+    from textual.app import ComposeResult
+
     from citnega.packages.protocol.models.sessions import Session
 
 
@@ -32,12 +34,12 @@ class SessionPickerScreen(Screen):
     """Startup screen listing all previous sessions."""
 
     BINDINGS = [
-        Binding("enter",  "resume",      "Resume",     show=True),
-        Binding("r",      "resume",      "Resume",     show=False),
-        Binding("n",      "new_session", "New session",show=True),
-        Binding("d",      "delete",      "Delete",     show=True),
-        Binding("q",      "app.quit",    "Quit",       show=True),
-        Binding("escape", "app.quit",    "Quit",       show=False),
+        Binding("enter", "resume", "Resume", show=True),
+        Binding("r", "resume", "Resume", show=False),
+        Binding("n", "new_session", "New session", show=True),
+        Binding("d", "delete", "Delete", show=True),
+        Binding("q", "app.quit", "Quit", show=True),
+        Binding("escape", "app.quit", "Quit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -60,6 +62,7 @@ class SessionPickerScreen(Screen):
 
     class SessionSelected(Message):
         """User wants to resume *session_id*."""
+
         def __init__(self, session_id: str) -> None:
             super().__init__()
             self.session_id = session_id
@@ -69,9 +72,9 @@ class SessionPickerScreen(Screen):
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    def __init__(self, sessions: list["Session"], **kwargs: Any) -> None:
+    def __init__(self, sessions: list[Session], **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._sessions: list["Session"] = sessions
+        self._sessions: list[Session] = sessions
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -99,12 +102,18 @@ class SessionPickerScreen(Screen):
                     s.config.name or "(unnamed)",
                     s.config.session_id[:8] + "…",
                     age,
-                    "",      # message count not available here; shown as blank
+                    "",  # message count not available here; shown as blank
                     mode,
                     key=s.config.session_id,
                 )
             yield table
         yield Footer()
+
+    # ── Message handlers ──────────────────────────────────────────────────────
+
+    def on_data_table_row_selected(self, message: DataTable.RowSelected) -> None:
+        """Enter key on a DataTable row fires RowSelected — use it to resume."""
+        self.action_resume()
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -113,21 +122,12 @@ class SessionPickerScreen(Screen):
             return
         try:
             table = self.query_one(DataTable)
-            row_key = table.get_row_at(table.cursor_row)
-            session_id = table.get_cell_at((table.cursor_row, 0))
-        except Exception:
-            return
-        # The key we passed to add_row is the full session_id
-        try:
-            table    = self.query_one(DataTable)
-            row_key  = table.cursor_row
-            # The first visible column is name — find the session by matching table key
-            # DataTable keys are the 'key' arg passed to add_row
-            if row_key < len(self._sessions):
-                sid = self._sessions[row_key].config.session_id
+            row_idx = table.cursor_row
+            if 0 <= row_idx < len(self._sessions):
+                sid = self._sessions[row_idx].config.session_id
                 self.post_message(self.SessionSelected(sid))
-        except Exception:
-            pass
+        except Exception as exc:
+            self.notify(f"Could not resume session: {exc}", severity="error")
 
     def action_new_session(self) -> None:
         self.post_message(self.NewSessionRequested())
@@ -136,14 +136,15 @@ class SessionPickerScreen(Screen):
         if not self._sessions:
             return
         try:
-            table   = self.query_one(DataTable)
+            table = self.query_one(DataTable)
             row_key = table.cursor_row
             if row_key < len(self._sessions):
                 session = self._sessions[row_key]
                 self._sessions.pop(row_key)
                 table.remove_row(session.config.session_id)
                 # Schedule async delete via app
-                import asyncio  # noqa: PLC0415
+                import asyncio
+
                 asyncio.get_event_loop().create_task(
                     self._delete_session(session.config.session_id)
                 )
@@ -156,19 +157,18 @@ class SessionPickerScreen(Screen):
         app = self.app
         service = getattr(app, "service", None)
         if service is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await service.delete_session(session_id)
-            except Exception:
-                pass
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _format_age(dt: datetime) -> str:
     """Return a human-readable age string like '2h ago' or '3d ago'."""
-    now   = datetime.now(tz=timezone.utc)
-    delta = now - dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else now - dt
-    secs  = int(delta.total_seconds())
+    now = datetime.now(tz=UTC)
+    delta = now - dt.replace(tzinfo=UTC) if dt.tzinfo is None else now - dt
+    secs = int(delta.total_seconds())
     if secs < 60:
         return "just now"
     if secs < 3600:

@@ -15,26 +15,26 @@ specialist can invoke sub-tools during _execute().
 
 from __future__ import annotations
 
-from abc import abstractmethod
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCallable
 from citnega.packages.protocol.callables.types import CallableType
-from citnega.packages.protocol.callables.interfaces import IInvocable
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.interfaces.events import IEventEmitter, ITracer
     from citnega.packages.protocol.interfaces.policy import IPolicyEnforcer
 
 
 class SpecialistOutput(BaseModel):
     """Standard output for all specialist agents."""
-    response:      str = Field(description="Specialist's text response.")
+
+    response: str = Field(description="Specialist's text response.")
     tool_calls_made: list[str] = Field(default_factory=list, description="Tool names invoked.")
-    sources:       list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
 
 
 class SpecialistBase(BaseCallable):
@@ -47,22 +47,22 @@ class SpecialistBase(BaseCallable):
     """
 
     callable_type: CallableType = CallableType.SPECIALIST
-    output_schema: Type[BaseModel] = SpecialistOutput
+    output_schema: type[BaseModel] = SpecialistOutput
 
-    SYSTEM_PROMPT:  str       = ""
+    SYSTEM_PROMPT: str = ""
     TOOL_WHITELIST: list[str] = []
 
     def __init__(
         self,
-        policy_enforcer: "IPolicyEnforcer",
-        event_emitter:   "IEventEmitter",
-        tracer:          "ITracer",
-        tool_registry:   "dict[str, IInvocable] | None" = None,
+        policy_enforcer: IPolicyEnforcer,
+        event_emitter: IEventEmitter,
+        tracer: ITracer,
+        tool_registry: dict[str, IInvocable] | None = None,
     ) -> None:
         super().__init__(policy_enforcer, event_emitter, tracer)
         self._tools: dict[str, IInvocable] = tool_registry or {}
 
-    def _get_tool(self, name: str) -> "IInvocable | None":
+    def _get_tool(self, name: str) -> IInvocable | None:
         """Return a whitelisted tool by name, or None."""
         if name not in self.TOOL_WHITELIST:
             return None
@@ -71,7 +71,7 @@ class SpecialistBase(BaseCallable):
     async def _call_model(
         self,
         user_input: str,
-        context: "CallContext",
+        context: CallContext,
         system_override: str | None = None,
     ) -> str:
         """Call the model gateway with the specialist's system prompt."""
@@ -79,9 +79,10 @@ class SpecialistBase(BaseCallable):
             return f"(model gateway unavailable — specialist {self.name})"
 
         from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
+
         messages = [
             ModelMessage(role="system", content=system_override or self.SYSTEM_PROMPT),
-            ModelMessage(role="user",   content=user_input),
+            ModelMessage(role="user", content=user_input),
         ]
         response = await context.model_gateway.generate(
             ModelRequest(messages=messages, stream=False, temperature=0.5)

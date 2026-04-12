@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.callables.types import CallableMetadata
-from citnega.packages.protocol.events import CanonicalEvent
-from citnega.packages.protocol.models import RunSummary, Session, SessionConfig, StateSnapshot
+if TYPE_CHECKING:
+    import asyncio
+
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.callables.types import CallableMetadata
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models import Session, SessionConfig, StateSnapshot
 
 
 class IRuntime(ABC):

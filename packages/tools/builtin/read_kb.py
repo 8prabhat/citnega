@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCallable
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
 
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
+
 
 class ReadKBInput(BaseModel):
-    query:       str   = Field(description="Search query for the knowledge base.")
-    max_results: int   = Field(default=5)
-    tags:        list[str] = Field(default_factory=list, description="Optional tag filters.")
+    query: str = Field(description="Search query for the knowledge base.")
+    max_results: int = Field(default=5)
+    tags: list[str] = Field(default_factory=list, description="Optional tag filters.")
 
 
 class ReadKBTool(BaseCallable):
@@ -24,12 +28,12 @@ class ReadKBTool(BaseCallable):
     Will be wired to a real IKnowledgeStore in Phase 8.
     """
 
-    name          = "read_kb"
-    description   = "Search and retrieve relevant items from the knowledge base."
+    name = "read_kb"
+    description = "Search and retrieve relevant items from the knowledge base."
     callable_type = CallableType.TOOL
-    input_schema  = ReadKBInput
+    input_schema = ReadKBInput
     output_schema = ToolOutput
-    policy        = tool_policy(timeout_seconds=10.0)
+    policy = tool_policy(timeout_seconds=10.0)
 
     def __init__(self, *args, knowledge_store=None, **kwargs) -> None:  # type: ignore[override]
         super().__init__(*args, **kwargs)

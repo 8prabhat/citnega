@@ -16,13 +16,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from citnega.packages.protocol.callables.base import BaseCallable
-from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
-from citnega.packages.storage.path_resolver import PathResolver
+from citnega.packages.protocol.callables.types import CallablePolicy
 
 
 class ToolOutput(BaseModel):
     """Default single-value output for tools that return text."""
+
     result: str = Field(default="", description="Tool output text")
 
 

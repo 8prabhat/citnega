@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.events.base import BaseEvent
@@ -16,17 +15,17 @@ if TYPE_CHECKING:
 class CallableStartEvent(BaseEvent):
     """Emitted just before a callable's _execute() is called."""
 
-    event_type:      str = "CallableStartEvent"
-    input_summary:   str                  # truncated JSON repr of validated input
-    depth:           int
+    event_type: str = "CallableStartEvent"
+    input_summary: str  # truncated JSON repr of validated input
+    depth: int
     parent_callable: str | None
 
     @classmethod
     def from_invocation(
         cls,
-        callable_: "IInvocable",
-        context: "CallContext",
-    ) -> "CallableStartEvent":
+        callable_: IInvocable,
+        context: CallContext,
+    ) -> CallableStartEvent:
         try:
             summary = "<input>"
         except Exception:
@@ -46,24 +45,20 @@ class CallableStartEvent(BaseEvent):
 class CallableEndEvent(BaseEvent):
     """Emitted after a callable finishes (success or error)."""
 
-    event_type:    str = "CallableEndEvent"
+    event_type: str = "CallableEndEvent"
     output_summary: str
-    duration_ms:   int
-    policy_result: str        # "passed" | "denied" | "timeout"
-    error_code:    str | None = None
+    duration_ms: int
+    policy_result: str  # "passed" | "denied" | "timeout"
+    error_code: str | None = None
 
     @classmethod
     def from_result(
         cls,
-        result: "InvokeResult",
-        context: "CallContext",
-    ) -> "CallableEndEvent":
+        result: InvokeResult,
+        context: CallContext,
+    ) -> CallableEndEvent:
         if result.error is not None:
-            policy_result = (
-                "denied"
-                if result.error.error_code.startswith("POLICY_")
-                else "failed"
-            )
+            policy_result = "denied" if result.error.error_code.startswith("POLICY_") else "failed"
             error_code = result.error.error_code
         else:
             policy_result = "passed"
@@ -86,6 +81,6 @@ class CallablePolicyEvent(BaseEvent):
     """Emitted by PolicyEnforcer for each policy check result."""
 
     event_type: str = "CallablePolicyEvent"
-    check_name: str       # "timeout" | "path" | "network" | "approval" | "depth"
-    result:     str       # "passed" | "denied"
-    reason:     str | None = None
+    check_name: str  # "timeout" | "path" | "network" | "approval" | "depth"
+    result: str  # "passed" | "denied"
+    reason: str | None = None

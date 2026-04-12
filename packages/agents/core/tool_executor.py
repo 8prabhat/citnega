@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.base import BaseAgent
 from citnega.packages.agents.specialists._specialist_base import SpecialistOutput
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class ToolExecutorInput(BaseModel):
-    task:      str       = Field(description="What to accomplish via tool execution.")
-    tool_hint: str       = Field(default="", description="Suggested tool name if known.")
+    task: str = Field(description="What to accomplish via tool execution.")
+    tool_hint: str = Field(default="", description="Suggested tool name if known.")
 
 
 class ToolExecutorAgent(BaseAgent):
-    agent_id      = "tool_executor"
-    name          = "tool_executor_agent"
-    description   = "Executes tool operations precisely and returns structured results."
+    agent_id = "tool_executor"
+    name = "tool_executor_agent"
+    description = "Executes tool operations precisely and returns structured results."
     callable_type = CallableType.SPECIALIST
-    input_schema  = ToolExecutorInput
+    input_schema = ToolExecutorInput
     output_schema = SpecialistOutput
 
     SYSTEM_PROMPT = (

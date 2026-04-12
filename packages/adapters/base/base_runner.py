@@ -18,21 +18,22 @@ Shared behaviour (provided here):
 
 from __future__ import annotations
 
-import asyncio
 from abc import abstractmethod
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+import asyncio
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from citnega.packages.adapters.base.cancellation import CancellationToken
-from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.interfaces.adapter import IFrameworkRunner
-from citnega.packages.protocol.models.checkpoints import CheckpointMeta
-from citnega.packages.protocol.models.context import ContextObject
 from citnega.packages.protocol.models.runs import RunState, StateSnapshot
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.cancellation import CancellationToken
+    from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.checkpoints import CheckpointMeta
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class BaseFrameworkRunner(IFrameworkRunner):
@@ -111,7 +112,7 @@ class BaseFrameworkRunner(IFrameworkRunner):
             context_token_count=self._context_token_count,
             checkpoint_available=False,
             framework_name=self._session.config.framework,
-            captured_at=datetime.now(tz=timezone.utc),
+            captured_at=datetime.now(tz=UTC),
         )
 
     async def save_checkpoint(self, run_id: str) -> CheckpointMeta:
@@ -124,10 +125,10 @@ class BaseFrameworkRunner(IFrameworkRunner):
 
     async def restore_checkpoint(self, checkpoint_id: str) -> None:
         # Locate the checkpoint file via the serializer's directory
-        import glob as _glob
         matches = list(self._serializer._dir.glob(f"{checkpoint_id}.json.gz"))
         if not matches:
             from citnega.packages.shared.errors import StorageError
+
             raise StorageError(f"Checkpoint {checkpoint_id!r} not found.")
         blob = self._serializer.load(str(matches[0]))
         await self._do_restore_checkpoint(blob["framework_state"])  # type: ignore[arg-type]
@@ -159,7 +160,5 @@ class BaseFrameworkRunner(IFrameworkRunner):
     @abstractmethod
     async def _do_save_checkpoint(self, run_id: str) -> dict[str, object]: ...
 
-    async def _do_restore_checkpoint(
-        self, framework_state: dict[str, object]
-    ) -> None:
+    async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
         """Optional: restore framework-specific state. Default: no-op."""

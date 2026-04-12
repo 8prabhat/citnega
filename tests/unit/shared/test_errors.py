@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from citnega.packages.shared.errors import (
     AdapterError,
     ApprovalDeniedError,
@@ -78,6 +76,7 @@ class TestErrorHierarchy:
     def test_policy_error_is_callable_error(self) -> None:
         err = CallablePolicyError("depth exceeded")
         from citnega.packages.shared.errors import CallableError
+
         assert isinstance(err, CallableError)
         assert isinstance(err, CitnegaError)
 

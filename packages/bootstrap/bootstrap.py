@@ -18,31 +18,35 @@ handles SystemExit on every failure mode.
 
 from __future__ import annotations
 
-import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncIterator
+import sys
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import configure_logging, runtime_logger
 from citnega.packages.protocol.interfaces.context import IContextHandler
-from citnega.packages.protocol.models.context import ContextObject
-from citnega.packages.protocol.models.sessions import Session
 from citnega.packages.runtime.app_service import ApplicationService
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 # ---------------------------------------------------------------------------
 # Exit code constants
 # ---------------------------------------------------------------------------
 
-EXIT_CONFIG_ERROR     = 2
-EXIT_ADAPTER_ERROR    = 3
-EXIT_NO_PROVIDER      = 4
-EXIT_MIGRATION_ERROR  = 5
+EXIT_CONFIG_ERROR = 2
+EXIT_ADAPTER_ERROR = 3
+EXIT_NO_PROVIDER = 4
+EXIT_MIGRATION_ERROR = 5
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 class _PassThroughContextHandler(IContextHandler):
     """Identity handler ensuring ContextAssembler has at least one handler."""
@@ -65,16 +69,20 @@ def _select_adapter(framework: str, path_resolver):  # type: ignore[no-untyped-d
     try:
         if framework == "adk":
             from citnega.packages.adapters.adk.adapter import ADKFrameworkAdapter
+
             return ADKFrameworkAdapter(path_resolver)
         elif framework == "langgraph":
             from citnega.packages.adapters.langgraph.adapter import LangGraphFrameworkAdapter
+
             return LangGraphFrameworkAdapter(path_resolver)
         elif framework == "crewai":
             from citnega.packages.adapters.crewai.adapter import CrewAIFrameworkAdapter
+
             return CrewAIFrameworkAdapter(path_resolver)
         elif framework == "stub":
             # Allowed in test / dev contexts; not for production use
-            from tests.fixtures.stub_adapter import StubFrameworkAdapter  # noqa: PLC0415
+            from tests.fixtures.stub_adapter import StubFrameworkAdapter
+
             return StubFrameworkAdapter()
         else:
             runtime_logger.error(
@@ -110,12 +118,12 @@ async def _build_model_gateway(settings, emitter):  # type: ignore[no-untyped-de
     - Health-check all providers; if local_only=True and none are healthy, exit(4).
     """
     from citnega.packages.model_gateway.gateway import ModelGateway
-    from citnega.packages.model_gateway.rate_limiter import TokenBucketRateLimiter
-    from citnega.packages.model_gateway.registry import ModelRegistry
+    from citnega.packages.model_gateway.providers.custom_remote import CustomRemoteProvider
     from citnega.packages.model_gateway.providers.ollama import OllamaProvider
     from citnega.packages.model_gateway.providers.openai_compatible import OpenAICompatibleProvider
     from citnega.packages.model_gateway.providers.vllm import VLLMProvider
-    from citnega.packages.model_gateway.providers.custom_remote import CustomRemoteProvider
+    from citnega.packages.model_gateway.rate_limiter import TokenBucketRateLimiter
+    from citnega.packages.model_gateway.registry import ModelRegistry
 
     model_registry = ModelRegistry()
     try:
@@ -161,7 +169,7 @@ async def _build_model_gateway(settings, emitter):  # type: ignore[no-untyped-de
 
     # Health-check providers
     healthy_count = 0
-    for model_id, provider in gateway.providers.items():
+    for _model_id, provider in gateway.providers.items():
         try:
             healthy = await provider.health_check()
             if healthy:
@@ -184,6 +192,7 @@ async def _build_model_gateway(settings, emitter):  # type: ignore[no-untyped-de
 # ---------------------------------------------------------------------------
 # Public context manager
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def create_application(
@@ -215,6 +224,7 @@ async def create_application(
     # ── Step 1: Load and validate settings ────────────────────────────────────
     try:
         from citnega.packages.config.loaders import load_settings
+
         settings = load_settings()
     except Exception as exc:
         # Config not yet set up — can't use structured logger yet
@@ -232,11 +242,13 @@ async def create_application(
 
     # ── Step 3: PathResolver ──────────────────────────────────────────────────
     from citnega.packages.storage.path_resolver import PathResolver
+
     path_resolver = PathResolver()
 
     # ── Step 4: Create app directories ────────────────────────────────────────
     try:
         from citnega.packages.security.permissions import ensure_dir_permissions
+
         dirs = [
             path_resolver.app_home,
             path_resolver.config_dir,
@@ -263,15 +275,22 @@ async def create_application(
 
     # ── Step 5: Key store ─────────────────────────────────────────────────────
     try:
-        from citnega.packages.security.key_store import CompositeKeyStore, EnvVarKeyStore, KeyringKeyStore
-        key_store = CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
+        from citnega.packages.security.key_store import (
+            CompositeKeyStore,
+            EnvVarKeyStore,
+            KeyringKeyStore,
+        )
+
+        CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
     except Exception as exc:
         runtime_logger.warning("bootstrap_keystore_init_failed", error=str(exc))
         from citnega.packages.security.key_store import EnvVarKeyStore
-        key_store = EnvVarKeyStore()  # type: ignore[assignment]
+
+        EnvVarKeyStore()  # type: ignore[assignment]
 
     # ── Step 6: Database (connect + WAL PRAGMAs) ──────────────────────────────
     from citnega.packages.storage.database import DatabaseFactory
+
     resolved_db = db_path or path_resolver.db_path
     db = DatabaseFactory(resolved_db)
 
@@ -297,18 +316,19 @@ async def create_application(
     await db.connect()
 
     # ── Step 8: Repositories & managers ──────────────────────────────────────
-    from citnega.packages.storage.repositories.session_repo import SessionRepository
-    from citnega.packages.storage.repositories.run_repo import RunRepository
-    from citnega.packages.runtime.sessions import SessionManager
     from citnega.packages.runtime.runs import RunManager
+    from citnega.packages.runtime.sessions import SessionManager
+    from citnega.packages.storage.repositories.run_repo import RunRepository
+    from citnega.packages.storage.repositories.session_repo import SessionRepository
 
     session_repo = SessionRepository(db)
-    run_repo     = RunRepository(db)
-    session_mgr  = SessionManager(session_repo)
-    run_mgr      = RunManager(run_repo)
+    run_repo = RunRepository(db)
+    session_mgr = SessionManager(session_repo)
+    run_mgr = RunManager(run_repo)
 
     # ── Step 9: Event emitter ─────────────────────────────────────────────────
     from citnega.packages.runtime.events.emitter import EventEmitter
+
     event_log_dir = path_resolver.event_logs_dir
     emitter = EventEmitter(event_log_dir=event_log_dir)
 
@@ -317,7 +337,7 @@ async def create_application(
     from citnega.packages.runtime.policy.enforcer import PolicyEnforcer
 
     approval_mgr = ApprovalManager()
-    enforcer     = PolicyEnforcer(emitter, approval_mgr)
+    enforcer = PolicyEnforcer(emitter, approval_mgr)
 
     # ── Step 11: Framework adapter ────────────────────────────────────────────
     _framework = framework or settings.runtime.framework
@@ -326,10 +346,10 @@ async def create_application(
     # ── Step 12: Model gateway ────────────────────────────────────────────────
     if skip_provider_health_check:
         # Used in unit/integration tests that don't need a live model server
-        model_gateway = None
+        pass
     else:
         try:
-            model_gateway = await _build_model_gateway(settings, emitter)
+            await _build_model_gateway(settings, emitter)
         except SystemExit:
             raise  # propagate exit codes
         except Exception as exc:
@@ -338,6 +358,7 @@ async def create_application(
 
     # ── Step 13: Knowledge base ───────────────────────────────────────────────
     from citnega.packages.kb.store import KnowledgeStore
+
     kb_store = KnowledgeStore(db, path_resolver)
 
     # ── Step 14: Context handlers ─────────────────────────────────────────────
@@ -353,10 +374,12 @@ async def create_application(
     # ── Step 15: Tracer ───────────────────────────────────────────────────────
     from citnega.packages.runtime.events.tracer import Tracer
     from citnega.packages.storage.repositories.invocation_repo import InvocationRepository
+
     tracer = Tracer(InvocationRepository(db))
 
     # ── Step 15a: Tool registry ───────────────────────────────────────────────
     from citnega.packages.tools.registry import ToolRegistry
+
     tool_registry = ToolRegistry(
         enforcer=enforcer,
         emitter=emitter,
@@ -368,6 +391,7 @@ async def create_application(
 
     # ── Step 15b: Agent registry ──────────────────────────────────────────────
     from citnega.packages.agents.registry import AgentRegistry
+
     agent_registry = AgentRegistry(
         enforcer=enforcer,
         emitter=emitter,
@@ -378,6 +402,7 @@ async def create_application(
 
     # ── Step 15c: Unified callable registry ──────────────────────────────────
     from citnega.packages.shared.registry import BaseRegistry
+
     registry: BaseRegistry = BaseRegistry()
     for name, callable_obj in {**tools, **agents}.items():
         try:
@@ -412,6 +437,9 @@ async def create_application(
         kb_store=kb_store,
         tool_registry=tools,
         agent_registry=agents,
+        enforcer=enforcer,
+        tracer=tracer,
+        app_home=path_resolver.app_home,
     )
 
     runtime_logger.info(

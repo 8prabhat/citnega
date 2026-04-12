@@ -2,32 +2,36 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCallable
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.shared.errors import CallableError
 from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
 
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
+
 
 class FetchURLInput(BaseModel):
-    url:          str   = Field(description="URL to fetch.")
-    method:       str   = Field(default="GET", description="HTTP method.")
-    headers:      dict[str, str] = Field(default_factory=dict)
-    body:         str   = Field(default="", description="Request body (for POST/PUT).")
-    timeout:      float = Field(default=20.0)
-    max_bytes:    int   = Field(default=256 * 1024, description="Max response bytes.")
-    extract_text: bool  = Field(default=True, description="Strip HTML tags if True.")
+    url: str = Field(description="URL to fetch.")
+    method: str = Field(default="GET", description="HTTP method.")
+    headers: dict[str, str] = Field(default_factory=dict)
+    body: str = Field(default="", description="Request body (for POST/PUT).")
+    timeout: float = Field(default=20.0)
+    max_bytes: int = Field(default=256 * 1024, description="Max response bytes.")
+    extract_text: bool = Field(default=True, description="Strip HTML tags if True.")
 
 
 class FetchURLTool(BaseCallable):
-    name          = "fetch_url"
-    description   = "Fetch content from a URL via HTTP/HTTPS. Requires user approval."
+    name = "fetch_url"
+    description = "Fetch content from a URL via HTTP/HTTPS. Requires user approval."
     callable_type = CallableType.TOOL
-    input_schema  = FetchURLInput
+    input_schema = FetchURLInput
     output_schema = ToolOutput
-    policy        = tool_policy(
+    policy = tool_policy(
         timeout_seconds=30.0,
         requires_approval=True,
         network_allowed=True,
@@ -47,11 +51,12 @@ class FetchURLTool(BaseCallable):
                     headers=input.headers,
                     content=input.body.encode() if input.body else None,
                 )
-            raw = resp.content[:input.max_bytes]
+            raw = resp.content[: input.max_bytes]
             text = raw.decode(resp.encoding or "utf-8", errors="replace")
 
             if input.extract_text and "html" in resp.headers.get("content-type", "").lower():
                 import re
+
                 text = re.sub(r"<[^>]+>", "", text)
                 text = re.sub(r"\s{2,}", " ", text).strip()
 

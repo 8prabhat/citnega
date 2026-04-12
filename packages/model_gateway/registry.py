@@ -8,14 +8,12 @@ bootstrap time and consulted by the gateway router on every request.
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
-from typing import Iterable
+import tomllib
 
 from citnega.packages.observability.logging_setup import model_gateway_logger
 from citnega.packages.protocol.models.model_gateway import ModelCapabilityFlags, ModelInfo
 from citnega.packages.shared.errors import ConfigError
-
 
 _DEFAULT_REGISTRY_TOML = Path(__file__).parent / "model_registry.toml"
 
@@ -48,17 +46,13 @@ class ModelRegistry:
         """Load models from the given TOML file (default: bundled registry)."""
         toml_path = path or _DEFAULT_REGISTRY_TOML
         if not toml_path.exists():
-            model_gateway_logger.warning(
-                "model_registry_not_found", path=str(toml_path)
-            )
+            model_gateway_logger.warning("model_registry_not_found", path=str(toml_path))
             return
         try:
             with open(toml_path, "rb") as fh:
                 data = tomllib.load(fh)
         except Exception as exc:
-            raise ConfigError(
-                f"Failed to load model registry from {toml_path}: {exc}"
-            ) from exc
+            raise ConfigError(f"Failed to load model registry from {toml_path}: {exc}") from exc
 
         for entry in data.get("models", []):
             try:

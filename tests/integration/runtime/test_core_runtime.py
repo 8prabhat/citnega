@@ -16,14 +16,11 @@ Scenarios covered:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
 
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.lifecycle import RunCompleteEvent, RunStateEvent
 from citnega.packages.protocol.models.runs import RunState
 from citnega.packages.protocol.models.sessions import SessionConfig
@@ -45,14 +42,21 @@ from citnega.packages.storage.repositories.run_repo import RunRepository
 from citnega.packages.storage.repositories.session_repo import SessionRepository
 from tests.fixtures.stub_adapter import StubFrameworkAdapter, StubFrameworkRunner
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from pathlib import Path
+
+    from citnega.packages.protocol.events import CanonicalEvent
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture
 async def tmp_db(tmp_path: Path) -> AsyncGenerator[DatabaseFactory, None]:
     from citnega.packages.storage.path_resolver import PathResolver
+
     pr = PathResolver(app_home=tmp_path)
     pr.create_all()
     db = DatabaseFactory(pr.db_path)
@@ -72,13 +76,15 @@ async def runtime(tmp_db: DatabaseFactory) -> AsyncGenerator[CoreRuntime, None]:
     session_mgr = SessionManager(session_repo)
     run_mgr = RunManager(run_repo)
 
-    assembler = ContextAssembler([
-        RecentTurnsHandler(message_repo, recent_turns_count=10),
-        SessionSummaryHandler(run_repo),
-        KBRetrievalHandler(),
-        RuntimeStateHandler(),
-        TokenBudgetHandler(max_context_tokens=8192),
-    ])
+    assembler = ContextAssembler(
+        [
+            RecentTurnsHandler(message_repo, recent_turns_count=10),
+            SessionSummaryHandler(run_repo),
+            KBRetrievalHandler(),
+            RuntimeStateHandler(),
+            TokenBudgetHandler(max_context_tokens=8192),
+        ]
+    )
 
     adapter = StubFrameworkAdapter()
     emitter = EventEmitter()
@@ -122,7 +128,7 @@ async def _drain_events(
             events.append(event)
             if isinstance(event, RunCompleteEvent):
                 break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             break
     return events
 
@@ -130,6 +136,7 @@ async def _drain_events(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestFullTurn:
     @pytest.mark.asyncio
@@ -204,9 +211,7 @@ class TestCancelRun:
 
 class TestFailedTurn:
     @pytest.mark.asyncio
-    async def test_runner_exception_transitions_to_failed(
-        self, runtime: CoreRuntime
-    ) -> None:
+    async def test_runner_exception_transitions_to_failed(self, runtime: CoreRuntime) -> None:
         session = await runtime.create_session(_session_config("sess-fail"))
         runner: StubFrameworkRunner = runtime._runners[session.config.session_id]
         runner.errors_to_raise.append(RuntimeError("stub exploded"))

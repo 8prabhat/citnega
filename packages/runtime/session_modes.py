@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from citnega.packages.protocol.interfaces.session_mode import ISessionMode
 
-
 # ── Concrete modes ────────────────────────────────────────────────────────────
+
 
 class ChatMode(ISessionMode):
     """
@@ -48,7 +48,7 @@ class PlanMode(ISessionMode):
     prompt for each phase via ``augment_system_prompt(base, phase=...)``.
     """
 
-    PHASE_DRAFT   = "draft"
+    PHASE_DRAFT = "draft"
     PHASE_EXECUTE = "execute"
 
     @property
@@ -164,8 +164,7 @@ class ResearchMode(ISessionMode):
 # ── Registry (single source of truth — DRY) ──────────────────────────────────
 
 _REGISTRY: dict[str, ISessionMode] = {
-    m.name: m
-    for m in (ChatMode(), PlanMode(), ExploreMode(), ResearchMode())
+    m.name: m for m in (ChatMode(), PlanMode(), ExploreMode(), ResearchMode())
 }
 
 VALID_MODES: list[str] = list(_REGISTRY)

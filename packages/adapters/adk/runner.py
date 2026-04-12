@@ -14,20 +14,22 @@ ADK integration strategy:
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_runner import BaseFrameworkRunner
-from citnega.packages.adapters.base.cancellation import CancellationToken
-from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
-from citnega.packages.adapters.base.event_translator import EventTranslator
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
-from citnega.packages.protocol.models.context import ContextObject
 from citnega.packages.protocol.models.runs import RunState
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.cancellation import CancellationToken
+    from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
+    from citnega.packages.adapters.base.event_translator import EventTranslator
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class ADKRunner(BaseFrameworkRunner):
@@ -62,12 +64,11 @@ class ADKRunner(BaseFrameworkRunner):
         try:
             # Late import — only available when google-adk is installed
             from google.adk.agents import LlmAgent  # type: ignore[import]
-            from google.adk.runners import Runner    # type: ignore[import]
+            from google.adk.runners import Runner  # type: ignore[import]
             from google.adk.sessions import InMemorySessionService  # type: ignore[import]
         except ImportError as exc:
             raise ImportError(
-                "google-adk is not installed. "
-                "Install with: uv add 'citnega[adk]'"
+                "google-adk is not installed. Install with: uv add 'citnega[adk]'"
             ) from exc
 
         # Build tool wrappers — ADK expects callables as functions
@@ -77,7 +78,7 @@ class ADKRunner(BaseFrameworkRunner):
             def _make_fn(cbl: IInvocable) -> Any:
                 async def _adk_tool_fn(**kwargs: object) -> dict[str, object]:
                     from citnega.packages.protocol.callables.context import CallContext
-                    from citnega.packages.protocol.models.sessions import SessionConfig
+
                     # Build a minimal CallContext for this invocation
                     ctx = CallContext(
                         session_id=self._session.config.session_id,
@@ -85,17 +86,17 @@ class ADKRunner(BaseFrameworkRunner):
                         turn_id="adk-turn",
                         session_config=self._session.config,
                     )
-                    result = await cbl.invoke(
-                        cbl.input_schema.model_validate(kwargs), ctx
-                    )
+                    result = await cbl.invoke(cbl.input_schema.model_validate(kwargs), ctx)
                     if result.output:
                         return result.output.model_dump()
                     if result.error:
                         return {"error": str(result.error)}
                     return {}
+
                 _adk_tool_fn.__name__ = cbl.name
                 _adk_tool_fn.__doc__ = cbl.description
                 return _adk_tool_fn
+
             tools.append(_make_fn(c))
 
         session_service = InMemorySessionService()
@@ -138,25 +139,25 @@ class ADKRunner(BaseFrameworkRunner):
             if hasattr(event, "content") and event.content:
                 for part in event.content.parts:
                     if hasattr(part, "text") and part.text:
-                        try:
-                            event_queue.put_nowait(TokenEvent(
-                                session_id=session_id,
-                                run_id=context.run_id,
-                                turn_id=context.run_id,
-                                token=part.text,
-                                finish_reason=None,
-                            ))
-                        except asyncio.QueueFull:
-                            pass
+                        with contextlib.suppress(asyncio.QueueFull):
+                            event_queue.put_nowait(
+                                TokenEvent(
+                                    session_id=session_id,
+                                    run_id=context.run_id,
+                                    turn_id=context.run_id,
+                                    token=part.text,
+                                    finish_reason=None,
+                                )
+                            )
 
             # Record in history for checkpointing
             if hasattr(event, "content") and event.content:
-                self._history.append({
-                    "role": getattr(event.content, "role", "assistant"),
-                    "text": "".join(
-                        getattr(p, "text", "") for p in event.content.parts
-                    ),
-                })
+                self._history.append(
+                    {
+                        "role": getattr(event.content, "role", "assistant"),
+                        "text": "".join(getattr(p, "text", "") for p in event.content.parts),
+                    }
+                )
 
         return context.run_id
 
@@ -180,7 +181,5 @@ class ADKRunner(BaseFrameworkRunner):
             "session_id": self._session.config.session_id,
         }
 
-    async def _do_restore_checkpoint(
-        self, framework_state: dict[str, object]
-    ) -> None:
+    async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
         self._history = framework_state.get("history", [])  # type: ignore[assignment]

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from citnega.packages.storage.path_resolver import PathResolver
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture

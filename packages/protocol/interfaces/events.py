@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+if TYPE_CHECKING:
+    import asyncio
 
-from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.callables.results import InvokeResult
-from citnega.packages.protocol.events import CanonicalEvent
+    from pydantic import BaseModel
+
+    from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.callables.results import InvokeResult
+    from citnega.packages.protocol.events import CanonicalEvent
 
 
 class IEventEmitter(ABC):

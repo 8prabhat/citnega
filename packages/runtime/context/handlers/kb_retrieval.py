@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.interfaces.context import IContextHandler
 from citnega.packages.protocol.models.context import ContextObject, ContextSource
-from citnega.packages.protocol.models.sessions import Session
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.interfaces.knowledge_store import IKnowledgeStore
+    from citnega.packages.protocol.models.sessions import Session
 
 _CHARS_PER_TOKEN = 4
 
@@ -40,10 +40,10 @@ class KBRetrievalHandler(IContextHandler):
 
     def __init__(
         self,
-        kb_store: "IKnowledgeStore | None" = None,
+        kb_store: IKnowledgeStore | None = None,
         retrieve_limit: int = 5,
     ) -> None:
-        self._kb_store       = kb_store
+        self._kb_store = kb_store
         self._retrieve_limit = retrieve_limit
 
     async def enrich(self, context: ContextObject, session: Session) -> ContextObject:
@@ -57,19 +57,15 @@ class KBRetrievalHandler(IContextHandler):
             return context
 
         try:
-            results = await self._kb_store.search(
-                query, limit=self._retrieve_limit
-            )
+            results = await self._kb_store.search(query, limit=self._retrieve_limit)
         except Exception:
-            return context   # KB errors are non-fatal
+            return context  # KB errors are non-fatal
 
         if not results:
             return context
 
         # Build one ContextSource for all KB snippets combined
-        snippets = "\n\n".join(
-            f"[KB: {r.item.title}]\n{r.item.content}" for r in results
-        )
+        snippets = "\n\n".join(f"[KB: {r.item.title}]\n{r.item.content}" for r in results)
         token_count = len(snippets) // _CHARS_PER_TOKEN
 
         new_source = ContextSource(
@@ -78,13 +74,15 @@ class KBRetrievalHandler(IContextHandler):
             token_count=token_count,
             metadata={
                 "result_count": len(results),
-                "top_score":    results[0].score if results else 0.0,
+                "top_score": results[0].score if results else 0.0,
             },
         )
 
-        updated_sources = list(context.sources) + [new_source]
-        return context.model_copy(update={
-            "sources":         updated_sources,
-            "total_tokens":    context.total_tokens + token_count,
-            "budget_remaining": max(0, context.budget_remaining - token_count),
-        })
+        updated_sources = [*list(context.sources), new_source]
+        return context.model_copy(
+            update={
+                "sources": updated_sources,
+                "total_tokens": context.total_tokens + token_count,
+                "budget_remaining": max(0, context.budget_remaining - token_count),
+            }
+        )

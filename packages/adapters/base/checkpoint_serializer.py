@@ -21,11 +21,11 @@ Blob format (gzip-compressed JSON)::
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import gzip
 import json
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 
 from citnega.packages.protocol.models.checkpoints import CheckpointMeta
 
@@ -51,15 +51,15 @@ class CheckpointSerializer:
         Returns CheckpointMeta with the file path and size.
         """
         checkpoint_id = str(uuid.uuid4())
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
 
         blob = {
             "schema_version": SCHEMA_VERSION,
-            "checkpoint_id":  checkpoint_id,
-            "session_id":     session_id,
-            "run_id":         run_id,
+            "checkpoint_id": checkpoint_id,
+            "session_id": session_id,
+            "run_id": run_id,
             "framework_name": self._framework,
-            "created_at":     now.isoformat(),
+            "created_at": now.isoformat(),
             "framework_state": framework_state,
         }
 
@@ -69,10 +69,14 @@ class CheckpointSerializer:
         compressed = gzip.compress(raw)
         path.write_bytes(compressed)
 
-        state_summary = json.dumps({
-            k: v for k, v in framework_state.items()
-            if isinstance(v, (str, int, float, bool, type(None)))
-        }, default=str)[:256]
+        state_summary = json.dumps(
+            {
+                k: v
+                for k, v in framework_state.items()
+                if isinstance(v, (str, int, float, bool, type(None)))
+            },
+            default=str,
+        )[:256]
 
         return CheckpointMeta(
             checkpoint_id=checkpoint_id,

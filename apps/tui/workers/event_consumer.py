@@ -9,10 +9,10 @@ message to the App so that the main thread can update widgets safely.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 
 from textual.message import Message
-from textual.worker import Worker, WorkerState
 
 from citnega.packages.protocol.events import (
     ApprovalRequestEvent,
@@ -30,8 +30,10 @@ if TYPE_CHECKING:
 
 # ── Textual messages emitted to the App ───────────────────────────────────────
 
+
 class EventReceived(Message):
     """Generic wrapper — carries any canonical event to the App."""
+
     def __init__(self, event: CanonicalEvent) -> None:
         super().__init__()
         self.event = event
@@ -39,6 +41,7 @@ class EventReceived(Message):
 
 class RunStarted(Message):
     """Emitted when the first RunStateEvent (PENDING→CONTEXT_ASSEMBLING) arrives."""
+
     def __init__(self, run_id: str) -> None:
         super().__init__()
         self.run_id = run_id
@@ -46,31 +49,42 @@ class RunStarted(Message):
 
 class RunFinished(Message):
     """Emitted when RunCompleteEvent arrives."""
+
     def __init__(self, run_id: str, final_state: str) -> None:
         super().__init__()
-        self.run_id      = run_id
+        self.run_id = run_id
         self.final_state = final_state
 
 
 class TokenReceived(Message):
     """Emitted for each streaming token."""
+
     def __init__(self, run_id: str, token: str) -> None:
         super().__init__()
         self.run_id = run_id
-        self.token  = token
+        self.token = token
 
 
 class ToolCallStarted(Message):
     """Emitted when a callable starts executing."""
-    def __init__(self, run_id: str, callable_name: str, event_id: str) -> None:
+
+    def __init__(
+        self,
+        run_id: str,
+        callable_name: str,
+        event_id: str,
+        input_summary: str = "",
+    ) -> None:
         super().__init__()
-        self.run_id        = run_id
+        self.run_id = run_id
         self.callable_name = callable_name
-        self.event_id      = event_id
+        self.event_id = event_id
+        self.input_summary = input_summary
 
 
 class ToolCallFinished(Message):
     """Emitted when a callable finishes."""
+
     def __init__(
         self,
         run_id: str,
@@ -79,23 +93,25 @@ class ToolCallFinished(Message):
         output_summary: str,
     ) -> None:
         super().__init__()
-        self.run_id         = run_id
-        self.callable_name  = callable_name
-        self.success        = success
+        self.run_id = run_id
+        self.callable_name = callable_name
+        self.success = success
         self.output_summary = output_summary
 
 
 class ThinkingReceived(Message):
     """Emitted for each reasoning token inside a <think>…</think> block."""
+
     def __init__(self, run_id: str, token: str, is_final: bool = False) -> None:
         super().__init__()
-        self.run_id   = run_id
-        self.token    = token
+        self.run_id = run_id
+        self.token = token
         self.is_final = is_final
 
 
 class ApprovalRequested(Message):
     """Emitted when a tool execution needs user approval."""
+
     def __init__(
         self,
         run_id: str,
@@ -104,13 +120,14 @@ class ApprovalRequested(Message):
         input_summary: str,
     ) -> None:
         super().__init__()
-        self.run_id        = run_id
-        self.approval_id   = approval_id
+        self.run_id = run_id
+        self.approval_id = approval_id
         self.callable_name = callable_name
         self.input_summary = input_summary
 
 
 # ── Worker ────────────────────────────────────────────────────────────────────
+
 
 class EventConsumerWorker:
     """
@@ -126,13 +143,13 @@ class EventConsumerWorker:
 
     def __init__(
         self,
-        app: "App",
-        service: object,    # ApplicationService
+        app: App,
+        service: object,  # ApplicationService
         run_id: str,
     ) -> None:
-        self._app     = app
+        self._app = app
         self._service = service
-        self._run_id  = run_id
+        self._run_id = run_id
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -145,10 +162,8 @@ class EventConsumerWorker:
         """Cancel and wait for the drain task to finish."""
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                 await asyncio.wait_for(asyncio.shield(self._task), timeout=2.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
 
     async def _drain(self) -> None:
         """Consume events until RunCompleteEvent or task cancellation."""
@@ -160,7 +175,8 @@ class EventConsumerWorker:
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            # Worker errors are non-fatal — log and finish
+            # Worker errors are non-fatal — notify user and finish
+            self._app.notify(f"Stream error: {exc}", severity="error", timeout=8)
             self._app.post_message(RunFinished(self._run_id, f"error: {exc}"))
 
     def _dispatch(self, event: CanonicalEvent) -> None:
@@ -181,27 +197,34 @@ class EventConsumerWorker:
             app.post_message(RunFinished(self._run_id, event.final_state.value))
 
         elif isinstance(event, CallableStartEvent):
-            app.post_message(ToolCallStarted(
-                self._run_id,
-                event.callable_name or "",
-                event.event_id,
-            ))
+            app.post_message(
+                ToolCallStarted(
+                    self._run_id,
+                    event.callable_name or "",
+                    event.event_id,
+                    event.input_summary,
+                )
+            )
 
         elif isinstance(event, CallableEndEvent):
-            app.post_message(ToolCallFinished(
-                self._run_id,
-                event.callable_name or "",
-                success=event.error_code is None,
-                output_summary=event.output_summary or "",
-            ))
+            app.post_message(
+                ToolCallFinished(
+                    self._run_id,
+                    event.callable_name or "",
+                    success=event.error_code is None,
+                    output_summary=event.output_summary or "",
+                )
+            )
 
         elif isinstance(event, ApprovalRequestEvent):
-            app.post_message(ApprovalRequested(
-                self._run_id,
-                event.approval_id,
-                event.callable_name,
-                event.input_summary,
-            ))
+            app.post_message(
+                ApprovalRequested(
+                    self._run_id,
+                    event.approval_id,
+                    event.callable_name,
+                    event.input_summary,
+                )
+            )
 
         # All events are also posted as generic EventReceived for extensibility
         app.post_message(EventReceived(event))

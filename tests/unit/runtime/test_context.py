@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
 from citnega.packages.protocol.models.context import ContextObject, ContextSource
 from citnega.packages.protocol.models.messages import Message, MessageRole
 from citnega.packages.protocol.models.runs import RunState, RunSummary, StateSnapshot
-from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
+from citnega.packages.protocol.models.sessions import Session, SessionConfig
 from citnega.packages.runtime.context.assembler import ContextAssembler
 from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
 from citnega.packages.runtime.context.handlers.recent_turns import RecentTurnsHandler
@@ -19,12 +18,11 @@ from citnega.packages.runtime.context.handlers.runtime_state import RuntimeState
 from citnega.packages.runtime.context.handlers.session_summary import SessionSummaryHandler
 from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_NOW = datetime(2025, 1, 1, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _session(max_context_tokens: int = 8192, kb_enabled: bool = True) -> Session:
@@ -75,6 +73,7 @@ def _run_summary(state: RunState = RunState.COMPLETED) -> RunSummary:
 # RecentTurnsHandler
 # ---------------------------------------------------------------------------
 
+
 class TestRecentTurnsHandler:
     @pytest.mark.asyncio
     async def test_adds_source(self) -> None:
@@ -105,6 +104,7 @@ class TestRecentTurnsHandler:
 # SessionSummaryHandler
 # ---------------------------------------------------------------------------
 
+
 class TestSessionSummaryHandler:
     @pytest.mark.asyncio
     async def test_adds_summary_source(self) -> None:
@@ -131,6 +131,7 @@ class TestSessionSummaryHandler:
 # KBRetrievalHandler (stub)
 # ---------------------------------------------------------------------------
 
+
 class TestKBRetrievalHandler:
     @pytest.mark.asyncio
     async def test_stub_passthrough(self) -> None:
@@ -155,6 +156,7 @@ class TestKBRetrievalHandler:
 # RuntimeStateHandler
 # ---------------------------------------------------------------------------
 
+
 class TestRuntimeStateHandler:
     @pytest.mark.asyncio
     async def test_no_snapshot_returns_unchanged(self) -> None:
@@ -167,16 +169,18 @@ class TestRuntimeStateHandler:
     @pytest.mark.asyncio
     async def test_snapshot_adds_state_source(self) -> None:
         handler = RuntimeStateHandler()
-        handler.set_snapshot(StateSnapshot(
-            session_id="sess-1",
-            current_run_id="run-1",
-            active_callable=None,
-            run_state=RunState.EXECUTING,
-            context_token_count=100,
-            checkpoint_available=False,
-            framework_name="adk",
-            captured_at=_NOW,
-        ))
+        handler.set_snapshot(
+            StateSnapshot(
+                session_id="sess-1",
+                current_run_id="run-1",
+                active_callable=None,
+                run_state=RunState.EXECUTING,
+                context_token_count=100,
+                checkpoint_available=False,
+                framework_name="adk",
+                captured_at=_NOW,
+            )
+        )
         session = _session()
         ctx = await handler.enrich(_empty_context(session), session)
         assert len(ctx.sources) == 1
@@ -188,6 +192,7 @@ class TestRuntimeStateHandler:
 # TokenBudgetHandler
 # ---------------------------------------------------------------------------
 
+
 class TestTokenBudgetHandler:
     @pytest.mark.asyncio
     async def test_within_budget_no_truncation(self) -> None:
@@ -195,9 +200,7 @@ class TestTokenBudgetHandler:
         session = _session(max_context_tokens=1000)
         # 10 token source
         source = ContextSource(source_type="recent_turns", content="x" * 40, token_count=10)
-        ctx = _empty_context(session).model_copy(
-            update={"sources": [source], "total_tokens": 10}
-        )
+        ctx = _empty_context(session).model_copy(update={"sources": [source], "total_tokens": 10})
         result = await handler.enrich(ctx, session)
         assert not result.truncated
         assert len(result.sources) == 1
@@ -231,6 +234,7 @@ class TestTokenBudgetHandler:
 # ContextAssembler (full chain)
 # ---------------------------------------------------------------------------
 
+
 class TestContextAssembler:
     @pytest.mark.asyncio
     async def test_chain_runs_all_handlers(self) -> None:
@@ -239,18 +243,22 @@ class TestContextAssembler:
         class TrackingHandler:
             def __init__(self, n: str) -> None:
                 self._name = n
+
             @property
             def name(self) -> str:
                 return self._name
+
             async def enrich(self, ctx: ContextObject, session: Session) -> ContextObject:
                 call_order.append(self._name)
                 return ctx
 
-        assembler = ContextAssembler([
-            TrackingHandler("a"),
-            TrackingHandler("b"),
-            TrackingHandler("c"),
-        ])
+        assembler = ContextAssembler(
+            [
+                TrackingHandler("a"),
+                TrackingHandler("b"),
+                TrackingHandler("c"),
+            ]
+        )
         session = _session()
         await assembler.assemble(session, "hello", "run-1")
         assert call_order == ["a", "b", "c"]
@@ -261,17 +269,22 @@ class TestContextAssembler:
             @property
             def name(self) -> str:
                 return "ok"
+
             async def enrich(self, ctx: ContextObject, session: Session) -> ContextObject:
                 return ctx.model_copy(
-                    update={"sources": ctx.sources + [
-                        ContextSource(source_type="ok", content="x", token_count=1)
-                    ]}
+                    update={
+                        "sources": [
+                            *ctx.sources,
+                            ContextSource(source_type="ok", content="x", token_count=1),
+                        ]
+                    }
                 )
 
         class BrokenHandler:
             @property
             def name(self) -> str:
                 return "broken"
+
             async def enrich(self, ctx: ContextObject, session: Session) -> ContextObject:
                 raise RuntimeError("DB gone")
 
@@ -294,24 +307,28 @@ class TestContextAssembler:
         run_repo.list.return_value = [_run_summary()]
 
         state_handler = RuntimeStateHandler()
-        state_handler.set_snapshot(StateSnapshot(
-            session_id="sess-1",
-            current_run_id="run-1",
-            active_callable=None,
-            run_state=RunState.EXECUTING,
-            context_token_count=50,
-            checkpoint_available=False,
-            framework_name="adk",
-            captured_at=_NOW,
-        ))
+        state_handler.set_snapshot(
+            StateSnapshot(
+                session_id="sess-1",
+                current_run_id="run-1",
+                active_callable=None,
+                run_state=RunState.EXECUTING,
+                context_token_count=50,
+                checkpoint_available=False,
+                framework_name="adk",
+                captured_at=_NOW,
+            )
+        )
 
-        assembler = ContextAssembler([
-            RecentTurnsHandler(msg_repo, recent_turns_count=10),
-            SessionSummaryHandler(run_repo),
-            KBRetrievalHandler(),
-            state_handler,
-            TokenBudgetHandler(max_context_tokens=8192),
-        ])
+        assembler = ContextAssembler(
+            [
+                RecentTurnsHandler(msg_repo, recent_turns_count=10),
+                SessionSummaryHandler(run_repo),
+                KBRetrievalHandler(),
+                state_handler,
+                TokenBudgetHandler(max_context_tokens=8192),
+            ]
+        )
 
         session = _session()
         ctx = await assembler.assemble(session, "What is the weather?", "run-1")

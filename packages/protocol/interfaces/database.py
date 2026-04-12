@@ -16,9 +16,7 @@ class IDatabase(ABC):
     async def disconnect(self) -> None: ...
 
     @abstractmethod
-    async def execute(
-        self, sql: str, parameters: tuple[Any, ...] | None = None
-    ) -> Any: ...
+    async def execute(self, sql: str, parameters: tuple[Any, ...] | None = None) -> Any: ...
 
     @abstractmethod
     async def fetchall(

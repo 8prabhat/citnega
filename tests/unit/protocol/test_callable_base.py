@@ -7,22 +7,20 @@ Tests verify the execution skeleton:
 
 from __future__ import annotations
 
-import asyncio
-from typing import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from pydantic import BaseModel
+import pytest
 
 from citnega.packages.protocol.callables.base import BaseCallable
 from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.results import InvokeResult, StreamChunk, StreamChunkKind
+from citnega.packages.protocol.callables.results import StreamChunkKind
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
 from citnega.packages.protocol.models.sessions import SessionConfig
-from citnega.packages.shared.errors import CitnegaError, CallablePolicyError
-
+from citnega.packages.shared.errors import CallablePolicyError, CitnegaError
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 class _Input(BaseModel):
     value: str
@@ -33,12 +31,12 @@ class _Output(BaseModel):
 
 
 class _SuccessCallable(BaseCallable):
-    name          = "success_tool"
-    description   = "Always succeeds"
+    name = "success_tool"
+    description = "Always succeeds"
     callable_type = CallableType.TOOL
-    input_schema  = _Input
+    input_schema = _Input
     output_schema = _Output
-    policy        = CallablePolicy()
+    policy = CallablePolicy()
 
     async def _execute(self, input: BaseModel, context: CallContext) -> BaseModel:
         assert isinstance(input, _Input)
@@ -46,10 +44,10 @@ class _SuccessCallable(BaseCallable):
 
 
 class _CitnegaErrorCallable(BaseCallable):
-    name          = "citnega_error_tool"
-    description   = "Raises CitnegaError"
+    name = "citnega_error_tool"
+    description = "Raises CitnegaError"
     callable_type = CallableType.TOOL
-    input_schema  = _Input
+    input_schema = _Input
     output_schema = _Output
 
     async def _execute(self, input: BaseModel, context: CallContext) -> BaseModel:
@@ -57,10 +55,10 @@ class _CitnegaErrorCallable(BaseCallable):
 
 
 class _UnhandledErrorCallable(BaseCallable):
-    name          = "unhandled_error_tool"
-    description   = "Raises unhandled exception"
+    name = "unhandled_error_tool"
+    description = "Raises unhandled exception"
     callable_type = CallableType.TOOL
-    input_schema  = _Input
+    input_schema = _Input
     output_schema = _Output
 
     async def _execute(self, input: BaseModel, context: CallContext) -> BaseModel:
@@ -85,23 +83,26 @@ def _make_deps() -> tuple[AsyncMock, MagicMock, MagicMock]:
     policy_enforcer = AsyncMock()
     policy_enforcer.enforce.return_value = None
     policy_enforcer.check_output_size.return_value = None
+
     # run_with_timeout must actually await the coroutine so _execute runs
-    async def _run_with_timeout(callable_obj, coro, context, emitter):  # noqa: ANN001
+    async def _run_with_timeout(callable_obj, coro, context, emitter):
         return await coro
+
     policy_enforcer.run_with_timeout.side_effect = _run_with_timeout
-    event_emitter   = MagicMock()
-    tracer          = MagicMock()
+    event_emitter = MagicMock()
+    tracer = MagicMock()
     return policy_enforcer, event_emitter, tracer
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
+
 
 class TestBaseCallableSuccess:
     @pytest.mark.asyncio
     async def test_returns_invoke_result_on_success(self) -> None:
         pe, ee, tr = _make_deps()
         tool = _SuccessCallable(pe, ee, tr)
-        ctx  = _make_context()
+        ctx = _make_context()
 
         result = await tool.invoke(_Input(value="hello"), ctx)
 

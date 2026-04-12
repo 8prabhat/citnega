@@ -15,24 +15,26 @@ Routing logic (StaticPriorityPolicy order):
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCoreAgent
-from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.interfaces import IInvocable
 from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
-from citnega.packages.shared.errors import CallableError
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class ConversationInput(BaseModel):
-    user_input: str  = Field(description="The user's message or request.")
+    user_input: str = Field(description="The user's message or request.")
     session_context: str = Field(default="", description="Optional assembled context string.")
 
 
 class ConversationOutput(BaseModel):
-    response:    str        = Field(description="Agent's text response.")
-    routed_to:   str | None = Field(default=None, description="Specialist routed to, if any.")
-    tool_calls:  list[str]  = Field(default_factory=list)
+    response: str = Field(description="Agent's text response.")
+    routed_to: str | None = Field(default=None, description="Specialist routed to, if any.")
+    tool_calls: list[str] = Field(default_factory=list)
 
 
 # Keyword → specialist name mapping (ordered by specificity)
@@ -40,7 +42,10 @@ _ROUTING_KEYWORDS: list[tuple[list[str], str]] = [
     (["research", "search the web", "look up", "find online"], "research_agent"),
     (["summarise", "summarize", "tldr", "tl;dr", "brief summary"], "summary_agent"),
     (["read file", "write file", "create file", "list dir", "search files"], "file_agent"),
-    (["analyse data", "analyze data", "data analysis", "run script", "csv", "json data"], "data_agent"),
+    (
+        ["analyse data", "analyze data", "data analysis", "run script", "csv", "json data"],
+        "data_agent",
+    ),
     (["draft", "write an essay", "rewrite", "edit text", "translate"], "writing_agent"),
 ]
 
@@ -55,12 +60,12 @@ def _route(user_input: str) -> str | None:
 
 
 class ConversationAgent(BaseCoreAgent):
-    name          = "conversation_agent"
-    description   = "Primary conversational agent with hybrid specialist routing."
+    name = "conversation_agent"
+    description = "Primary conversational agent with hybrid specialist routing."
     callable_type = CallableType.CORE
-    input_schema  = ConversationInput
+    input_schema = ConversationInput
     output_schema = ConversationOutput
-    policy        = CallablePolicy(
+    policy = CallablePolicy(
         timeout_seconds=300.0,
         requires_approval=False,
         network_allowed=True,
@@ -73,9 +78,7 @@ class ConversationAgent(BaseCoreAgent):
         "Never make up facts. Cite sources when available."
     )
 
-    async def _execute(
-        self, input: ConversationInput, context: CallContext
-    ) -> ConversationOutput:
+    async def _execute(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
         # Try specialist routing
         specialist_name = _route(input.user_input)
         if specialist_name:
@@ -87,8 +90,7 @@ class ConversationAgent(BaseCoreAgent):
                 child_ctx = context.child(self.name, self.callable_type)
                 # Build appropriate input for the specialist
                 spec_input = specialist.input_schema.model_validate(
-                    {"task": input.user_input, "query": input.user_input,
-                     "text": input.user_input}
+                    {"task": input.user_input, "query": input.user_input, "text": input.user_input}
                 )
                 result = await specialist.invoke(spec_input, child_ctx)
                 if result.success and result.output:
@@ -107,14 +109,17 @@ class ConversationAgent(BaseCoreAgent):
             )
 
         from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
+
         messages = [
             ModelMessage(role="system", content=self.SYSTEM_PROMPT),
         ]
         if input.session_context:
-            messages.append(ModelMessage(
-                role="system",
-                content=f"Session context:\n{input.session_context}",
-            ))
+            messages.append(
+                ModelMessage(
+                    role="system",
+                    content=f"Session context:\n{input.session_context}",
+                )
+            )
         messages.append(ModelMessage(role="user", content=input.user_input))
 
         response = await context.model_gateway.generate(

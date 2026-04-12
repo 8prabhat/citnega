@@ -19,5 +19,5 @@ class ThinkingEvent(BaseEvent):
     """
 
     event_type: str = "ThinkingEvent"
-    token:      str
-    is_final:   bool = False   # True on the last chunk before </think>
+    token: str
+    is_final: bool = False  # True on the last chunk before </think>

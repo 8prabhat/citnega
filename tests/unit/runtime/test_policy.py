@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-import pytest_asyncio
 
 from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
+from citnega.packages.protocol.callables.types import CallablePolicy
 from citnega.packages.protocol.models.approvals import ApprovalStatus
 from citnega.packages.protocol.models.sessions import SessionConfig
 from citnega.packages.runtime.events.emitter import EventEmitter
@@ -26,10 +24,10 @@ from citnega.packages.shared.errors import (
     PathNotAllowedError,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _session_config(**kwargs: object) -> SessionConfig:
     return SessionConfig(
@@ -66,6 +64,7 @@ def _fake_callable(policy: CallablePolicy, name: str = "fake_tool") -> IInvocabl
 # ---------------------------------------------------------------------------
 # ApprovalManager
 # ---------------------------------------------------------------------------
+
 
 class TestApprovalManager:
     @pytest.mark.asyncio
@@ -139,6 +138,7 @@ async def _deny_after(mgr: ApprovalManager, aid: str, delay: float) -> None:
 # depth_check
 # ---------------------------------------------------------------------------
 
+
 class TestDepthCheck:
     @pytest.mark.asyncio
     async def test_within_limit_passes(self) -> None:
@@ -162,9 +162,10 @@ class TestDepthCheck:
 # path_check
 # ---------------------------------------------------------------------------
 
+
 class TestPathCheck:
     @pytest.mark.asyncio
-    async def test_no_allowed_paths_passes(self, tmp_path: "pytest.TempDir") -> None:
+    async def test_no_allowed_paths_passes(self, tmp_path: pytest.TempDir) -> None:
         from pydantic import BaseModel as BM
 
         class Input(BM):
@@ -176,7 +177,7 @@ class TestPathCheck:
         await enforcer.enforce(callable_, Input(), _context())
 
     @pytest.mark.asyncio
-    async def test_path_within_allowed_passes(self, tmp_path: "pytest.TempDir") -> None:
+    async def test_path_within_allowed_passes(self, tmp_path: pytest.TempDir) -> None:
         from pydantic import BaseModel as BM
 
         class Input(BM):
@@ -190,8 +191,9 @@ class TestPathCheck:
         await enforcer.enforce(callable_, Input(), _context())
 
     @pytest.mark.asyncio
-    async def test_path_outside_allowed_raises(self, tmp_path: "pytest.TempDir") -> None:
+    async def test_path_outside_allowed_raises(self, tmp_path: pytest.TempDir) -> None:
         import tempfile
+
         from pydantic import BaseModel as BM
 
         other = tempfile.mkdtemp()
@@ -201,13 +203,12 @@ class TestPathCheck:
 
         # Create the file so it can be resolved
         import pathlib
+
         pathlib.Path(other + "/secret.txt").touch()
 
         emitter = EventEmitter()
         enforcer = PolicyEnforcer(emitter, ApprovalManager())
-        callable_ = _fake_callable(_policy(
-            allowed_paths=[str(tmp_path)], requires_approval=False
-        ))
+        callable_ = _fake_callable(_policy(allowed_paths=[str(tmp_path)], requires_approval=False))
         with pytest.raises(PathNotAllowedError):
             await enforcer.enforce(callable_, Input(), _context())
 
@@ -215,6 +216,7 @@ class TestPathCheck:
 # ---------------------------------------------------------------------------
 # timeout helpers
 # ---------------------------------------------------------------------------
+
 
 class TestRunWithTimeout:
     @pytest.mark.asyncio
@@ -252,6 +254,7 @@ class TestRunWithTimeout:
 # output_size check
 # ---------------------------------------------------------------------------
 
+
 class TestCheckOutputSize:
     @pytest.mark.asyncio
     async def test_within_limit_passes(self) -> None:
@@ -278,6 +281,7 @@ class TestCheckOutputSize:
 # ---------------------------------------------------------------------------
 # approval_check (via full enforcer)
 # ---------------------------------------------------------------------------
+
 
 class TestApprovalCheck:
     @pytest.mark.asyncio
@@ -306,6 +310,7 @@ class TestApprovalCheck:
 
         task = asyncio.create_task(_approve_first_pending())
         from unittest.mock import MagicMock as MM
+
         await enforcer.enforce(callable_, MM(), ctx)
         await task
 
@@ -327,6 +332,7 @@ class TestApprovalCheck:
 
         asyncio.create_task(_deny_first_pending())
         from unittest.mock import MagicMock as MM
+
         with pytest.raises(ApprovalDeniedError):
             await enforcer.enforce(callable_, MM(), ctx)
 
@@ -339,5 +345,6 @@ class TestApprovalCheck:
         ctx = _context(session_config=_session_config(approval_timeout_seconds=0.05))
 
         from unittest.mock import MagicMock as MM
+
         with pytest.raises(ApprovalTimeoutError):
             await enforcer.enforce(callable_, MM(), ctx)

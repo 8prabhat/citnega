@@ -19,45 +19,46 @@ FSM transitions (enforced by RunManager):
 from __future__ import annotations
 
 import asyncio
-import uuid
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+import uuid
 
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.callables.types import CallableMetadata
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.lifecycle import RunCompleteEvent, RunStateEvent
-from citnega.packages.protocol.interfaces.context import IContextAssembler
 from citnega.packages.protocol.interfaces.runtime import IRuntime
 from citnega.packages.protocol.models.runs import RunState, StateSnapshot
-from citnega.packages.protocol.models.sessions import SessionConfig
-from citnega.packages.runtime.events.emitter import EventEmitter
-from citnega.packages.runtime.runs import RunManager
-from citnega.packages.runtime.sessions import SessionManager
 from citnega.packages.shared.errors import (
     RunNotFoundError,
-    RuntimeError as CitnegaRuntimeError,
-    SessionNotFoundError,
 )
-from citnega.packages.shared.registry import BaseRegistry
+from citnega.packages.shared.errors import (
+    RuntimeError as CitnegaRuntimeError,
+)
 
 if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.callables.types import CallableMetadata
+    from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.interfaces.adapter import IFrameworkAdapter, IFrameworkRunner
-    from citnega.packages.protocol.models.sessions import Session
+    from citnega.packages.protocol.interfaces.context import IContextAssembler
+    from citnega.packages.protocol.models.sessions import Session, SessionConfig
+    from citnega.packages.runtime.events.emitter import EventEmitter
+    from citnega.packages.runtime.runs import RunManager
+    from citnega.packages.runtime.sessions import SessionManager
+    from citnega.packages.shared.registry import BaseRegistry
 
 
 class _ActiveRun:
     """Book-keeping for a single in-flight run."""
 
-    __slots__ = ("run_id", "session_id", "task", "runner", "cancelled")
+    __slots__ = ("cancelled", "run_id", "runner", "session_id", "task")
 
     def __init__(
         self,
         run_id: str,
         session_id: str,
         task: asyncio.Task[None],
-        runner: "IFrameworkRunner",
+        runner: IFrameworkRunner,
     ) -> None:
         self.run_id = run_id
         self.session_id = session_id
@@ -79,9 +80,9 @@ class CoreRuntime(IRuntime):
         session_manager: SessionManager,
         run_manager: RunManager,
         context_assembler: IContextAssembler,
-        framework_adapter: "IFrameworkAdapter",
+        framework_adapter: IFrameworkAdapter,
         event_emitter: EventEmitter,
-        callable_registry: "BaseRegistry[IInvocable]",
+        callable_registry: BaseRegistry[IInvocable],
     ) -> None:
         self._sessions = session_manager
         self._runs = run_manager
@@ -101,7 +102,7 @@ class CoreRuntime(IRuntime):
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    async def create_session(self, config: SessionConfig) -> "Session":
+    async def create_session(self, config: SessionConfig) -> Session:
         session = await self._sessions.create(config)
         # Eagerly create the framework runner for this session
         runner = await self._adapter.create_runner(
@@ -114,7 +115,7 @@ class CoreRuntime(IRuntime):
             if config.session_id not in self._session_locks:
                 self._session_locks[config.session_id] = asyncio.Lock()
         # Store runner in a separate dict keyed by session_id
-        self._runners: dict[str, "IFrameworkRunner"]
+        self._runners: dict[str, IFrameworkRunner]
         if not hasattr(self, "_runners"):
             self._runners = {}
         self._runners[config.session_id] = runner
@@ -194,27 +195,29 @@ class CoreRuntime(IRuntime):
 
     async def _execute_turn(
         self,
-        session: "Session",
+        session: Session,
         run_id: str,
         turn_id: str,
         user_input: str,
-        runner: "IFrameworkRunner",
+        runner: IFrameworkRunner,
     ) -> None:
         """Background task: drive the full turn FSM."""
         session_id = session.config.session_id
-        queue = self._emitter.get_queue(run_id)
+        self._emitter.get_queue(run_id)
 
         async def _transition(new_state: RunState, reason: str | None = None) -> None:
             run = await self._runs.get(run_id)
-            updated = await self._runs.transition(run_id, new_state)
-            self._emitter.emit(RunStateEvent(
-                session_id=session_id,
-                run_id=run_id,
-                turn_id=turn_id,
-                from_state=run.state,
-                to_state=new_state,
-                reason=reason,
-            ))
+            await self._runs.transition(run_id, new_state)
+            self._emitter.emit(
+                RunStateEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    from_state=run.state,
+                    to_state=new_state,
+                    reason=reason,
+                )
+            )
 
         try:
             # 1. PENDING → CONTEXT_ASSEMBLING
@@ -222,9 +225,7 @@ class CoreRuntime(IRuntime):
             await self._sessions.touch(session_id)
 
             # 2. Assemble context
-            context_obj = await self._assembler.assemble(
-                session, user_input, run_id
-            )
+            context_obj = await self._assembler.assemble(session, user_input, run_id)
 
             # 3. CONTEXT_ASSEMBLING → EXECUTING
             await _transition(RunState.EXECUTING)
@@ -242,14 +243,16 @@ class CoreRuntime(IRuntime):
             if run.state not in (RunState.COMPLETED, RunState.FAILED):
                 try:
                     await self._runs.transition(run_id, RunState.CANCELLED)
-                    self._emitter.emit(RunStateEvent(
-                        session_id=session_id,
-                        run_id=run_id,
-                        turn_id=turn_id,
-                        from_state=run.state,
-                        to_state=RunState.CANCELLED,
-                        reason="cancelled",
-                    ))
+                    self._emitter.emit(
+                        RunStateEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            turn_id=turn_id,
+                            from_state=run.state,
+                            to_state=RunState.CANCELLED,
+                            reason="cancelled",
+                        )
+                    )
                 except Exception:
                     pass
             raise
@@ -265,14 +268,16 @@ class CoreRuntime(IRuntime):
             if run.state not in (RunState.COMPLETED, RunState.CANCELLED):
                 try:
                     await self._runs.transition(run_id, RunState.FAILED, error=str(exc))
-                    self._emitter.emit(RunStateEvent(
-                        session_id=session_id,
-                        run_id=run_id,
-                        turn_id=turn_id,
-                        from_state=run.state,
-                        to_state=RunState.FAILED,
-                        reason=str(exc),
-                    ))
+                    self._emitter.emit(
+                        RunStateEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            turn_id=turn_id,
+                            from_state=run.state,
+                            to_state=RunState.FAILED,
+                            reason=str(exc),
+                        )
+                    )
                 except Exception:
                     pass
 
@@ -286,26 +291,30 @@ class CoreRuntime(IRuntime):
             if run.state not in (RunState.COMPLETED, RunState.CANCELLED):
                 try:
                     await self._runs.transition(run_id, RunState.FAILED, error=str(exc))
-                    self._emitter.emit(RunStateEvent(
-                        session_id=session_id,
-                        run_id=run_id,
-                        turn_id=turn_id,
-                        from_state=run.state,
-                        to_state=RunState.FAILED,
-                        reason=str(exc),
-                    ))
+                    self._emitter.emit(
+                        RunStateEvent(
+                            session_id=session_id,
+                            run_id=run_id,
+                            turn_id=turn_id,
+                            from_state=run.state,
+                            to_state=RunState.FAILED,
+                            reason=str(exc),
+                        )
+                    )
                 except Exception:
                     pass
 
         finally:
             # Emit terminal sentinel regardless of outcome
             run = await self._runs.get(run_id)
-            self._emitter.emit(RunCompleteEvent(
-                session_id=session_id,
-                run_id=run_id,
-                turn_id=turn_id,
-                final_state=run.state,
-            ))
+            self._emitter.emit(
+                RunCompleteEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    final_state=run.state,
+                )
+            )
             # Note: close_queue is NOT called here — the consumer (stream_events)
             # owns cleanup once it has read RunCompleteEvent.
 
@@ -332,10 +341,8 @@ class CoreRuntime(IRuntime):
         active.cancelled = True
         active.task.cancel()
         # Wait briefly for cancellation to propagate
-        try:
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(active.task), timeout=5.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
 
     async def _find_active_by_run(self, run_id: str) -> _ActiveRun:
         async with self._active_lock:
@@ -349,7 +356,7 @@ class CoreRuntime(IRuntime):
     # ------------------------------------------------------------------
 
     async def get_state_snapshot(self, session_id: str) -> StateSnapshot:
-        session = await self._sessions.get(session_id)
+        await self._sessions.get(session_id)
         async with self._active_lock:
             active = self._active.get(session_id)
 
@@ -364,7 +371,7 @@ class CoreRuntime(IRuntime):
                 context_token_count=runner_snapshot.context_token_count,
                 checkpoint_available=runner_snapshot.checkpoint_available,
                 framework_name=self._adapter.framework_name,
-                captured_at=datetime.now(tz=timezone.utc),
+                captured_at=datetime.now(tz=UTC),
             )
 
         return StateSnapshot(
@@ -375,7 +382,7 @@ class CoreRuntime(IRuntime):
             context_token_count=0,
             checkpoint_available=False,
             framework_name=self._adapter.framework_name,
-            captured_at=datetime.now(tz=timezone.utc),
+            captured_at=datetime.now(tz=UTC),
         )
 
     # ------------------------------------------------------------------

@@ -15,55 +15,57 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class RuntimeSettings(BaseSettings):
-    framework:           str  = "adk"
-    default_model_id:    str  = "gemma3-12b-local"
-    local_only:          bool = True
-    max_callable_depth:  int  = 2
+    framework: str = "adk"
+    default_model_id: str = "gemma3-12b-local"
+    local_only: bool = True
+    max_callable_depth: int = 2
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_RUNTIME_")
 
 
 class SessionSettings(BaseSettings):
-    max_context_tokens:       int = 8192
+    max_context_tokens: int = 8192
     approval_timeout_seconds: int = 300
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_SESSION_")
 
 
 class LoggingSettings(BaseSettings):
-    level:          str = "INFO"
+    level: str = "INFO"
     retention_days: int = 30
-    format:         str = "jsonl"
+    format: str = "jsonl"
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_LOGGING_")
 
 
 class TUISettings(BaseSettings):
-    theme:        str  = "default"
+    theme: str = "default"
     mouse_enabled: bool = False
-    history_size: int  = 1000
+    history_size: int = 1000
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_TUI_")
 
 
 class ContextSettings(BaseSettings):
-    handlers: list[str] = Field(default_factory=lambda: [
-        "recent_turns",
-        "session_summary",
-        "kb_retrieval",
-        "runtime_state",
-        "token_budget",
-    ])
-    recent_turns_count:  int = 20
-    kb_retrieval_limit:  int = 5
+    handlers: list[str] = Field(
+        default_factory=lambda: [
+            "recent_turns",
+            "session_summary",
+            "kb_retrieval",
+            "runtime_state",
+            "token_budget",
+        ]
+    )
+    recent_turns_count: int = 20
+    kb_retrieval_limit: int = 5
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_CONTEXT_")
 
 
 class SecuritySettings(BaseSettings):
-    log_file_permissions:    str = "0600"
+    log_file_permissions: str = "0600"
     config_file_permissions: str = "0600"
-    data_dir_permissions:    str = "0700"
+    data_dir_permissions: str = "0700"
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_SECURITY_")
 
@@ -96,27 +98,47 @@ class ConversationSettings(BaseSettings):
         Automatically rename a new session from the first user message.
     """
 
-    auto_compact:                  bool = True
-    compact_threshold_messages:    int  = 50
-    compact_threshold_tokens:      int  = 6000
-    compact_keep_recent:           int  = 10
-    compact_use_model:             bool = True
-    max_sessions_shown:            int  = 20
-    auto_name_from_first_message:  bool = True
+    auto_compact: bool = True
+    compact_threshold_messages: int = 50
+    compact_threshold_tokens: int = 6000
+    compact_keep_recent: int = 10
+    compact_use_model: bool = True
+    max_sessions_shown: int = 20
+    auto_name_from_first_message: bool = True
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_CONVERSATION_")
+
+
+class WorkspaceSettings(BaseSettings):
+    """
+    Controls the user workspace where custom agents, tools, and workflows live.
+
+    Fields
+    ------
+    workfolder_path
+        Absolute path to the workspace folder.  Empty string means "use the
+        directory where citnega was launched" (CWD at startup).
+    auto_refresh
+        If true, automatically reload the workspace on every startup.
+    """
+
+    workfolder_path: str = ""
+    auto_refresh: bool = False
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_WORKSPACE_")
 
 
 class Settings(BaseSettings):
     """Root settings object — single entry point for all configuration."""
 
-    runtime:      RuntimeSettings      = Field(default_factory=RuntimeSettings)
-    session:      SessionSettings      = Field(default_factory=SessionSettings)
-    logging:      LoggingSettings      = Field(default_factory=LoggingSettings)
-    tui:          TUISettings          = Field(default_factory=TUISettings)
-    context:      ContextSettings      = Field(default_factory=ContextSettings)
-    security:     SecuritySettings     = Field(default_factory=SecuritySettings)
+    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
+    session: SessionSettings = Field(default_factory=SessionSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    tui: TUISettings = Field(default_factory=TUISettings)
+    context: ContextSettings = Field(default_factory=ContextSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
+    workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="CITNEGA_",

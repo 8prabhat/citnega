@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.base import BaseAgent
-from citnega.packages.protocol.callables.context import CallContext
 from citnega.packages.protocol.callables.types import CallableType
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.context import CallContext
 
 
 class RouterInput(BaseModel):
@@ -16,16 +19,16 @@ class RouterInput(BaseModel):
 
 
 class RouterOutput(BaseModel):
-    agent: str  = Field(description="Target agent id.")
+    agent: str = Field(description="Target agent id.")
     reason: str = Field(description="One-sentence routing reason.")
 
 
 class RouterAgent(BaseAgent):
-    agent_id      = "router"
-    name          = "router_agent"
-    description   = "Classifies user intent and returns the best agent to handle it."
+    agent_id = "router"
+    name = "router_agent"
+    description = "Classifies user intent and returns the best agent to handle it."
     callable_type = CallableType.CORE
-    input_schema  = RouterInput
+    input_schema = RouterInput
     output_schema = RouterOutput
 
     SYSTEM_PROMPT = (

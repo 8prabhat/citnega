@@ -11,10 +11,13 @@ HybridRoutingPolicy — rules first (StaticPriorityPolicy), with a future
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from citnega.packages.observability.logging_setup import model_gateway_logger
-from citnega.packages.protocol.interfaces.routing import IRoutingPolicy
-from citnega.packages.protocol.models.model_gateway import ModelInfo, TaskNeeds
 from citnega.packages.shared.errors import ModelGatewayError
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.model_gateway import ModelInfo, TaskNeeds
 
 
 class NoSuitableModelError(ModelGatewayError):
@@ -35,9 +38,7 @@ def _model_satisfies(info: ModelInfo, needs: TaskNeeds) -> bool:
     if needs.min_context_tokens > 0 and caps.max_context_tokens < needs.min_context_tokens:
         return False
     # Exclude unhealthy models
-    if info.health_status == "down":
-        return False
-    return True
+    return info.health_status != "down"
 
 
 class StaticPriorityPolicy:
@@ -103,7 +104,5 @@ class HybridRoutingPolicy:
         # Fallback: ignore capability filters, pick highest priority healthy
         healthy = [m for m in self._models if m.health_status != "down"]
         if not healthy:
-            raise NoSuitableModelError(
-                "No healthy models available in the registry."
-            )
+            raise NoSuitableModelError("No healthy models available in the registry.")
         return max(healthy, key=lambda m: m.priority)

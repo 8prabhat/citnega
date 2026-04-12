@@ -20,13 +20,10 @@ Usage::
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.context import IContextHandler
-from citnega.packages.protocol.models.context import ContextObject
-from citnega.packages.protocol.models.sessions import Session
 from citnega.packages.runtime.app_service import ApplicationService
 from citnega.packages.runtime.context.assembler import ContextAssembler
 from citnega.packages.runtime.core_runtime import CoreRuntime
@@ -42,8 +39,15 @@ from citnega.packages.storage.repositories.invocation_repo import InvocationRepo
 from citnega.packages.storage.repositories.run_repo import RunRepository
 from citnega.packages.storage.repositories.session_repo import SessionRepository
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 # ── Minimal pass-through context handler ──────────────────────────────────────
+
 
 class _PassThroughContextHandler(IContextHandler):
     """Identity handler — returns the ContextObject unchanged."""
@@ -57,6 +61,7 @@ class _PassThroughContextHandler(IContextHandler):
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def cli_bootstrap(
@@ -72,7 +77,7 @@ async def cli_bootstrap(
     """
     # ── Paths ──────────────────────────────────────────────────────────────────
     path_resolver = PathResolver()
-    resolved_db   = db_path or path_resolver.db_path
+    resolved_db = db_path or path_resolver.db_path
 
     for _dir in [
         path_resolver.db_dir,
@@ -100,28 +105,31 @@ async def cli_bootstrap(
     await db.connect()
 
     # ── Repositories ───────────────────────────────────────────────────────────
-    session_repo    = SessionRepository(db)
-    run_repo        = RunRepository(db)
+    session_repo = SessionRepository(db)
+    run_repo = RunRepository(db)
     invocation_repo = InvocationRepository(db)
-    session_mgr     = SessionManager(session_repo)
-    run_mgr         = RunManager(run_repo)
+    session_mgr = SessionManager(session_repo)
+    run_mgr = RunManager(run_repo)
 
     # ── Observability ──────────────────────────────────────────────────────────
     emitter = EventEmitter(event_log_dir=path_resolver.event_logs_dir)
 
-    from citnega.packages.runtime.events.tracer import Tracer  # noqa: PLC0415
+    from citnega.packages.runtime.events.tracer import Tracer
+
     tracer = Tracer(invocation_repo)
 
     # ── Policy ─────────────────────────────────────────────────────────────────
     approval_mgr = ApprovalManager()
-    enforcer     = PolicyEnforcer(emitter, approval_mgr)
+    enforcer = PolicyEnforcer(emitter, approval_mgr)
 
     # ── Knowledge base ─────────────────────────────────────────────────────────
-    from citnega.packages.kb.store import KnowledgeStore  # noqa: PLC0415
+    from citnega.packages.kb.store import KnowledgeStore
+
     kb_store = KnowledgeStore(db, path_resolver)
 
     # ── Tools (pre-instantiated with injected deps) ────────────────────────────
-    from citnega.packages.tools.registry import ToolRegistry  # noqa: PLC0415
+    from citnega.packages.tools.registry import ToolRegistry
+
     tool_registry = ToolRegistry(
         enforcer=enforcer,
         emitter=emitter,
@@ -132,7 +140,8 @@ async def cli_bootstrap(
     tools: dict = tool_registry.build_all()
 
     # ── Agents (pre-instantiated with injected deps + tools) ──────────────────
-    from citnega.packages.agents.registry import AgentRegistry  # noqa: PLC0415
+    from citnega.packages.agents.registry import AgentRegistry
+
     agent_registry = AgentRegistry(
         enforcer=enforcer,
         emitter=emitter,
@@ -150,15 +159,21 @@ async def cli_bootstrap(
             pass  # skip duplicates
 
     # ── Framework adapter ──────────────────────────────────────────────────────
-    from citnega.packages.adapters.direct.adapter import DirectModelAdapter  # noqa: PLC0415
+    from citnega.packages.adapters.direct.adapter import DirectModelAdapter
+
     adapter = DirectModelAdapter(sessions_dir=path_resolver.sessions_dir)
 
     # ── Context assembler ──────────────────────────────────────────────────────
-    from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler  # noqa: PLC0415
-    assembler = ContextAssembler([
-        _PassThroughContextHandler(),
-        KBRetrievalHandler(kb_store=kb_store),
-    ])
+    from citnega.packages.runtime.context.handlers.kb_retrieval import (
+        KBRetrievalHandler,
+    )
+
+    assembler = ContextAssembler(
+        [
+            _PassThroughContextHandler(),
+            KBRetrievalHandler(kb_store=kb_store),
+        ]
+    )
 
     # ── CoreRuntime ────────────────────────────────────────────────────────────
     runtime = CoreRuntime(
@@ -175,6 +190,11 @@ async def cli_bootstrap(
         emitter=emitter,
         approval_manager=approval_mgr,
         kb_store=kb_store,
+        tool_registry=tools,
+        agent_registry=agents,
+        enforcer=enforcer,
+        tracer=tracer,
+        app_home=path_resolver.app_home,
     )
 
     try:

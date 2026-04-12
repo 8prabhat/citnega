@@ -2,41 +2,42 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.types import CallableType
+from citnega.packages.shared.errors import CitnegaError
 
 if TYPE_CHECKING:
-    from citnega.packages.shared.errors import CitnegaError
+    pass
 
 
-class StreamChunkKind(str, Enum):
-    TOKEN       = "token"
+class StreamChunkKind(StrEnum):
+    TOKEN = "token"
     TOOL_UPDATE = "tool_update"
-    RESULT      = "result"
-    TERMINAL    = "terminal"
+    RESULT = "result"
+    TERMINAL = "terminal"
 
 
 class StreamChunk(BaseModel):
     schema_version: int = 1
-    kind:           StreamChunkKind
-    content:        str | None = None
-    result:         "InvokeResult | None" = None
-    metadata:       dict[str, object] = Field(default_factory=dict)
+    kind: StreamChunkKind
+    content: str | None = None
+    result: InvokeResult | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
-    def token(cls, text: str) -> "StreamChunk":
+    def token(cls, text: str) -> StreamChunk:
         return cls(kind=StreamChunkKind.TOKEN, content=text)
 
     @classmethod
-    def from_result(cls, result: "InvokeResult") -> "StreamChunk":
+    def from_result(cls, result: InvokeResult) -> StreamChunk:
         return cls(kind=StreamChunkKind.RESULT, result=result)
 
     @classmethod
-    def terminal(cls) -> "StreamChunk":
+    def terminal(cls) -> StreamChunk:
         return cls(kind=StreamChunkKind.TERMINAL)
 
 
@@ -47,14 +48,14 @@ class InvokeResult(BaseModel):
     Errors are captured *inside* the result — IInvocable.invoke() never raises.
     """
 
-    schema_version:  int = 1
-    callable_name:   str
-    callable_type:   CallableType
-    output:          BaseModel | None = None
-    error:           "CitnegaError | None" = None
-    duration_ms:     int
-    sub_invocations: list["InvokeResult"] = Field(default_factory=list)
-    token_usage:     dict[str, int] = Field(default_factory=dict)
+    schema_version: int = 1
+    callable_name: str
+    callable_type: CallableType
+    output: BaseModel | None = None
+    error: CitnegaError | None = None
+    duration_ms: int
+    sub_invocations: list[InvokeResult] = Field(default_factory=list)
+    token_usage: dict[str, int] = Field(default_factory=dict)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -70,7 +71,7 @@ class InvokeResult(BaseModel):
         output: BaseModel,
         duration_ms: int,
         token_usage: dict[str, int] | None = None,
-    ) -> "InvokeResult":
+    ) -> InvokeResult:
         return cls(
             callable_name=name,
             callable_type=callable_type,
@@ -84,9 +85,9 @@ class InvokeResult(BaseModel):
         cls,
         name: str,
         callable_type: CallableType,
-        error: "CitnegaError",
+        error: CitnegaError,
         duration_ms: int,
-    ) -> "InvokeResult":
+    ) -> InvokeResult:
         return cls(
             callable_name=name,
             callable_type=callable_type,
@@ -97,7 +98,6 @@ class InvokeResult(BaseModel):
 
 # Resolve forward references so Pydantic can validate CitnegaError at runtime.
 def _rebuild() -> None:
-    from citnega.packages.shared.errors import CitnegaError  # noqa: PLC0415
     InvokeResult.model_rebuild()
     StreamChunk.model_rebuild()
 

@@ -10,16 +10,15 @@ We create a thin async wrapper that calls the Citnega callable's
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_callable_factory import BaseCallableFactory
-from citnega.packages.adapters.base.event_translator import EventTranslator
-from citnega.packages.protocol.callables.context import CallContext
-from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
-from citnega.packages.protocol.events import CanonicalEvent
-from citnega.packages.protocol.models.sessions import SessionConfig
-from citnega.packages.shared.errors import CallableError
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.event_translator import EventTranslator
+    from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.sessions import SessionConfig
 
 
 class ADKCallableFactory(BaseCallableFactory):

@@ -11,13 +11,17 @@ without optional tiktoken dependency.
 
 from __future__ import annotations
 
-from citnega.packages.protocol.interfaces.token_counter import ITokenCounter
-from citnega.packages.protocol.models.model_gateway import ModelMessage
+from typing import TYPE_CHECKING
 
+from citnega.packages.protocol.interfaces.token_counter import ITokenCounter
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.model_gateway import ModelMessage
 
 # ---------------------------------------------------------------------------
 # CharApproxCounter — always available, no dependencies
 # ---------------------------------------------------------------------------
+
 
 class CharApproxCounter(ITokenCounter):
     """
@@ -43,6 +47,7 @@ class CharApproxCounter(ITokenCounter):
 # TiktokenCounter — tiktoken required
 # ---------------------------------------------------------------------------
 
+
 class TiktokenCounter(ITokenCounter):
     """
     Token counter using tiktoken (OpenAI's tokenizer).
@@ -53,6 +58,7 @@ class TiktokenCounter(ITokenCounter):
     def __init__(self, encoding_name: str = "cl100k_base") -> None:
         try:
             import tiktoken  # type: ignore[import]
+
             self._enc = tiktoken.get_encoding(encoding_name)
         except ImportError:
             self._enc = None
@@ -76,6 +82,7 @@ class TiktokenCounter(ITokenCounter):
 # ---------------------------------------------------------------------------
 # CompositeCounter — tries tiktoken, falls back gracefully
 # ---------------------------------------------------------------------------
+
 
 class CompositeTokenCounter(ITokenCounter):
     """

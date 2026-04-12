@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from citnega.packages.protocol.models.checkpoints import CheckpointMeta
@@ -10,7 +10,7 @@ from citnega.packages.storage.repositories.base import BaseRepository
 
 
 class CheckpointRepository(BaseRepository[CheckpointMeta]):
-    _table    = "checkpoints"
+    _table = "checkpoints"
     _id_field = "checkpoint_id"
 
     def _from_row(self, row: dict[str, Any]) -> CheckpointMeta:
@@ -18,9 +18,7 @@ class CheckpointRepository(BaseRepository[CheckpointMeta]):
             checkpoint_id=row["checkpoint_id"],
             session_id=row["session_id"],
             run_id=row["run_id"],
-            created_at=datetime.fromisoformat(row["created_at"]).replace(
-                tzinfo=timezone.utc
-            ),
+            created_at=datetime.fromisoformat(row["created_at"]).replace(tzinfo=UTC),
             framework_name=row["framework_name"],
             file_path=row["file_path"],
             size_bytes=row["size_bytes"],
@@ -29,14 +27,14 @@ class CheckpointRepository(BaseRepository[CheckpointMeta]):
 
     def _to_row(self, entity: CheckpointMeta) -> dict[str, Any]:
         return {
-            "checkpoint_id":  entity.checkpoint_id,
-            "session_id":     entity.session_id,
-            "run_id":         entity.run_id,
-            "created_at":     entity.created_at.isoformat(),
+            "checkpoint_id": entity.checkpoint_id,
+            "session_id": entity.session_id,
+            "run_id": entity.run_id,
+            "created_at": entity.created_at.isoformat(),
             "framework_name": entity.framework_name,
-            "file_path":      entity.file_path,
-            "size_bytes":     entity.size_bytes,
-            "state_summary":  entity.state_summary,
+            "file_path": entity.file_path,
+            "size_bytes": entity.size_bytes,
+            "state_summary": entity.state_summary,
         }
 
     async def save(self, entity: CheckpointMeta) -> CheckpointMeta:
@@ -50,10 +48,12 @@ class CheckpointRepository(BaseRepository[CheckpointMeta]):
 
     async def list(self, **filters: object) -> list[CheckpointMeta]:
         session_id = filters.get("session_id")
-        rows = await self._db.fetchall(
-            "SELECT * FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC",
-            (session_id,),
-        ) if session_id else await self._db.fetchall(
-            "SELECT * FROM checkpoints ORDER BY created_at DESC"
+        rows = (
+            await self._db.fetchall(
+                "SELECT * FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC",
+                (session_id,),
+            )
+            if session_id
+            else await self._db.fetchall("SELECT * FROM checkpoints ORDER BY created_at DESC")
         )
         return [self._from_row(r) for r in rows]

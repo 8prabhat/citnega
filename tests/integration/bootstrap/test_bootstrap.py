@@ -15,28 +15,27 @@ Strategy:
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 import json
+from pathlib import Path
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-
-import pytest
 
 from citnega.packages.bootstrap.bootstrap import (
     EXIT_ADAPTER_ERROR,
-    EXIT_CONFIG_ERROR,
-    EXIT_MIGRATION_ERROR,
-    EXIT_NO_PROVIDER,
     create_application,
 )
 from citnega.packages.protocol.models.sessions import SessionConfig
 
+if TYPE_CHECKING:
+    from citnega.packages.protocol.models.context import ContextObject
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -45,6 +44,7 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 # TestCreateApplication — happy path
 # ---------------------------------------------------------------------------
+
 
 class TestCreateApplication:
     """create_application() boots a real service backed by SQLite."""
@@ -113,7 +113,7 @@ class TestCreateApplication:
                 framework="stub",
                 run_migrations=False,
                 skip_provider_health_check=True,
-            ) as svc:
+            ):
                 pass  # just bootstrap and shutdown
 
         _run(_do())
@@ -121,6 +121,7 @@ class TestCreateApplication:
 
     def test_shutdown_idempotent(self, tmp_path: Path) -> None:
         """shutdown() called twice should not raise."""
+
         async def _do():
             async with create_application(
                 db_path=tmp_path / "idem.db",
@@ -176,8 +177,7 @@ class TestExitCodes:
         )
         result = self._run_subprocess(script, tmp_path)
         assert result.returncode == EXIT_ADAPTER_ERROR, (
-            f"Expected exit {EXIT_ADAPTER_ERROR}, got {result.returncode}\n"
-            f"stderr: {result.stderr}"
+            f"Expected exit {EXIT_ADAPTER_ERROR}, got {result.returncode}\nstderr: {result.stderr}"
         )
 
 
@@ -185,11 +185,14 @@ class TestExitCodes:
 # TestShutdownCoordinator
 # ---------------------------------------------------------------------------
 
+
 class TestShutdownCoordinator:
     def _make_service(self, tmp_path: Path):
         """Create a minimal ApplicationService for shutdown tests."""
         import aiosqlite  # noqa: F401 (ensure available)
 
+        from citnega.packages.protocol.interfaces.context import IContextHandler
+        from citnega.packages.protocol.models.sessions import Session
         from citnega.packages.runtime.app_service import ApplicationService
         from citnega.packages.runtime.context.assembler import ContextAssembler
         from citnega.packages.runtime.core_runtime import CoreRuntime
@@ -202,9 +205,6 @@ class TestShutdownCoordinator:
         from citnega.packages.storage.database import DatabaseFactory
         from citnega.packages.storage.repositories.run_repo import RunRepository
         from citnega.packages.storage.repositories.session_repo import SessionRepository
-        from citnega.packages.protocol.interfaces.context import IContextHandler
-        from citnega.packages.protocol.models.context import ContextObject
-        from citnega.packages.protocol.models.sessions import Session
         from tests.fixtures.stub_adapter import StubFrameworkAdapter
 
         db_path = tmp_path / "shutdown_test.db"
@@ -239,24 +239,25 @@ class TestShutdownCoordinator:
                     await db.execute(ddl)
 
             session_repo = SessionRepository(db)
-            run_repo     = RunRepository(db)
-            session_mgr  = SessionManager(session_repo)
-            run_mgr      = RunManager(run_repo)
-            emitter      = EventEmitter()
+            run_repo = RunRepository(db)
+            session_mgr = SessionManager(session_repo)
+            run_mgr = RunManager(run_repo)
+            emitter = EventEmitter()
             approval_mgr = ApprovalManager()
-            enforcer     = PolicyEnforcer(emitter, approval_mgr)
-            adapter      = StubFrameworkAdapter()
-            registry     = BaseRegistry()
+            PolicyEnforcer(emitter, approval_mgr)
+            adapter = StubFrameworkAdapter()
+            registry = BaseRegistry()
 
             class _PT(IContextHandler):
                 @property
                 def name(self) -> str:
                     return "pass_through"
+
                 async def enrich(self, ctx: ContextObject, s: Session) -> ContextObject:
                     return ctx
 
             assembler = ContextAssembler([_PT()])
-            runtime   = CoreRuntime(
+            runtime = CoreRuntime(
                 session_manager=session_mgr,
                 run_manager=run_mgr,
                 context_assembler=assembler,
@@ -276,7 +277,7 @@ class TestShutdownCoordinator:
     def test_shutdown_completes(self, tmp_path: Path) -> None:
         from citnega.packages.bootstrap.shutdown import ShutdownCoordinator
 
-        svc, runtime, emitter, db = self._make_service(tmp_path)
+        _svc, runtime, emitter, db = self._make_service(tmp_path)
 
         async def _do():
             coord = ShutdownCoordinator(runtime, emitter, db)
@@ -288,7 +289,7 @@ class TestShutdownCoordinator:
     def test_shutdown_idempotent(self, tmp_path: Path) -> None:
         from citnega.packages.bootstrap.shutdown import ShutdownCoordinator
 
-        svc, runtime, emitter, db = self._make_service(tmp_path)
+        _svc, runtime, emitter, db = self._make_service(tmp_path)
 
         async def _do():
             coord = ShutdownCoordinator(runtime, emitter, db)
@@ -300,7 +301,7 @@ class TestShutdownCoordinator:
     def test_wait_for_shutdown(self, tmp_path: Path) -> None:
         from citnega.packages.bootstrap.shutdown import ShutdownCoordinator
 
-        svc, runtime, emitter, db = self._make_service(tmp_path)
+        _svc, runtime, emitter, db = self._make_service(tmp_path)
 
         async def _do():
             coord = ShutdownCoordinator(runtime, emitter, db)
@@ -320,6 +321,7 @@ class TestShutdownCoordinator:
 # TestReplay — event log replay harness
 # ---------------------------------------------------------------------------
 
+
 class TestReplay:
     def _write_events(self, path: Path, events: list[dict]) -> None:
         with path.open("w", encoding="utf-8") as fh:
@@ -327,7 +329,7 @@ class TestReplay:
                 fh.write(json.dumps(ev) + "\n")
 
     def _sample_events(self, run_id: str, session_id: str) -> list[dict]:
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
         return [
             {
                 "event_type": "run_state",
@@ -451,8 +453,9 @@ class TestReplay:
 
     def test_main_exit_0_no_db(self, tmp_path: Path) -> None:
         """CLI main exits 0 when event log exists but no DB to compare against."""
-        from scripts.replay import _main
         import argparse
+
+        from scripts.replay import _main
 
         run_id = str(uuid.uuid4())
         event_log = tmp_path / f"{run_id}.jsonl"
@@ -470,8 +473,9 @@ class TestReplay:
 
     def test_main_exit_1_missing_log(self, tmp_path: Path) -> None:
         """CLI main exits 1 when event log is not found."""
-        from scripts.replay import _main
         import argparse
+
+        from scripts.replay import _main
 
         args = argparse.Namespace(
             run_id="no-such-run-id",
@@ -484,10 +488,11 @@ class TestReplay:
 
     def test_main_json_output(self, tmp_path: Path) -> None:
         """JSON output mode produces valid JSON with expected keys."""
-        from scripts.replay import _main
         import argparse
-        import io
         from contextlib import redirect_stdout
+        import io
+
+        from scripts.replay import _main
 
         run_id = str(uuid.uuid4())
         event_log = tmp_path / f"{run_id}.jsonl"
@@ -502,7 +507,7 @@ class TestReplay:
 
         buf = io.StringIO()
         with redirect_stdout(buf):
-            exit_code = asyncio.run(_main(args))
+            asyncio.run(_main(args))
 
         data = json.loads(buf.getvalue())
         assert data["run_id"] == run_id

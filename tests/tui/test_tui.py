@@ -20,27 +20,30 @@ Coverage:
 
 from __future__ import annotations
 
-import asyncio
-import uuid
-from pathlib import Path
-from typing import AsyncIterator
+from datetime import UTC
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
+import uuid
 
 import pytest
 
 from citnega.apps.tui.app import CitnegaApp
-from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
 from citnega.packages.protocol.models.runs import RunState
+from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_session(session_id: str | None = None) -> Session:
     sid = session_id or str(uuid.uuid4())
-    from datetime import datetime, timezone
-    now = datetime.now(tz=timezone.utc)
+    from datetime import datetime
+
+    now = datetime.now(tz=UTC)
     return Session(
         config=SessionConfig(
             session_id=sid,
@@ -63,25 +66,25 @@ def _make_service(session: Session) -> MagicMock:
     - stream_events yields a RunCompleteEvent then stops
     - all other methods are AsyncMock no-ops
     """
+    from datetime import datetime
+
     from citnega.packages.protocol.events.lifecycle import RunCompleteEvent, RunStateEvent
-    from citnega.packages.protocol.models.runs import RunState
-    from datetime import datetime, timezone
 
     svc = MagicMock()
     svc.create_session = AsyncMock(return_value=session)
-    svc.get_session    = AsyncMock(return_value=session)
-    svc.list_sessions  = AsyncMock(return_value=[session])
-    svc.list_models    = MagicMock(return_value=[])
-    svc.list_agents    = MagicMock(return_value=[])
-    svc.list_tools     = MagicMock(return_value=[])
+    svc.get_session = AsyncMock(return_value=session)
+    svc.list_sessions = AsyncMock(return_value=[session])
+    svc.list_models = MagicMock(return_value=[])
+    svc.list_agents = MagicMock(return_value=[])
+    svc.list_tools = MagicMock(return_value=[])
     svc.list_frameworks = MagicMock(return_value=["stub"])
-    svc.cancel_run     = AsyncMock()
+    svc.cancel_run = AsyncMock()
     svc.respond_to_approval = AsyncMock()
 
     run_id = str(uuid.uuid4())
     svc.run_turn = AsyncMock(return_value=run_id)
 
-    now = datetime.now(tz=timezone.utc)
+    datetime.now(tz=UTC)
 
     async def _stream_events(rid: str) -> AsyncIterator:
         # Yield PENDING → CONTEXT_ASSEMBLING transition so RunStarted fires
@@ -100,7 +103,7 @@ def _make_service(session: Session) -> MagicMock:
         )
 
     svc.stream_events = _stream_events
-    svc._run_id = run_id   # expose for assertions
+    svc._run_id = run_id  # expose for assertions
     return svc
 
 
@@ -117,6 +120,7 @@ def _make_app(session: Session | None = None) -> CitnegaApp:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestAppCompose:
     @pytest.mark.asyncio
     async def test_chat_screen_mounts(self) -> None:
@@ -125,6 +129,7 @@ class TestAppCompose:
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
             await pilot.pause()
             from citnega.apps.tui.screens.chat_screen import ChatScreen
+
             assert isinstance(app.screen, ChatScreen)
 
     @pytest.mark.asyncio
@@ -134,6 +139,7 @@ class TestAppCompose:
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
             await pilot.pause()
             from citnega.apps.tui.widgets.status_bar import StatusBar
+
             bar = app.screen.query_one(StatusBar)
             assert bar is not None
 
@@ -141,6 +147,7 @@ class TestAppCompose:
     async def test_chat_input_focused_on_mount(self) -> None:
         """Chat input receives focus on mount."""
         from textual.widgets import Input
+
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
             await pilot.pause()
@@ -153,12 +160,13 @@ class TestUserInput:
     async def test_submit_plain_text_mounts_user_message(self) -> None:
         """Submitting plain text mounts a user MessageBlock."""
         from textual.widgets import Input
+
         from citnega.apps.tui.widgets.message_block import MessageBlock
 
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
             await pilot.pause()
-            inp = app.screen.query_one("#chat-input", Input)
+            app.screen.query_one("#chat-input", Input)
             await pilot.click("#chat-input")
             await pilot.press("H", "e", "l", "l", "o")
             await pilot.press("enter")
@@ -189,7 +197,6 @@ class TestSlashCommands:
     @pytest.mark.asyncio
     async def test_slash_help_mounts_system_message(self) -> None:
         """/help produces a system MessageBlock."""
-        from textual.widgets import Input
         from citnega.apps.tui.widgets.message_block import MessageBlock
 
         app = _make_app()
@@ -222,6 +229,7 @@ class TestSlashCommands:
             for b in blocks:
                 try:
                     from textual.widgets import Static
+
                     content = b.query_one(".content", Static)
                     # In Textual 8.x, Static content is in _content attr; fall back to render()
                     raw = getattr(content, "_content", None) or str(content.render())
@@ -235,14 +243,16 @@ class TestApprovalBlock:
     @pytest.mark.asyncio
     async def test_approval_block_renders_buttons(self) -> None:
         """ApprovalBlock renders with Approve and Deny buttons."""
-        from citnega.apps.tui.widgets.approval_block import ApprovalBlock
         from textual.widgets import Button
+
+        from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 40)) as pilot:
             await pilot.pause()
             # Mount an approval block directly for testing
             from textual.containers import VerticalScroll
+
             scroll = app.screen.query_one("#chat-scroll", VerticalScroll)
             block = ApprovalBlock(
                 approval_id="test-approval-id",
@@ -253,18 +263,16 @@ class TestApprovalBlock:
             await pilot.pause(0.1)
 
             approve_btn = block.query_one("#btn-approve", Button)
-            deny_btn    = block.query_one("#btn-deny",    Button)
+            deny_btn = block.query_one("#btn-deny", Button)
             assert approve_btn is not None
-            assert deny_btn    is not None
+            assert deny_btn is not None
 
     @pytest.mark.asyncio
     async def test_approval_block_approve_emits_resolved(self) -> None:
         """Clicking Approve emits ApprovalBlock.Resolved(approved=True)."""
-        from citnega.apps.tui.widgets.approval_block import ApprovalBlock
         from textual.containers import VerticalScroll
-        from textual.widgets import Button
 
-        resolved_msgs: list[ApprovalBlock.Resolved] = []
+        from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 
         app = _make_app()
 
@@ -281,7 +289,7 @@ class TestApprovalBlock:
             await pilot.pause(0.1)
 
             # Capture the Resolved message
-            original_handler = app.on_approval_block_resolved if hasattr(app, "on_approval_block_resolved") else None
+            app.on_approval_block_resolved if hasattr(app, "on_approval_block_resolved") else None
 
             await pilot.click("#btn-approve")
             await pilot.pause(0.2)
@@ -293,8 +301,9 @@ class TestStreamingBlock:
     @pytest.mark.asyncio
     async def test_streaming_block_appends_tokens(self) -> None:
         """StreamingBlock.append_token updates the display buffer."""
-        from citnega.apps.tui.widgets.streaming_block import StreamingBlock
         from textual.containers import VerticalScroll
+
+        from citnega.apps.tui.widgets.streaming_block import StreamingBlock
 
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
@@ -314,9 +323,10 @@ class TestStreamingBlock:
     @pytest.mark.asyncio
     async def test_streaming_block_finalize_hides_cursor(self) -> None:
         """StreamingBlock.finalize() marks _finalized and hides cursor."""
-        from citnega.apps.tui.widgets.streaming_block import StreamingBlock
         from textual.containers import VerticalScroll
         from textual.widgets import Label
+
+        from citnega.apps.tui.widgets.streaming_block import StreamingBlock
 
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 24)) as pilot:

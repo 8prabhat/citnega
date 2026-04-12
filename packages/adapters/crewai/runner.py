@@ -13,19 +13,22 @@ CrewAI integration strategy:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.base.base_runner import BaseFrameworkRunner
-from citnega.packages.adapters.base.cancellation import CancellationToken
-from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
-from citnega.packages.adapters.base.event_translator import EventTranslator
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.callables.interfaces import IInvocable
-from citnega.packages.protocol.events import CanonicalEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
-from citnega.packages.protocol.models.context import ContextObject
 from citnega.packages.protocol.models.runs import RunState
-from citnega.packages.protocol.models.sessions import Session
+
+if TYPE_CHECKING:
+    from citnega.packages.adapters.base.cancellation import CancellationToken
+    from citnega.packages.adapters.base.checkpoint_serializer import CheckpointSerializer
+    from citnega.packages.adapters.base.event_translator import EventTranslator
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.sessions import Session
 
 
 class CrewAIRunner(BaseFrameworkRunner):
@@ -60,6 +63,7 @@ class CrewAIRunner(BaseFrameworkRunner):
         # Build CrewAI tools from Citnega callables
         tools = []
         for c in self._callables:
+
             def _make_crew_tool(cbl: IInvocable) -> Any:
                 class _CitnegaTool(CrewBaseTool):
                     name: str = cbl.name
@@ -68,6 +72,7 @@ class CrewAIRunner(BaseFrameworkRunner):
                     def _run(self_, **kwargs: object) -> str:
                         # CrewAI calls _run synchronously; bridge to async via asyncio
                         import asyncio as _asyncio
+
                         from citnega.packages.protocol.callables.context import CallContext
 
                         ctx = CallContext(
@@ -89,6 +94,7 @@ class CrewAIRunner(BaseFrameworkRunner):
                         return str(result.error) if result.error else ""
 
                 return _CitnegaTool()
+
             tools.append(_make_crew_tool(c))
 
         agent = Agent(
@@ -132,16 +138,16 @@ class CrewAIRunner(BaseFrameworkRunner):
         self._last_output = output_text
 
         if output_text:
-            try:
-                event_queue.put_nowait(TokenEvent(
-                    session_id=session_id,
-                    run_id=context.run_id,
-                    turn_id=context.run_id,
-                    token=output_text,
-                    finish_reason="stop",
-                ))
-            except asyncio.QueueFull:
-                pass
+            with contextlib.suppress(asyncio.QueueFull):
+                event_queue.put_nowait(
+                    TokenEvent(
+                        session_id=session_id,
+                        run_id=context.run_id,
+                        turn_id=context.run_id,
+                        token=output_text,
+                        finish_reason="stop",
+                    )
+                )
 
         return context.run_id
 
@@ -165,8 +171,6 @@ class CrewAIRunner(BaseFrameworkRunner):
             "session_id": self._session.config.session_id,
         }
 
-    async def _do_restore_checkpoint(
-        self, framework_state: dict[str, object]
-    ) -> None:
+    async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
         self._last_output = str(framework_state.get("last_output", ""))
         self._last_task = str(framework_state.get("last_task", ""))

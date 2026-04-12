@@ -9,21 +9,25 @@ Concrete providers extend this and implement:
 
 from __future__ import annotations
 
-import asyncio
 from abc import abstractmethod
-from typing import AsyncIterator
+import asyncio
+from typing import TYPE_CHECKING
 
 import httpx
 
 from citnega.packages.observability.logging_setup import model_gateway_logger
 from citnega.packages.protocol.interfaces.model_gateway import IModelProvider
-from citnega.packages.protocol.models.model_gateway import (
-    ModelChunk,
-    ModelInfo,
-    ModelRequest,
-    ModelResponse,
-)
 from citnega.packages.shared.errors import ProviderHTTPError
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from citnega.packages.protocol.models.model_gateway import (
+        ModelChunk,
+        ModelInfo,
+        ModelRequest,
+        ModelResponse,
+    )
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
 _MAX_RETRIES = 3
@@ -63,9 +67,7 @@ class BaseProvider(IModelProvider):
     async def generate(self, request: ModelRequest) -> ModelResponse:
         return await self._with_retry(self._do_generate, request)
 
-    async def stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]:
+    async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
         # Streaming is not retried — let callers handle partial responses
         async for chunk in self._do_stream_generate(request):
             yield chunk
@@ -119,8 +121,7 @@ class BaseProvider(IModelProvider):
                 await asyncio.sleep(wait)
 
         raise ProviderHTTPError(
-            f"Provider {self._model_info.model_id} failed after "
-            f"{_MAX_RETRIES} retries: {last_exc}"
+            f"Provider {self._model_info.model_id} failed after {_MAX_RETRIES} retries: {last_exc}"
         ) from last_exc
 
     # ------------------------------------------------------------------
@@ -131,9 +132,7 @@ class BaseProvider(IModelProvider):
     async def _do_generate(self, request: ModelRequest) -> ModelResponse: ...
 
     @abstractmethod
-    async def _do_stream_generate(
-        self, request: ModelRequest
-    ) -> AsyncIterator[ModelChunk]: ...
+    async def _do_stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]: ...
 
     @abstractmethod
     async def _do_health_check(self) -> str: ...

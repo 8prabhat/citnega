@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class MessageBlock(Widget):
@@ -58,7 +62,7 @@ class MessageBlock(Widget):
 
     def __init__(self, role: str, content: str, **kwargs) -> None:
         super().__init__(classes=role, **kwargs)
-        self._role    = role
+        self._role = role
         self._content = content
 
     def compose(self) -> ComposeResult:

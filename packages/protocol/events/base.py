@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import uuid
-from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +11,7 @@ from citnega.packages.protocol.callables.types import CallableType
 
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _new_uuid() -> str:
@@ -26,13 +26,13 @@ class BaseEvent(BaseModel):
     app logs, and invocation traces can be joined by run_id / session_id.
     """
 
-    schema_version:  int = 1
-    event_id:        str = Field(default_factory=_new_uuid)
-    event_type:      str                               # class name, set by subclass
-    timestamp:       datetime = Field(default_factory=_utcnow)
-    session_id:      str
-    run_id:          str
-    turn_id:         str | None = None
-    callable_name:   str | None = None
-    callable_type:   CallableType | None = None
-    framework_name:  str | None = None
+    schema_version: int = 1
+    event_id: str = Field(default_factory=_new_uuid)
+    event_type: str  # class name, set by subclass
+    timestamp: datetime = Field(default_factory=_utcnow)
+    session_id: str
+    run_id: str
+    turn_id: str | None = None
+    callable_name: str | None = None
+    callable_type: CallableType | None = None
+    framework_name: str | None = None
