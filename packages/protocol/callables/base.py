@@ -178,15 +178,25 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
         if len(args) > 3:
             args, tool_registry = args[:3], args[3]
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-        self._sub_callables: list[IStreamable] = []
+        self._sub_callables: dict[str, IStreamable] = {}
         self._routing_policy: IRoutingPolicy | None = None
-        self._tool_registry: dict = dict(tool_registry) if isinstance(tool_registry, dict) else {}
+        self._tool_registry: dict = tool_registry if isinstance(tool_registry, dict) else {}
 
     def register_sub_callable(self, callable: IStreamable) -> None:  # type: ignore[override]
-        self._sub_callables.append(callable)
+        if callable.name == self.name:
+            return
+        self._sub_callables[callable.name] = callable
 
     def list_sub_callables(self) -> list[IStreamable]:  # type: ignore[override]
-        return list(self._sub_callables)
+        return list(self._sub_callables.values())
+
+    def sync_sub_callables(self, callables: list[IStreamable]) -> None:
+        self._sub_callables = {
+            callable.name: callable for callable in callables if callable.name != self.name
+        }
+
+    def sync_tool_registry(self, tool_registry: dict) -> None:
+        self._tool_registry = tool_registry if isinstance(tool_registry, dict) else {}
 
     def set_routing_policy(self, policy: IRoutingPolicy) -> None:
         self._routing_policy = policy

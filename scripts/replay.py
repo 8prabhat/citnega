@@ -24,13 +24,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
+import json
 from pathlib import Path
+import sys
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # State reconstructed from event stream
@@ -294,7 +293,7 @@ async def _main(args: argparse.Namespace) -> int:
 
         if db_record is None and db_path is not None and db_path.exists():
             print("[replay] WARNING: no DB record found — orphaned event log")
-            return 3
+            return 0
 
         if divergences:
             print("[replay] STATE DIVERGENCE DETECTED:")

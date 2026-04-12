@@ -198,6 +198,7 @@ async def _build_model_gateway(settings, emitter):  # type: ignore[no-untyped-de
 async def create_application(
     *,
     db_path: Path | None = None,
+    app_home: Path | None = None,
     framework: str | None = None,
     run_migrations: bool = True,
     skip_provider_health_check: bool = False,
@@ -207,6 +208,7 @@ async def create_application(
 
     Args:
         db_path:                    Override DB path (tests / alternate profile).
+        app_home:                   Override app home (tests / isolated profiles).
         framework:                  Override framework from settings (test injection).
         run_migrations:             Run Alembic migrations on startup.
         skip_provider_health_check: Skip the provider health check (used in tests).
@@ -220,237 +222,239 @@ async def create_application(
         4 — no healthy provider (local_only mode)
         5 — migration failed
     """
+    db = None
+    runtime = None
 
-    # ── Step 1: Load and validate settings ────────────────────────────────────
     try:
-        from citnega.packages.config.loaders import load_settings
+        # ── Step 1: Load and validate settings ────────────────────────────────
+        try:
+            from citnega.packages.config.loaders import load_settings
+            from citnega.packages.storage.path_resolver import PathResolver
+            from citnega.packages.workspace.overlay import resolve_workfolder_path
 
-        settings = load_settings()
-    except Exception as exc:
-        # Config not yet set up — can't use structured logger yet
-        print(f"[citnega] Configuration error: {exc}", file=sys.stderr)
-        sys.exit(EXIT_CONFIG_ERROR)
+            path_resolver = PathResolver(app_home=app_home or (db_path.parent if db_path else None))
+            settings = load_settings(app_home=path_resolver.app_home)
+            workfolder_root = resolve_workfolder_path(settings.workspace.workfolder_path)
+            path_resolver = PathResolver(
+                app_home=path_resolver.app_home,
+                workfolder_root=workfolder_root,
+            )
+        except Exception as exc:
+            print(f"[citnega] Configuration error: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CONFIG_ERROR)
 
-    # ── Step 2: Configure structured logging ──────────────────────────────────
-    try:
-        configure_logging(level=settings.logging.level)
-    except Exception as exc:
-        print(f"[citnega] Logging configuration failed: {exc}", file=sys.stderr)
-        # Non-fatal — fall through with default logging
+        # ── Step 2: Configure structured logging ──────────────────────────────
+        try:
+            configure_logging(level=settings.logging.level)
+        except Exception as exc:
+            print(f"[citnega] Logging configuration failed: {exc}", file=sys.stderr)
 
-    runtime_logger.info("bootstrap_start")
+        runtime_logger.info("bootstrap_start")
 
-    # ── Step 3: PathResolver ──────────────────────────────────────────────────
-    from citnega.packages.storage.path_resolver import PathResolver
+        # ── Step 3: Create app directories ────────────────────────────────────
+        try:
+            path_resolver.create_all()
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_dir_creation_failed", error=str(exc))
 
-    path_resolver = PathResolver()
-
-    # ── Step 4: Create app directories ────────────────────────────────────────
-    try:
-        from citnega.packages.security.permissions import ensure_dir_permissions
-
-        dirs = [
-            path_resolver.app_home,
-            path_resolver.config_dir,
-            path_resolver.db_dir,
-            path_resolver.logs_dir,
-            path_resolver.app_logs_dir,
-            path_resolver.event_logs_dir,
-            path_resolver.sessions_dir,
-            path_resolver.artifacts_dir,
-            path_resolver.kb_dir,
-            path_resolver.kb_raw_dir,
-            path_resolver.kb_exports_dir,
-            path_resolver.checkpoints_dir,
-            path_resolver.exports_dir,
-        ]
-        for d in dirs:
-            d.mkdir(parents=True, exist_ok=True)
-            try:
-                ensure_dir_permissions(d)
-            except Exception:
-                pass  # Windows: permissions are a no-op; non-fatal elsewhere
-    except Exception as exc:
-        runtime_logger.warning("bootstrap_dir_creation_failed", error=str(exc))
-
-    # ── Step 5: Key store ─────────────────────────────────────────────────────
-    try:
-        from citnega.packages.security.key_store import (
-            CompositeKeyStore,
-            EnvVarKeyStore,
-            KeyringKeyStore,
-        )
-
-        CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
-    except Exception as exc:
-        runtime_logger.warning("bootstrap_keystore_init_failed", error=str(exc))
-        from citnega.packages.security.key_store import EnvVarKeyStore
-
-        EnvVarKeyStore()  # type: ignore[assignment]
-
-    # ── Step 6: Database (connect + WAL PRAGMAs) ──────────────────────────────
-    from citnega.packages.storage.database import DatabaseFactory
-
-    resolved_db = db_path or path_resolver.db_path
-    db = DatabaseFactory(resolved_db)
-
-    # ── Step 7: Alembic migrations ────────────────────────────────────────────
-    if run_migrations:
-        alembic_ini = path_resolver.alembic_ini_path()
-        if alembic_ini.exists():
-            try:
-                await db.run_migrations(alembic_ini)
-            except Exception as exc:
-                runtime_logger.error(
-                    "bootstrap_migration_failed",
-                    error=str(exc),
-                    alembic_ini=str(alembic_ini),
-                )
-                sys.exit(EXIT_MIGRATION_ERROR)
-        else:
-            runtime_logger.warning(
-                "bootstrap_alembic_ini_missing",
-                path=str(alembic_ini),
+        # ── Step 4: Key store ─────────────────────────────────────────────────
+        try:
+            from citnega.packages.security.key_store import (
+                CompositeKeyStore,
+                EnvVarKeyStore,
+                KeyringKeyStore,
             )
 
-    await db.connect()
-
-    # ── Step 8: Repositories & managers ──────────────────────────────────────
-    from citnega.packages.runtime.runs import RunManager
-    from citnega.packages.runtime.sessions import SessionManager
-    from citnega.packages.storage.repositories.run_repo import RunRepository
-    from citnega.packages.storage.repositories.session_repo import SessionRepository
-
-    session_repo = SessionRepository(db)
-    run_repo = RunRepository(db)
-    session_mgr = SessionManager(session_repo)
-    run_mgr = RunManager(run_repo)
-
-    # ── Step 9: Event emitter ─────────────────────────────────────────────────
-    from citnega.packages.runtime.events.emitter import EventEmitter
-
-    event_log_dir = path_resolver.event_logs_dir
-    emitter = EventEmitter(event_log_dir=event_log_dir)
-
-    # ── Step 10: Policy ───────────────────────────────────────────────────────
-    from citnega.packages.runtime.policy.approval_manager import ApprovalManager
-    from citnega.packages.runtime.policy.enforcer import PolicyEnforcer
-
-    approval_mgr = ApprovalManager()
-    enforcer = PolicyEnforcer(emitter, approval_mgr)
-
-    # ── Step 11: Framework adapter ────────────────────────────────────────────
-    _framework = framework or settings.runtime.framework
-    adapter = _select_adapter(_framework, path_resolver)
-
-    # ── Step 12: Model gateway ────────────────────────────────────────────────
-    if skip_provider_health_check:
-        # Used in unit/integration tests that don't need a live model server
-        pass
-    else:
-        try:
-            await _build_model_gateway(settings, emitter)
-        except SystemExit:
-            raise  # propagate exit codes
+            CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
         except Exception as exc:
-            runtime_logger.error("bootstrap_model_gateway_failed", error=str(exc))
-            sys.exit(EXIT_ADAPTER_ERROR)
+            runtime_logger.warning("bootstrap_keystore_init_failed", error=str(exc))
+            from citnega.packages.security.key_store import EnvVarKeyStore
 
-    # ── Step 13: Knowledge base ───────────────────────────────────────────────
-    from citnega.packages.kb.store import KnowledgeStore
+            EnvVarKeyStore()  # type: ignore[assignment]
 
-    kb_store = KnowledgeStore(db, path_resolver)
+        # ── Step 5: Database (connect + WAL PRAGMAs) ──────────────────────────
+        from citnega.packages.storage.database import DatabaseFactory
 
-    # ── Step 14: Context handlers ─────────────────────────────────────────────
-    from citnega.packages.runtime.context.assembler import ContextAssembler
-    from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
+        resolved_db = db_path or path_resolver.db_path
+        db = DatabaseFactory(resolved_db)
 
-    context_handlers: list[IContextHandler] = [
-        _PassThroughContextHandler(),
-        KBRetrievalHandler(kb_store=kb_store),
-    ]
-    assembler = ContextAssembler(context_handlers)
+        # ── Step 6: Alembic migrations ────────────────────────────────────────
+        if run_migrations:
+            alembic_ini = path_resolver.alembic_ini_path()
+            if alembic_ini.exists():
+                try:
+                    await db.run_migrations(alembic_ini)
+                except Exception as exc:
+                    runtime_logger.error(
+                        "bootstrap_migration_failed",
+                        error=str(exc),
+                        alembic_ini=str(alembic_ini),
+                    )
+                    sys.exit(EXIT_MIGRATION_ERROR)
+            else:
+                runtime_logger.warning(
+                    "bootstrap_alembic_ini_missing",
+                    path=str(alembic_ini),
+                )
 
-    # ── Step 15: Tracer ───────────────────────────────────────────────────────
-    from citnega.packages.runtime.events.tracer import Tracer
-    from citnega.packages.storage.repositories.invocation_repo import InvocationRepository
+        await db.connect()
 
-    tracer = Tracer(InvocationRepository(db))
+        # ── Step 7: Repositories & managers ──────────────────────────────────
+        from citnega.packages.runtime.runs import RunManager
+        from citnega.packages.runtime.sessions import SessionManager
+        from citnega.packages.storage.repositories.run_repo import RunRepository
+        from citnega.packages.storage.repositories.session_repo import SessionRepository
 
-    # ── Step 15a: Tool registry ───────────────────────────────────────────────
-    from citnega.packages.tools.registry import ToolRegistry
+        session_repo = SessionRepository(db)
+        run_repo = RunRepository(db)
+        session_mgr = SessionManager(session_repo)
+        run_mgr = RunManager(run_repo)
 
-    tool_registry = ToolRegistry(
-        enforcer=enforcer,
-        emitter=emitter,
-        tracer=tracer,
-        path_resolver=path_resolver,
-        kb_store=kb_store,
-    )
-    tools = tool_registry.build_all()
+        # ── Step 8: Event emitter ─────────────────────────────────────────────
+        from citnega.packages.runtime.events.emitter import EventEmitter
 
-    # ── Step 15b: Agent registry ──────────────────────────────────────────────
-    from citnega.packages.agents.registry import AgentRegistry
+        emitter = EventEmitter(event_log_dir=path_resolver.event_logs_dir)
 
-    agent_registry = AgentRegistry(
-        enforcer=enforcer,
-        emitter=emitter,
-        tracer=tracer,
-        tools=tools,
-    )
-    agents = agent_registry.build_all()
+        # ── Step 9: Policy ────────────────────────────────────────────────────
+        from citnega.packages.runtime.policy.approval_manager import ApprovalManager
+        from citnega.packages.runtime.policy.enforcer import PolicyEnforcer
 
-    # ── Step 15c: Unified callable registry ──────────────────────────────────
-    from citnega.packages.shared.registry import BaseRegistry
+        approval_mgr = ApprovalManager()
+        enforcer = PolicyEnforcer(emitter, approval_mgr)
 
-    registry: BaseRegistry = BaseRegistry()
-    for name, callable_obj in {**tools, **agents}.items():
-        try:
-            registry.register(name, callable_obj)
-        except Exception:
-            pass  # skip duplicates
+        # ── Step 10: Framework adapter ────────────────────────────────────────
+        _framework = framework or settings.runtime.framework
+        adapter = _select_adapter(_framework, path_resolver)
+        from citnega.packages.protocol.interfaces.adapter import AdapterConfig
 
-    runtime_logger.info(
-        "bootstrap_callables_loaded",
-        tools=len(tools),
-        agents=len(agents),
-        total=len(tools) + len(agents),
-    )
+        await adapter.initialize(
+            AdapterConfig(
+                framework_name=adapter.framework_name,
+                default_model_id=settings.runtime.default_model_id,
+            )
+        )
 
-    # ── Step 16: CoreRuntime ──────────────────────────────────────────────────
-    from citnega.packages.runtime.core_runtime import CoreRuntime
+        # ── Step 11: Model gateway ────────────────────────────────────────────
+        if not skip_provider_health_check:
+            try:
+                await _build_model_gateway(settings, emitter)
+            except SystemExit:
+                raise
+            except Exception as exc:
+                runtime_logger.error("bootstrap_model_gateway_failed", error=str(exc))
+                sys.exit(EXIT_ADAPTER_ERROR)
 
-    runtime = CoreRuntime(
-        session_manager=session_mgr,
-        run_manager=run_mgr,
-        context_assembler=assembler,
-        framework_adapter=adapter,
-        event_emitter=emitter,
-        callable_registry=registry,
-    )
+        # ── Step 12: Knowledge base ───────────────────────────────────────────
+        from citnega.packages.kb.store import KnowledgeStore
 
-    # ── Step 17: ApplicationService ───────────────────────────────────────────
-    svc = ApplicationService(
-        runtime=runtime,
-        emitter=emitter,
-        approval_manager=approval_mgr,
-        kb_store=kb_store,
-        tool_registry=tools,
-        agent_registry=agents,
-        enforcer=enforcer,
-        tracer=tracer,
-        app_home=path_resolver.app_home,
-    )
+        kb_store = KnowledgeStore(db, path_resolver)
 
-    runtime_logger.info(
-        "bootstrap_complete",
-        framework=_framework,
-        db=str(resolved_db),
-    )
+        # ── Step 13: Context handlers ─────────────────────────────────────────
+        from citnega.packages.runtime.context.assembler import ContextAssembler
+        from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
 
-    try:
+        assembler = ContextAssembler(
+            [
+                _PassThroughContextHandler(),
+                KBRetrievalHandler(kb_store=kb_store),
+            ]
+        )
+
+        # ── Step 14: Tracer ───────────────────────────────────────────────────
+        from citnega.packages.runtime.events.tracer import Tracer
+        from citnega.packages.storage.repositories.invocation_repo import InvocationRepository
+
+        tracer = Tracer(InvocationRepository(db))
+
+        # ── Step 15: Tool registry ────────────────────────────────────────────
+        from citnega.packages.tools.registry import ToolRegistry
+        from citnega.packages.workspace.overlay import load_workspace_overlay
+
+        tool_registry = ToolRegistry(
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            path_resolver=path_resolver,
+            kb_store=kb_store,
+        )
+        built_in_tools = tool_registry.build_all()
+        workspace_overlay = load_workspace_overlay(
+            workfolder_root,
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            tool_registry=built_in_tools,
+        )
+        tools = {**built_in_tools, **workspace_overlay.tools}
+
+        # ── Step 16: Agent registry ───────────────────────────────────────────
+        from citnega.packages.agents.registry import AgentRegistry
+
+        agent_registry = AgentRegistry(
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            tools=tools,
+        )
+        built_in_agents = agent_registry.build_all()
+        agents = {
+            **built_in_agents,
+            **workspace_overlay.agents,
+            **workspace_overlay.workflows,
+        }
+        AgentRegistry.wire_core_agents(agents, tools)
+
+        # ── Step 17: Unified callable registry ───────────────────────────────
+        from citnega.packages.shared.registry import BaseRegistry
+
+        registry: BaseRegistry = BaseRegistry()
+        for name, callable_obj in {**tools, **agents}.items():
+            try:
+                registry.register(name, callable_obj)
+            except Exception:
+                pass
+
+        runtime_logger.info(
+            "bootstrap_callables_loaded",
+            tools=len(tools),
+            agents=len(agents),
+            total=len(tools) + len(agents),
+        )
+
+        # ── Step 18: CoreRuntime ──────────────────────────────────────────────
+        from citnega.packages.runtime.core_runtime import CoreRuntime
+
+        runtime = CoreRuntime(
+            session_manager=session_mgr,
+            run_manager=run_mgr,
+            context_assembler=assembler,
+            framework_adapter=adapter,
+            event_emitter=emitter,
+            callable_registry=registry,
+        )
+
+        # ── Step 19: ApplicationService ───────────────────────────────────────
+        svc = ApplicationService(
+            runtime=runtime,
+            emitter=emitter,
+            approval_manager=approval_mgr,
+            kb_store=kb_store,
+            tool_registry=tools,
+            agent_registry=agents,
+            enforcer=enforcer,
+            tracer=tracer,
+            app_home=path_resolver.app_home,
+        )
+
+        runtime_logger.info(
+            "bootstrap_complete",
+            framework=_framework,
+            db=str(resolved_db),
+        )
         yield svc
     finally:
-        await runtime.shutdown()
-        await db.disconnect()
+        if runtime is not None:
+            await runtime.shutdown()
+        if db is not None:
+            await db.disconnect()
         runtime_logger.info("bootstrap_shutdown_complete")

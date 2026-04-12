@@ -57,6 +57,26 @@ class ADKRunner(BaseFrameworkRunner):
         self._history: list[dict[str, object]] = []
         self._adk_runner: Any = None  # lazy-initialised on first run_turn
 
+    def _resolve_adk_model(self) -> Any:
+        """
+        Return an ADK-compatible model reference.
+
+        Resolution order:
+        1. Already in LiteLLM format (``ollama/<model>``, ``litellm/<model>``) → LiteLlm
+        2. Citnega model-registry ID (e.g. ``gemma4-27b-local``) with provider_type
+           ``ollama`` → resolve to ``ollama/<model_name>`` via LiteLlm
+        3. Anything else → pass through as a string (Gemini / Vertex native)
+        """
+        from citnega.packages.adapters.adk.model_resolver import resolve_adk_model_reference
+
+        return resolve_adk_model_reference(self._model_id)
+
+    @staticmethod
+    def _make_lite_llm(model_str: str) -> Any:
+        from citnega.packages.adapters.adk.model_resolver import make_lite_llm
+
+        return make_lite_llm(model_str)
+
     def _get_adk_runner(self) -> Any:
         """Lazy-init: import ADK and build runner only when first needed."""
         if self._adk_runner is not None:
@@ -100,9 +120,10 @@ class ADKRunner(BaseFrameworkRunner):
             tools.append(_make_fn(c))
 
         session_service = InMemorySessionService()
+        adk_model = self._resolve_adk_model()
         agent = LlmAgent(
             name=f"citnega_{self._session.config.session_id[:8]}",
-            model=self._model_id,
+            model=adk_model,
             tools=tools,
         )
         self._adk_runner = Runner(

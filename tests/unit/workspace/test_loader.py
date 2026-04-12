@@ -104,22 +104,89 @@ class TestLoadDirectory:
 
 class TestLoadWorkfolder:
     def test_loads_across_subdirs(self, tmp_path: Path) -> None:
-        tools_dir = tmp_path / "tools"
-        agents_dir = tmp_path / "agents"
-        workflows_dir = tmp_path / "workflows"
-        for d in (tools_dir, agents_dir, workflows_dir):
-            d.mkdir()
+        from citnega.packages.workspace.writer import WorkspaceWriter
+
+        writer = WorkspaceWriter(tmp_path)
+        writer.ensure_dirs()
+        tools_dir = writer.tools_dir
+        agents_dir = writer.agents_dir
+        workflows_dir = writer.workflows_dir
 
         _write_tool(tools_dir, "MyTool", "my_tool")
         _write_tool(agents_dir, "MyAgent", "my_agent")
         _write_tool(workflows_dir, "MyWorkflow", "my_workflow")
 
-        from citnega.packages.workspace.writer import WorkspaceWriter
-
-        writer = WorkspaceWriter(tmp_path)
         loader = _make_loader()
         loaded = loader.load_workfolder(writer)
 
         assert "my_tool" in loaded
         assert "my_agent" in loaded
         assert "my_workflow" in loaded
+
+    def test_custom_core_agent_receives_overridden_tool_registry(self, tmp_path: Path) -> None:
+        from citnega.packages.workspace.writer import WorkspaceWriter
+
+        writer = WorkspaceWriter(tmp_path)
+        writer.ensure_dirs()
+
+        tool_source = """
+from pydantic import BaseModel, Field
+
+from citnega.packages.protocol.callables.base import BaseCallable
+from citnega.packages.protocol.callables.types import CallableType
+from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
+
+
+class SearchInput(BaseModel):
+    query: str = Field(default="")
+
+
+class WorkspaceSearchWeb(BaseCallable):
+    name = "search_web"
+    description = "workspace override"
+    callable_type = CallableType.TOOL
+    input_schema = SearchInput
+    output_schema = ToolOutput
+    policy = tool_policy()
+
+    async def _execute(self, input, context):
+        return ToolOutput(result="workspace")
+"""
+        agent_source = """
+from pydantic import BaseModel, Field
+
+from citnega.packages.protocol.callables.base import BaseCoreAgent
+from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+
+class PlannerInput(BaseModel):
+    goal: str = Field(default="")
+
+
+class PlannerOutput(BaseModel):
+    tool_class: str
+
+
+class PlannerAgent(BaseCoreAgent):
+    name = "planner_agent"
+    description = "workspace planner"
+    callable_type = CallableType.CORE
+    input_schema = PlannerInput
+    output_schema = PlannerOutput
+    policy = CallablePolicy()
+
+    async def _execute(self, input, context):
+        tool = self._tool_registry["search_web"]
+        return PlannerOutput(tool_class=type(tool).__name__)
+"""
+        (writer.tools_dir / "search_web.py").write_text(tool_source, encoding="utf-8")
+        (writer.agents_dir / "planner_agent.py").write_text(agent_source, encoding="utf-8")
+
+        class BuiltInSearchWeb:
+            name = "search_web"
+
+        loader = _make_loader(tool_registry={"search_web": BuiltInSearchWeb()})
+        loaded = loader.load_workspace(writer)
+
+        planner = loaded.agents["planner_agent"]
+        assert planner._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWeb"

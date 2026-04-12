@@ -67,6 +67,7 @@ class _PassThroughContextHandler(IContextHandler):
 async def cli_bootstrap(
     *,
     db_path: Path | None = None,
+    app_home: Path | None = None,
     run_migrations: bool = True,
 ) -> AsyncIterator[ApplicationService]:
     """
@@ -75,131 +76,155 @@ async def cli_bootstrap(
     All infrastructure is created here following DIP — application code
     never imports concrete infrastructure classes directly.
     """
-    # ── Paths ──────────────────────────────────────────────────────────────────
-    path_resolver = PathResolver()
-    resolved_db = db_path or path_resolver.db_path
-
-    for _dir in [
-        path_resolver.db_dir,
-        path_resolver.app_logs_dir,
-        path_resolver.event_logs_dir,
-        path_resolver.sessions_dir,
-        path_resolver.artifacts_dir,
-        path_resolver.kb_dir,
-        path_resolver.kb_exports_dir,
-        path_resolver.checkpoints_dir,
-    ]:
-        _dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Database ───────────────────────────────────────────────────────────────
-    db = DatabaseFactory(resolved_db)
-
-    if run_migrations:
-        _alembic_ini = path_resolver.alembic_ini_path()
-        if _alembic_ini.exists():
-            try:
-                await db.run_migrations(_alembic_ini)
-            except Exception as exc:
-                runtime_logger.warning("cli_migration_skipped", reason=str(exc))
-
-    await db.connect()
-
-    # ── Repositories ───────────────────────────────────────────────────────────
-    session_repo = SessionRepository(db)
-    run_repo = RunRepository(db)
-    invocation_repo = InvocationRepository(db)
-    session_mgr = SessionManager(session_repo)
-    run_mgr = RunManager(run_repo)
-
-    # ── Observability ──────────────────────────────────────────────────────────
-    emitter = EventEmitter(event_log_dir=path_resolver.event_logs_dir)
-
-    from citnega.packages.runtime.events.tracer import Tracer
-
-    tracer = Tracer(invocation_repo)
-
-    # ── Policy ─────────────────────────────────────────────────────────────────
-    approval_mgr = ApprovalManager()
-    enforcer = PolicyEnforcer(emitter, approval_mgr)
-
-    # ── Knowledge base ─────────────────────────────────────────────────────────
-    from citnega.packages.kb.store import KnowledgeStore
-
-    kb_store = KnowledgeStore(db, path_resolver)
-
-    # ── Tools (pre-instantiated with injected deps) ────────────────────────────
-    from citnega.packages.tools.registry import ToolRegistry
-
-    tool_registry = ToolRegistry(
-        enforcer=enforcer,
-        emitter=emitter,
-        tracer=tracer,
-        path_resolver=path_resolver,
-        kb_store=kb_store,
-    )
-    tools: dict = tool_registry.build_all()
-
-    # ── Agents (pre-instantiated with injected deps + tools) ──────────────────
-    from citnega.packages.agents.registry import AgentRegistry
-
-    agent_registry = AgentRegistry(
-        enforcer=enforcer,
-        emitter=emitter,
-        tracer=tracer,
-        tools=tools,
-    )
-    agents: dict = agent_registry.build_all()
-
-    # ── Callable registry (tools + agents for runner access) ──────────────────
-    registry: BaseRegistry = BaseRegistry()
-    for callable_obj in {**tools, **agents}.values():
-        try:
-            registry.register(callable_obj.name, callable_obj)
-        except Exception:
-            pass  # skip duplicates
-
-    # ── Framework adapter ──────────────────────────────────────────────────────
-    from citnega.packages.adapters.direct.adapter import DirectModelAdapter
-
-    adapter = DirectModelAdapter(sessions_dir=path_resolver.sessions_dir)
-
-    # ── Context assembler ──────────────────────────────────────────────────────
-    from citnega.packages.runtime.context.handlers.kb_retrieval import (
-        KBRetrievalHandler,
-    )
-
-    assembler = ContextAssembler(
-        [
-            _PassThroughContextHandler(),
-            KBRetrievalHandler(kb_store=kb_store),
-        ]
-    )
-
-    # ── CoreRuntime ────────────────────────────────────────────────────────────
-    runtime = CoreRuntime(
-        session_manager=session_mgr,
-        run_manager=run_mgr,
-        context_assembler=assembler,
-        framework_adapter=adapter,
-        event_emitter=emitter,
-        callable_registry=registry,
-    )
-
-    svc = ApplicationService(
-        runtime=runtime,
-        emitter=emitter,
-        approval_manager=approval_mgr,
-        kb_store=kb_store,
-        tool_registry=tools,
-        agent_registry=agents,
-        enforcer=enforcer,
-        tracer=tracer,
-        app_home=path_resolver.app_home,
-    )
+    db = None
+    runtime = None
 
     try:
+        # ── Paths ──────────────────────────────────────────────────────────────
+        from citnega.packages.config.loaders import load_settings
+        from citnega.packages.workspace.overlay import (
+            load_workspace_overlay,
+            resolve_workfolder_path,
+        )
+
+        path_resolver = PathResolver(app_home=app_home or (db_path.parent if db_path else None))
+        settings = load_settings(app_home=path_resolver.app_home)
+        workfolder_root = resolve_workfolder_path(settings.workspace.workfolder_path)
+        path_resolver = PathResolver(
+            app_home=path_resolver.app_home,
+            workfolder_root=workfolder_root,
+        )
+        resolved_db = db_path or path_resolver.db_path
+        path_resolver.create_all()
+
+        # ── Database ───────────────────────────────────────────────────────────
+        db = DatabaseFactory(resolved_db)
+        if run_migrations:
+            alembic_ini = path_resolver.alembic_ini_path()
+            if alembic_ini.exists():
+                try:
+                    await db.run_migrations(alembic_ini)
+                except Exception as exc:
+                    runtime_logger.warning("cli_migration_skipped", reason=str(exc))
+        await db.connect()
+
+        # ── Repositories ───────────────────────────────────────────────────────
+        session_repo = SessionRepository(db)
+        run_repo = RunRepository(db)
+        invocation_repo = InvocationRepository(db)
+        session_mgr = SessionManager(session_repo)
+        run_mgr = RunManager(run_repo)
+
+        # ── Observability ──────────────────────────────────────────────────────
+        emitter = EventEmitter(event_log_dir=path_resolver.event_logs_dir)
+
+        from citnega.packages.runtime.events.tracer import Tracer
+
+        tracer = Tracer(invocation_repo)
+
+        # ── Policy ─────────────────────────────────────────────────────────────
+        approval_mgr = ApprovalManager()
+        enforcer = PolicyEnforcer(emitter, approval_mgr)
+
+        # ── Knowledge base ─────────────────────────────────────────────────────
+        from citnega.packages.kb.store import KnowledgeStore
+
+        kb_store = KnowledgeStore(db, path_resolver)
+
+        # ── Tools ──────────────────────────────────────────────────────────────
+        from citnega.packages.tools.registry import ToolRegistry
+
+        tool_registry = ToolRegistry(
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            path_resolver=path_resolver,
+            kb_store=kb_store,
+        )
+        built_in_tools: dict = tool_registry.build_all()
+        workspace_overlay = load_workspace_overlay(
+            workfolder_root,
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            tool_registry=built_in_tools,
+        )
+        tools: dict = {**built_in_tools, **workspace_overlay.tools}
+
+        # ── Agents ─────────────────────────────────────────────────────────────
+        from citnega.packages.agents.registry import AgentRegistry
+
+        agent_registry = AgentRegistry(
+            enforcer=enforcer,
+            emitter=emitter,
+            tracer=tracer,
+            tools=tools,
+        )
+        built_in_agents: dict = agent_registry.build_all()
+        agents: dict = {
+            **built_in_agents,
+            **workspace_overlay.agents,
+            **workspace_overlay.workflows,
+        }
+        AgentRegistry.wire_core_agents(agents, tools)
+
+        # ── Unified registry ───────────────────────────────────────────────────
+        registry: BaseRegistry = BaseRegistry()
+        for callable_obj in {**tools, **agents}.values():
+            try:
+                registry.register(callable_obj.name, callable_obj)
+            except Exception:
+                pass
+
+        # ── Framework adapter ──────────────────────────────────────────────────
+        from citnega.packages.adapters.direct.adapter import DirectModelAdapter
+        from citnega.packages.protocol.interfaces.adapter import AdapterConfig
+
+        adapter = DirectModelAdapter(sessions_dir=path_resolver.sessions_dir)
+        await adapter.initialize(
+            AdapterConfig(
+                framework_name=adapter.framework_name,
+                default_model_id=settings.runtime.default_model_id,
+            )
+        )
+
+        # ── Context assembler ──────────────────────────────────────────────────
+        from citnega.packages.runtime.context.handlers.kb_retrieval import (
+            KBRetrievalHandler,
+        )
+
+        assembler = ContextAssembler(
+            [
+                _PassThroughContextHandler(),
+                KBRetrievalHandler(kb_store=kb_store),
+            ]
+        )
+
+        # ── CoreRuntime ────────────────────────────────────────────────────────
+        runtime = CoreRuntime(
+            session_manager=session_mgr,
+            run_manager=run_mgr,
+            context_assembler=assembler,
+            framework_adapter=adapter,
+            event_emitter=emitter,
+            callable_registry=registry,
+        )
+
+        svc = ApplicationService(
+            runtime=runtime,
+            emitter=emitter,
+            approval_manager=approval_mgr,
+            kb_store=kb_store,
+            tool_registry=tools,
+            agent_registry=agents,
+            enforcer=enforcer,
+            tracer=tracer,
+            app_home=path_resolver.app_home,
+        )
         yield svc
     finally:
-        await runtime.shutdown()
-        await db.disconnect()
+        if runtime is not None:
+            await runtime.shutdown()
+        if db is not None:
+            await db.disconnect()
         runtime_logger.info("cli_bootstrap_shutdown")

@@ -4,6 +4,7 @@ WorkspaceWriter — writes generated source files to the workfolder.
 Workfolder layout::
 
     <workfolder>/
+    ├── memory/
     ├── agents/
     ├── tools/
     └── workflows/
@@ -29,7 +30,7 @@ class WorkspaceWriter:
         workfolder: Absolute path to the user's workfolder directory.
     """
 
-    _SUBDIRS = ("agents", "tools", "workflows")
+    _SUBDIRS = ("memory", "agents", "tools", "workflows")
 
     def __init__(self, workfolder: Path) -> None:
         self._root = Path(workfolder)
@@ -37,7 +38,7 @@ class WorkspaceWriter:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def ensure_dirs(self) -> None:
-        """Create agents/, tools/, and workflows/ subdirectories if absent."""
+        """Create memory/, agents/, tools/, and workflows/ subdirectories if absent."""
         for sub in self._SUBDIRS:
             (self._root / sub).mkdir(parents=True, exist_ok=True)
 
@@ -56,6 +57,22 @@ class WorkspaceWriter:
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def memory_dir(self) -> Path:
+        return self._root / "memory"
+
+    @property
+    def agents_dir(self) -> Path:
+        return self._root / "agents"
+
+    @property
+    def tools_dir(self) -> Path:
+        return self._root / "tools"
+
+    @property
+    def workflows_dir(self) -> Path:
+        return self._root / "workflows"
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

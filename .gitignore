@@ -4,3 +4,21 @@ __pycache__/
 .pytest_cache/
 .venv/
 .citnega_env/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+
+# Specifications / docs that don't belong in version control
+citnega_technical_specification.txt
+specs/
+*.spec.txt
+
+# User workspace — lives outside the repo at citnega_workfolder/
+/memory/
+/agents/
+/tools/
+/workflows/

@@ -427,7 +427,11 @@ class ApplicationService(IApplicationService):
         """Return the framework runner for *session_id*, or None."""
         adapter = self._runtime._adapter
         if hasattr(adapter, "get_runner"):
-            return adapter.get_runner(session_id)
+            runner = adapter.get_runner(session_id)
+            if runner is not None:
+                return runner
+        if hasattr(self._runtime, "get_runner"):
+            return self._runtime.get_runner(session_id)
         return None
 
     # ── Session conversation access ───────────────────────────────────────────
@@ -469,13 +473,8 @@ class ApplicationService(IApplicationService):
         if self._get_runner(session_id) is not None:
             return
         try:
-            session = await self.get_session(session_id)
-            if session is not None:
-                await self._runtime._adapter.create_runner(
-                    session,
-                    self._runtime._registry.list_all(),
-                    None,
-                )
+            if hasattr(self._runtime, "ensure_runner"):
+                await self._runtime.ensure_runner(session_id)
         except Exception:
             pass
 
@@ -504,6 +503,10 @@ class ApplicationService(IApplicationService):
             # SPECIALIST, CORE, or workflow — goes into agent registry
             self._agent_registry[name] = callable_obj  # type: ignore[assignment]
 
+        from citnega.packages.agents.registry import AgentRegistry
+
+        AgentRegistry.wire_core_agents(self._agent_registry, self._tool_registry)  # type: ignore[arg-type]
+
     async def hot_reload_workfolder(
         self,
         workfolder: Path,
@@ -522,18 +525,30 @@ class ApplicationService(IApplicationService):
         from citnega.packages.workspace.writer import WorkspaceWriter
 
         writer = WorkspaceWriter(workfolder)
-        loaded: dict = loader.load_workfolder(writer)  # type: ignore[attr-defined]
+        loaded_workspace = loader.load_workspace(writer)  # type: ignore[attr-defined]
 
         registered: list[str] = []
         errors: list[str] = []
-        for name, obj in loaded.items():
+        for name, obj in loaded_workspace.ordered_items():
             try:
                 self.register_callable(obj)
                 registered.append(name)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
 
-        return {"registered": registered, "errors": errors}
+        refresh_result = {"refreshed": [], "skipped": []}
+        if hasattr(self._runtime, "refresh_runners"):
+            try:
+                refresh_result = await self._runtime.refresh_runners()
+            except Exception:
+                refresh_result = {"refreshed": [], "skipped": []}
+
+        return {
+            "registered": registered,
+            "errors": errors,
+            "refreshed_sessions": refresh_result["refreshed"],
+            "skipped_sessions": refresh_result["skipped"],
+        }
 
     def save_workspace_path(self, path: str) -> None:
         """Persist *path* as the workfolder in ``<app_home>/config/workspace.toml``."""

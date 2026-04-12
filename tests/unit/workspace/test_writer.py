@@ -16,6 +16,7 @@ class TestWorkspaceWriter:
     def test_ensure_dirs_creates_subdirectories(self, tmp_path: Path) -> None:
         w = WorkspaceWriter(tmp_path)
         w.ensure_dirs()
+        assert (tmp_path / "memory").is_dir()
         assert (tmp_path / "agents").is_dir()
         assert (tmp_path / "tools").is_dir()
         assert (tmp_path / "workflows").is_dir()
@@ -81,3 +82,7 @@ class TestWorkspaceWriter:
     def test_root_property(self, tmp_path: Path) -> None:
         w = WorkspaceWriter(tmp_path)
         assert w.root == tmp_path
+        assert w.memory_dir == tmp_path / "memory"
+        assert w.agents_dir == tmp_path / "agents"
+        assert w.tools_dir == tmp_path / "tools"
+        assert w.workflows_dir == tmp_path / "workflows"

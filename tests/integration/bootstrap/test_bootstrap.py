@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 from typing import TYPE_CHECKING
 import uuid
 
@@ -54,6 +55,7 @@ class TestCreateApplication:
 
         async def _do():
             async with create_application(
+                app_home=tmp_path,
                 db_path=tmp_path / "test.db",
                 framework="stub",
                 run_migrations=False,
@@ -66,6 +68,7 @@ class TestCreateApplication:
     def test_can_create_and_list_sessions(self, tmp_path: Path) -> None:
         async def _do():
             async with create_application(
+                app_home=tmp_path,
                 db_path=tmp_path / "test.db",
                 framework="stub",
                 run_migrations=True,
@@ -87,6 +90,7 @@ class TestCreateApplication:
     def test_can_run_a_turn(self, tmp_path: Path) -> None:
         async def _do():
             async with create_application(
+                app_home=tmp_path,
                 db_path=tmp_path / "test.db",
                 framework="stub",
                 run_migrations=True,
@@ -109,6 +113,7 @@ class TestCreateApplication:
 
         async def _do():
             async with create_application(
+                app_home=tmp_path,
                 db_path=db_path,
                 framework="stub",
                 run_migrations=False,
@@ -124,6 +129,7 @@ class TestCreateApplication:
 
         async def _do():
             async with create_application(
+                app_home=tmp_path,
                 db_path=tmp_path / "idem.db",
                 framework="stub",
                 run_migrations=False,
@@ -135,6 +141,119 @@ class TestCreateApplication:
         # Should not raise
         _run(_do())
 
+    def test_runtime_data_moves_under_workfolder_memory(self, tmp_path: Path) -> None:
+        workfolder = tmp_path / "workfolder"
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "workspace.toml").write_text(
+            f"[workspace]\nworkfolder_path = {str(workfolder)!r}\n",
+            encoding="utf-8",
+        )
+
+        async def _do():
+            async with create_application(
+                app_home=tmp_path,
+                framework="stub",
+                run_migrations=False,
+                skip_provider_health_check=True,
+            ) as svc:
+                assert svc._kb_store._pr.db_dir == workfolder / "memory" / "db"
+                assert svc._kb_store._pr.event_logs_dir == workfolder / "memory" / "logs" / "events"
+                assert svc._kb_store._pr.sessions_dir == workfolder / "memory" / "sessions"
+
+        _run(_do())
+        assert (workfolder / "memory" / "db").is_dir()
+        assert (workfolder / "memory" / "logs").is_dir()
+        assert (workfolder / "agents").is_dir()
+        assert (workfolder / "tools").is_dir()
+        assert (workfolder / "workflows").is_dir()
+
+    def test_workfolder_overrides_builtin_callables(self, tmp_path: Path) -> None:
+        workfolder = tmp_path / "workfolder"
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "workspace.toml").write_text(
+            f"[workspace]\nworkfolder_path = {str(workfolder)!r}\n",
+            encoding="utf-8",
+        )
+        (workfolder / "tools").mkdir(parents=True)
+        (workfolder / "agents").mkdir(parents=True)
+
+        (workfolder / "tools" / "search_web.py").write_text(
+            textwrap.dedent(
+                """
+                from pydantic import BaseModel, Field
+
+                from citnega.packages.protocol.callables.base import BaseCallable
+                from citnega.packages.protocol.callables.types import CallableType
+                from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
+
+
+                class SearchInput(BaseModel):
+                    query: str = Field(default="")
+
+
+                class WorkspaceSearchWebTool(BaseCallable):
+                    name = "search_web"
+                    description = "workspace override"
+                    callable_type = CallableType.TOOL
+                    input_schema = SearchInput
+                    output_schema = ToolOutput
+                    policy = tool_policy()
+
+                    async def _execute(self, input, context):
+                        return ToolOutput(result="workspace override")
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        (workfolder / "agents" / "planner_agent.py").write_text(
+            textwrap.dedent(
+                """
+                from pydantic import BaseModel, Field
+
+                from citnega.packages.protocol.callables.base import BaseCoreAgent
+                from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+
+                class PlannerInput(BaseModel):
+                    goal: str = Field(default="")
+
+
+                class PlannerOutput(BaseModel):
+                    tool_name: str
+
+
+                class WorkspacePlannerAgent(BaseCoreAgent):
+                    name = "planner_agent"
+                    description = "workspace planner override"
+                    callable_type = CallableType.CORE
+                    input_schema = PlannerInput
+                    output_schema = PlannerOutput
+                    policy = CallablePolicy()
+
+                    async def _execute(self, input, context):
+                        tool = self._tool_registry["search_web"]
+                        return PlannerOutput(tool_name=type(tool).__name__)
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        async def _do():
+            async with create_application(
+                app_home=tmp_path,
+                framework="stub",
+                run_migrations=False,
+                skip_provider_health_check=True,
+            ) as svc:
+                assert svc._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
+                assert svc._agent_registry["planner_agent"].__class__.__name__ == "WorkspacePlannerAgent"
+                planner = svc._agent_registry["planner_agent"]
+                assert planner._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
+
+        _run(_do())
+
 
 # ---------------------------------------------------------------------------
 # TestExitCodes — failure modes tested via subprocess
@@ -142,12 +261,14 @@ class TestCreateApplication:
 
 _HELPER_SCRIPT = """
 import sys, asyncio
+from pathlib import Path
 sys.path.insert(0, "{citnega_root}")
 
 from citnega.packages.bootstrap.bootstrap import create_application
 
 async def main():
     async with create_application(
+        app_home=Path.cwd(),
         framework={framework!r},
         run_migrations=False,
         skip_provider_health_check={skip_health!r},

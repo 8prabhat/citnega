@@ -1,63 +1,88 @@
 # Citnega
 
-A local-first, platform-agnostic TUI + agentic framework for general-purpose tasks.
+Citnega is a local-first agent runtime and terminal UI with pluggable framework adapters, built-in agents and tools, and a user workfolder for custom behavior.
 
-Citnega runs on **Linux**, **macOS**, and **Windows**. The terminal UI is modeled after Gemini CLI and Claude Code: a single scrollable conversation pane with streaming output, inline tool-call cards, approval prompts, and slash commands.
+## What Lives Where
 
-## Features
+Built-in code stays in the package:
+- `packages/agents/` contains built-in agents
+- `packages/tools/` contains built-in tools
+- `packages/bootstrap/` and `apps/` contain composition roots and user interfaces
 
-- **Conversational TUI** — single-pane interface with streaming LLM output
-- **Framework-agnostic** — ADK, LangGraph, and CrewAI are equal, config-selected peers
-- **Core + Specialist agents** — `ConversationAgent` orchestrates `ResearchAgent`, `FileAgent`, `DataAgent`, `WritingAgent`, `SummaryAgent`
-- **10 built-in tools** — web_search, read_file, write_file, kb_search, list_dir, fetch_url, parse_csv, parse_json, run_calculation, search_files
-- **Local KB** — SQLite FTS5 full-text search, no embeddings required
-- **Secure secrets** — OS-native keyring (macOS Keychain / Windows Credential Manager / Linux Secret Service)
-- **Approval gates** — dangerous operations (file writes, network) require user approval inline
-- **Checkpointing** — runs can be paused, resumed, and recovered after process kill
+User-defined runtime data stays in the workfolder:
+- `memory/` holds runtime state such as DB, logs, sessions, artifacts, KB data, checkpoints, and exports
+- `agents/` holds custom agents
+- `tools/` holds custom tools
+- `workflows/` holds custom workflows
+
+If a custom tool, agent, or workflow has the same name as a built-in callable, the workfolder version wins.
+
+## Workfolder Layout
+
+```text
+<workfolder>/
+├── memory/
+│   ├── db/
+│   ├── logs/
+│   ├── sessions/
+│   ├── artifacts/
+│   ├── kb/
+│   ├── checkpoints/
+│   └── exports/
+├── agents/
+├── tools/
+└── workflows/
+```
+
+Citnega will create the missing subdirectories when the workfolder is configured.
 
 ## Installation
 
 ```bash
 pip install citnega
-# or
-pipx install citnega
 ```
 
-With a specific framework:
+Optional framework extras:
+
 ```bash
-pip install "citnega[adk]"      # Google ADK
-pip install "citnega[langgraph]" # LangGraph
-pip install "citnega[crewai]"   # CrewAI
+pip install "citnega[adk]"
+pip install "citnega[langgraph]"
+pip install "citnega[crewai]"
 ```
 
 ## Quick Start
 
 ```bash
-# Launch TUI
+# Launch the TUI
 citnega
 
 # Run a task headlessly
-citnega-cli run --session my-session --task "Summarize the latest IPCC report"
+citnega-cli run --session my-session --prompt "Summarize the latest IPCC report"
 
 # List sessions
-citnega-cli sessions list
-
-# Search KB
-citnega-cli kb search "climate risk"
+citnega-cli session list
 ```
 
 ## Configuration
 
-Config files live in the platform-appropriate app home:
-- **Linux:** `~/.local/share/citnega/config/`
-- **macOS:** `~/Library/Application Support/citnega/config/`
-- **Windows:** `%APPDATA%\citnega\config\`
+Config files live in the platform app home:
+- Linux: `~/.local/share/citnega/config/`
+- macOS: `~/Library/Application Support/citnega/config/`
+- Windows: `%APPDATA%\\citnega\\config\\`
 
 Key config files:
-- `settings.toml` — runtime framework, model, logging, TUI preferences
-- `model_registry.toml` — model provider definitions
-- `agent_registry.toml` — agent registrations
-- `tool_registry.toml` — tool registrations with policies
+- `settings.toml` for runtime, model, logging, and workspace defaults
+- `workspace.toml` for the active workfolder path
+- `model_registry.toml` for model definitions
+
+To point Citnega at a workfolder, set:
+
+```toml
+[workspace]
+workfolder_path = "/absolute/path/to/workfolder"
+```
+
+When a workfolder is configured, runtime state is stored under `<workfolder>/memory` instead of the app-home data directory.
 
 ## Development
 
@@ -67,31 +92,28 @@ cd citnega
 bash scripts/dev_setup.sh
 ```
 
-### Running tests
+### Tests
 
 ```bash
-uv run pytest                          # all tests
-uv run pytest tests/unit/              # unit tests only
-uv run pytest --cov=packages           # with coverage
+uv run pytest
+uv run pytest tests/unit/
+uv run pytest tests/integration/
 ```
 
-### Linting and type checking
+### Linting
 
 ```bash
 uv run ruff check .
-uv run mypy packages/
-uv run lint-imports                    # architecture contracts
+uv run mypy packages apps
+uv run lint-imports --config import-linter.ini
 ```
 
-## Architecture
+## Architecture Notes
 
-See `citnega_technical_specification.txt` for the complete build-ready specification.
-
-Key principles:
-- **SOLID + DRY** throughout
-- **Framework agnosticism** — only `packages/adapters/` imports framework SDKs
-- **Composition root** — only `packages/bootstrap/bootstrap.py` wires concrete dependencies
-- **Import contracts** enforced by `import-linter` in CI
+- Framework adapters stay isolated under `packages/adapters/`
+- Bootstrap code composes concrete dependencies and loads the workspace overlay
+- Built-in callables are loaded first, then workfolder callables override them by name
+- Core agents are rewired after overrides so they see the final tool and agent registry
 
 ## License
 

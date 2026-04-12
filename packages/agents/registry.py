@@ -51,7 +51,26 @@ class AgentRegistry:
         agents: dict[str, IInvocable] = {}
         for agent in self._create_agents():
             agents[agent.name] = agent
+        self.wire_core_agents(agents, self._tools)
         return agents
+
+    @staticmethod
+    def wire_core_agents(
+        agents: dict[str, IInvocable],
+        tools: dict[str, IInvocable] | None = None,
+    ) -> None:
+        from citnega.packages.protocol.callables.types import CallableType
+
+        non_core = [
+            agent for agent in agents.values() if getattr(agent, "callable_type", None) != CallableType.CORE
+        ]
+        for agent in agents.values():
+            if getattr(agent, "callable_type", None) != CallableType.CORE:
+                continue
+            if hasattr(agent, "sync_tool_registry"):
+                agent.sync_tool_registry(tools or {})
+            if hasattr(agent, "sync_sub_callables"):
+                agent.sync_sub_callables(non_core)
 
     # ── Private ───────────────────────────────────────────────────────────────
 

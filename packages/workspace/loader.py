@@ -14,6 +14,8 @@ a broken file never prevents other files from loading.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
 import importlib.util
 import logging
 from typing import TYPE_CHECKING
@@ -35,6 +37,24 @@ _BASE_CLASS_NAMES = frozenset(
         "SpecialistBase",
     }
 )
+
+
+@dataclass(frozen=True)
+class WorkspaceLoadResult:
+    tools: dict[str, IInvocable]
+    agents: dict[str, IInvocable]
+    workflows: dict[str, IInvocable]
+
+    @property
+    def callables(self) -> dict[str, IInvocable]:
+        return {**self.tools, **self.agents, **self.workflows}
+
+    def ordered_items(self) -> list[tuple[str, IInvocable]]:
+        return [
+            *self.tools.items(),
+            *self.agents.items(),
+            *self.workflows.items(),
+        ]
 
 
 class DynamicLoader:
@@ -90,14 +110,31 @@ class DynamicLoader:
 
         Returns merged dict of all discovered callables.
         """
+        return self.load_workspace(writer).callables
+
+    def load_workspace(self, writer: WorkspaceWriter) -> WorkspaceLoadResult:
+        """
+        Load a workspace in dependency order.
+
+        Custom tools are loaded first so custom agents and workflows receive
+        the final tool registry with workfolder overrides already applied.
+        """
         from citnega.packages.workspace.writer import WorkspaceWriter
 
         assert isinstance(writer, WorkspaceWriter)
+        writer.ensure_dirs()
 
-        result: dict[str, IInvocable] = {}
-        for subdir in ("tools", "agents", "workflows"):
-            result.update(self.load_directory(writer.root / subdir))
-        return result
+        tools = self.load_directory(writer.tools_dir)
+        merged_tools = {**self._tool_registry, **tools}
+        downstream_loader = DynamicLoader(
+            self._enforcer,
+            self._emitter,
+            self._tracer,
+            tool_registry=merged_tools,
+        )
+        agents = downstream_loader.load_directory(writer.agents_dir)
+        workflows = downstream_loader.load_directory(writer.workflows_dir)
+        return WorkspaceLoadResult(tools=tools, agents=agents, workflows=workflows)
 
     # ── Internals ──────────────────────────────────────────────────────────────
 
@@ -109,7 +146,8 @@ class DynamicLoader:
     @staticmethod
     def _import_module(path: Path) -> types.ModuleType:
         """Import a file by path without mutating sys.path."""
-        module_name = f"_citnega_workspace_{path.stem}"
+        digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+        module_name = f"_citnega_workspace_{path.parent.name}_{path.stem}_{digest}"
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"Cannot create module spec for {path}")
@@ -143,7 +181,8 @@ class DynamicLoader:
         from citnega.packages.agents.specialists._specialist_base import (
             SpecialistBase,
         )
+        from citnega.packages.protocol.callables.base import BaseCoreAgent
 
-        if issubclass(cls, SpecialistBase):
+        if issubclass(cls, (SpecialistBase, BaseCoreAgent)):
             return cls(self._enforcer, self._emitter, self._tracer, self._tool_registry)
         return cls(self._enforcer, self._emitter, self._tracer)

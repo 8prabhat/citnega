@@ -90,6 +90,7 @@ class CoreRuntime(IRuntime):
         self._adapter = framework_adapter
         self._emitter = event_emitter
         self._registry = callable_registry
+        self._runners: dict[str, IFrameworkRunner] = {}
 
         # Per-session lock: only one active run at a time per session
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -105,19 +106,11 @@ class CoreRuntime(IRuntime):
     async def create_session(self, config: SessionConfig) -> Session:
         session = await self._sessions.create(config)
         # Eagerly create the framework runner for this session
-        runner = await self._adapter.create_runner(
-            session,
-            self._registry.list_all(),
-            None,  # model_gateway — injected in Phase 4
-        )
+        runner = await self._create_runner(session)
         # We stash the runner on the session lock entry
         async with self._active_lock:
             if config.session_id not in self._session_locks:
                 self._session_locks[config.session_id] = asyncio.Lock()
-        # Store runner in a separate dict keyed by session_id
-        self._runners: dict[str, IFrameworkRunner]
-        if not hasattr(self, "_runners"):
-            self._runners = {}
         self._runners[config.session_id] = runner
         return session
 
@@ -155,13 +148,7 @@ class CoreRuntime(IRuntime):
         runner = getattr(self, "_runners", {}).get(session_id)
         if runner is None:
             # Lazy init — create runner if not done in create_session
-            runner = await self._adapter.create_runner(
-                session,
-                self._registry.list_all(),
-                None,
-            )
-            if not hasattr(self, "_runners"):
-                self._runners = {}
+            runner = await self._create_runner(session)
             self._runners[session_id] = runner
 
         # Pre-create the event queue BEFORE scheduling the task so that
@@ -401,6 +388,39 @@ class CoreRuntime(IRuntime):
 
     def list_callables(self) -> list[CallableMetadata]:
         return [c.get_metadata() for c in self._registry.list_all()]
+
+    def get_runner(self, session_id: str):
+        return self._runners.get(session_id)
+
+    async def ensure_runner(self, session_id: str):
+        runner = self._runners.get(session_id)
+        if runner is not None:
+            return runner
+        session = await self._sessions.get(session_id)
+        runner = await self._create_runner(session)
+        self._runners[session_id] = runner
+        return runner
+
+    async def refresh_runners(self) -> dict[str, list[str]]:
+        refreshed: list[str] = []
+        skipped: list[str] = []
+        for session_id in list(self._runners):
+            async with self._active_lock:
+                is_active = session_id in self._active
+            if is_active:
+                skipped.append(session_id)
+                continue
+            session = await self._sessions.get(session_id)
+            self._runners[session_id] = await self._create_runner(session)
+            refreshed.append(session_id)
+        return {"refreshed": refreshed, "skipped": skipped}
+
+    async def _create_runner(self, session: Session) -> IFrameworkRunner:
+        return await self._adapter.create_runner(
+            session,
+            self._registry.list_all(),
+            None,  # model_gateway — injected in Phase 4
+        )
 
     # ------------------------------------------------------------------
     # Shutdown

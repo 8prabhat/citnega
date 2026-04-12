@@ -247,3 +247,16 @@ class TestShutdown:
         # After shutdown, the run should be cancelled
         run = await runtime._runs.get(run_id)
         assert run.state in (RunState.CANCELLED, RunState.FAILED)
+
+
+class TestRunnerRefresh:
+    @pytest.mark.asyncio
+    async def test_refresh_runners_rebuilds_idle_sessions(self, runtime: CoreRuntime) -> None:
+        session = await runtime.create_session(_session_config("sess-refresh"))
+        first_runner = runtime._runners[session.config.session_id]
+
+        result = await runtime.refresh_runners()
+
+        assert result["refreshed"] == [session.config.session_id]
+        assert result["skipped"] == []
+        assert runtime._runners[session.config.session_id] is not first_runner
