@@ -165,6 +165,7 @@ class TestExitCodes:
             capture_output=True,
             text=True,
             cwd=str(cwd),
+            timeout=30,
         )
 
     def test_unknown_framework_exits_3(self, tmp_path: Path) -> None:

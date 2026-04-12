@@ -29,6 +29,7 @@ dev = [
     "pytest>=9.0",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
     "hypothesis>=6.130",
     "ruff>=0.9",
     "mypy>=1.15",
@@ -61,7 +62,7 @@ config = "ruff.toml"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths    = ["tests"]
-addopts      = "-ra -q"
+addopts      = "-ra -q --timeout=60"
 pythonpath   = ["."]
 
 # ── Coverage ───────────────────────────────────────────────────────────────────
