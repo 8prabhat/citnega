@@ -41,6 +41,13 @@ jobs:
         continue-on-error: true
         run: uv run mypy citnega/packages/ citnega/apps/
 
+      - name: Type check nextgen bounded contexts (blocking)
+        run: uv run mypy \
+          citnega/packages/capabilities/ \
+          citnega/packages/planning/ \
+          citnega/packages/execution/ \
+          citnega/packages/strategy/
+
       - name: Architecture contracts (import-linter)
         run: uv run lint-imports --config import-linter.ini
 

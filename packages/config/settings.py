@@ -295,6 +295,23 @@ class RemoteExecutionSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CITNEGA_REMOTE_")
 
 
+class NextgenSettings(BaseSettings):
+    """
+    Feature gates for the Nextgen planning/execution stack.
+
+    All gates default to false so the legacy runtime remains the active path
+    until parity and rollout criteria are met.
+    """
+
+    planning_enabled: bool = False
+    execution_enabled: bool = False
+    workflows_enabled: bool = False
+    skills_enabled: bool = False
+    parallel_execution_enabled: bool = False
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_NEXTGEN_")
+
+
 class Settings(BaseSettings):
     """Root settings object — single entry point for all configuration."""
 
@@ -308,6 +325,7 @@ class Settings(BaseSettings):
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     policy: PolicySettings = Field(default_factory=PolicySettings)
     remote: RemoteExecutionSettings = Field(default_factory=RemoteExecutionSettings)
+    nextgen: NextgenSettings = Field(default_factory=NextgenSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="CITNEGA_",

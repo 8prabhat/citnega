@@ -275,6 +275,7 @@ async def create_application(
             from citnega.packages.security.key_store import EnvVarKeyStore
 
             key_store = EnvVarKeyStore()
+        runtime_logger.debug("bootstrap_keystore_ready", implementation=type(key_store).__name__)
 
         # ── Step 5: Database (connect + WAL PRAGMAs) ──────────────────────────
         from citnega.packages.storage.database import DatabaseFactory

@@ -21,6 +21,8 @@ from citnega.packages.protocol.models.approvals import ApprovalStatus
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from citnega.packages.capabilities import CapabilityDescriptor, CapabilityRegistry
+    from citnega.packages.planning import CompiledPlan
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.interfaces.adapter import IFrameworkRunner
@@ -78,6 +80,7 @@ class ApplicationService(IApplicationService):
         self._enforcer = enforcer
         self._tracer = tracer
         self._app_home = app_home
+        self._capability_registry_cache: CapabilityRegistry | None = None
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -283,7 +286,7 @@ class ApplicationService(IApplicationService):
             runner.set_plan_phase(phase)
 
     async def set_session_mode(self, session_id: str, mode_name: str) -> None:
-        """Switch the session mode (``"chat"`` | ``"plan"`` | ``"explore"``)."""
+        """Switch the session mode."""
         runner = self._get_runner(session_id)
         if runner is not None:
             await runner.set_mode(mode_name)
@@ -385,14 +388,12 @@ class ApplicationService(IApplicationService):
 
         # Use the adapter to resolve the provider for model-based compaction
         adapter = self._runtime.adapter
-        adapter_runner = adapter.get_runner("")  # check if adapter supports _resolve_provider
         # If the adapter's runner has _resolve_provider, use it; otherwise fallback
         if getattr(adapter, "_yaml_config", None) is None:
             return self._fallback_compact_summary(runner)
 
         try:
             from citnega.packages.model_gateway.provider_factory import ProviderFactory
-            from citnega.packages.model_gateway.yaml_config import load_yaml_config
 
             yaml_config = getattr(adapter, "_yaml_config", None)
             if yaml_config is None:
@@ -478,6 +479,161 @@ class ApplicationService(IApplicationService):
         # Fallback: disk read when no warm runner is available
         return self._read_conversation_field(session_id, "messages")
 
+    def set_session_skills(self, session_id: str, skill_names: list[str]) -> None:
+        from citnega.packages.protocol.events.planning import SkillActivatedEvent
+
+        runner = self._get_runner(session_id)
+        if runner is not None:
+            runner.set_active_skills(skill_names)
+        for skill_name in skill_names:
+            self._emitter.emit(
+                SkillActivatedEvent(
+                    session_id=session_id,
+                    run_id=f"skills-{session_id}",
+                    skill_name=skill_name,
+                    rationale="session_selection",
+                )
+            )
+
+    def get_session_skills(self, session_id: str) -> list[str]:
+        runner = self._get_runner(session_id)
+        if runner is not None:
+            return runner.get_active_skills()
+        return []
+
+    def compile_mental_model(self, session_id: str, text: str) -> dict[str, Any]:
+        from citnega.packages.protocol.events.planning import MentalModelCompiledEvent
+        from citnega.packages.strategy import compile_mental_model
+
+        spec = compile_mental_model(text)
+        runner = self._get_runner(session_id)
+        if runner is not None:
+            runner.set_mental_model_spec(spec.model_dump())
+        self._emitter.emit(
+            MentalModelCompiledEvent(
+                session_id=session_id,
+                run_id=f"mental-model-{session_id}",
+                clause_count=len(spec.clauses),
+                risk_posture=spec.risk_posture,
+                recommended_parallelism=spec.recommended_parallelism,
+            )
+        )
+        return spec.model_dump()
+
+    def list_capabilities(self) -> list[CapabilityDescriptor]:
+        return self._build_capability_registry().list_all()
+
+    def list_skills(self) -> list[CapabilityDescriptor]:
+        from citnega.packages.capabilities import CapabilityKind
+
+        return self._build_capability_registry().list_by_kind(CapabilityKind.SKILL)
+
+    def compile_plan(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        capability_id: str | None = None,
+        workflow_name: str | None = None,
+        variables: dict[str, Any] | None = None,
+    ) -> CompiledPlan:
+        from citnega.packages.capabilities import CapabilityKind
+        from citnega.packages.planning import PlanCompiler, PlanValidator
+        from citnega.packages.protocol.events.planning import (
+            PlanCompiledEvent,
+            PlanValidatedEvent,
+            WorkflowTemplateExpandedEvent,
+        )
+        from citnega.packages.strategy import MentalModelSpec, StrategySpec
+
+        registry = self._build_capability_registry()
+        runner = self._get_runner(session_id)
+        skill_names = runner.get_active_skills() if runner is not None else []
+        mode_name = runner.get_mode() if runner is not None else "chat"
+        mental_model = runner.get_mental_model_spec() if runner is not None else None
+        mental_model_spec = (
+            MentalModelSpec.model_validate(mental_model) if mental_model is not None else None
+        )
+        strategy = StrategySpec(
+            mode=mode_name,
+            objective=objective,
+            active_skills=skill_names,
+            parallelism_budget=(
+                mental_model_spec.recommended_parallelism if mental_model_spec is not None else 1
+            ),
+            mental_model_clauses=(
+                mental_model_spec.clauses if mental_model_spec is not None else []
+            ),
+            risk_posture=(
+                mental_model_spec.risk_posture if mental_model_spec is not None else "balanced"
+            ),
+        )
+
+        compiler = PlanCompiler()
+        if workflow_name:
+            workflow_capability_id = workflow_name
+            if workflow_capability_id not in registry:
+                workflow_capability_id = f"workflow_template:{workflow_name}"
+            descriptor = registry.resolve_descriptor(workflow_capability_id)
+            if descriptor.kind != CapabilityKind.WORKFLOW_TEMPLATE:
+                raise ValueError(f"{workflow_name!r} is not a workflow template.")
+            template = registry.get_runtime(workflow_capability_id)
+            plan = compiler.compile_workflow(
+                template,
+                variables=variables or {},
+                strategy=strategy,
+                objective=objective,
+            )
+            self._emitter.emit(
+                WorkflowTemplateExpandedEvent(
+                    session_id=session_id,
+                    run_id=f"plan-{session_id}",
+                    plan_id=plan.plan_id,
+                    workflow_name=descriptor.display_name,
+                    step_count=len(plan.steps),
+                )
+            )
+        else:
+            plan = compiler.compile_goal(
+                objective,
+                strategy=strategy,
+                capability_id=capability_id or "conversation_agent",
+            )
+
+        validation = PlanValidator().validate(plan, registry)
+        synthetic_run_id = f"plan-{session_id}"
+        self._emitter.emit(
+            PlanCompiledEvent(
+                session_id=session_id,
+                run_id=synthetic_run_id,
+                plan_id=plan.plan_id,
+                objective=plan.objective,
+                generated_from=plan.generated_from,
+                step_count=len(plan.steps),
+            )
+        )
+        self._emitter.emit(
+            PlanValidatedEvent(
+                session_id=session_id,
+                run_id=synthetic_run_id,
+                plan_id=plan.plan_id,
+                valid=validation.valid,
+                errors=validation.errors,
+            )
+        )
+        if not validation.valid:
+            raise ValueError("; ".join(validation.errors))
+        if runner is not None:
+            runner.set_compiled_plan_metadata(
+                {
+                    "plan_id": plan.plan_id,
+                    "generated_from": plan.generated_from,
+                    "objective": plan.objective,
+                    "step_count": len(plan.steps),
+                }
+            )
+        return plan
+
     def _read_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
         """Read a field from the on-disk conversation.json for *session_id*."""
         adapter = self._runtime.adapter
@@ -525,6 +681,7 @@ class ApplicationService(IApplicationService):
         # Register in the unified callable registry (both local view and runtime)
         self._callable_registry.register(name, callable_obj, overwrite=True)  # type: ignore[arg-type]
         self._runtime.callable_registry.register(name, callable_obj, overwrite=True)
+        self._capability_registry_cache = None
 
         from citnega.packages.agents.registry import AgentRegistry
 
@@ -584,6 +741,7 @@ class ApplicationService(IApplicationService):
             from citnega.packages.config.loaders import save_workspace_settings
 
             save_workspace_settings(path, self._app_home)
+            self._capability_registry_cache = None
 
     # ── Registry queries ───────────────────────────────────────────────────────
 
@@ -629,3 +787,70 @@ class ApplicationService(IApplicationService):
             return list(reg.list_all())
         except Exception:
             return []
+
+    def _build_capability_registry(self) -> CapabilityRegistry:
+        from citnega.packages.capabilities import (
+            BuiltinCapabilityProvider,
+            CapabilityKind,
+            CapabilityRegistry,
+            WorkspaceCapabilityProvider,
+        )
+        from citnega.packages.config.loaders import load_settings
+        from citnega.packages.protocol.events.planning import CapabilityLoadFailedEvent
+
+        if self._capability_registry_cache is not None:
+            return self._capability_registry_cache
+
+        registry = CapabilityRegistry()
+        callables = {item.name: item for item in self._callable_registry.list_all()}
+        builtin_records, builtin_diagnostics = BuiltinCapabilityProvider().load(callables)
+        for failure in builtin_diagnostics.failures:
+            self._emitter.emit(
+                CapabilityLoadFailedEvent(
+                    session_id="system",
+                    run_id="capability-bootstrap",
+                    capability_id=failure.capability_id,
+                    source=failure.source,
+                    path=failure.path,
+                    error=failure.error,
+                    required=failure.required,
+                )
+            )
+        if builtin_diagnostics.has_required_failures:
+            details = "; ".join(
+                f"{failure.capability_id}: {failure.error}"
+                for failure in builtin_diagnostics.failures
+            )
+            raise RuntimeError(f"Capability bootstrap failed: {details}")
+        registry.register_many(builtin_records, overwrite=True)
+
+        settings = load_settings(app_home=self._app_home)
+        workspace_root = (
+            Path(settings.workspace.workfolder_path).expanduser()
+            if settings.workspace.workfolder_path
+            else None
+        )
+        workspace_records, workspace_diagnostics = WorkspaceCapabilityProvider(workspace_root).load()
+        for failure in workspace_diagnostics.failures:
+            self._emitter.emit(
+                CapabilityLoadFailedEvent(
+                    session_id="system",
+                    run_id="capability-bootstrap",
+                    capability_id=failure.capability_id,
+                    source=failure.source,
+                    path=failure.path,
+                    error=failure.error,
+                    required=failure.required,
+                )
+            )
+        for record in workspace_records:
+            if record.descriptor.kind == CapabilityKind.SKILL and not settings.nextgen.skills_enabled:
+                continue
+            if (
+                record.descriptor.kind == CapabilityKind.WORKFLOW_TEMPLATE
+                and not settings.nextgen.workflows_enabled
+            ):
+                continue
+            registry.register(record, overwrite=True)
+        self._capability_registry_cache = registry
+        return registry

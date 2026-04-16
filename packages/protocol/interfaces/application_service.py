@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from citnega.packages.capabilities import CapabilityDescriptor
+    from citnega.packages.planning import CompiledPlan
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.models import (
@@ -134,3 +136,31 @@ class IApplicationService(ABC):
 
     @abstractmethod
     def list_models(self) -> list[ModelInfo]: ...
+
+    # ── Nextgen planning / strategy ────────────────────────────────────────────
+
+    @abstractmethod
+    def list_capabilities(self) -> list[CapabilityDescriptor]: ...
+
+    @abstractmethod
+    def list_skills(self) -> list[CapabilityDescriptor]: ...
+
+    @abstractmethod
+    def compile_mental_model(self, session_id: str, text: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def set_session_skills(self, session_id: str, skill_names: list[str]) -> None: ...
+
+    @abstractmethod
+    def get_session_skills(self, session_id: str) -> list[str]: ...
+
+    @abstractmethod
+    def compile_plan(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        capability_id: str | None = None,
+        workflow_name: str | None = None,
+        variables: dict[str, Any] | None = None,
+    ) -> CompiledPlan: ...

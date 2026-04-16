@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -340,3 +341,37 @@ class TestContextAssembler:
         assert "recent_turns" in source_types
         assert "summary" in source_types
         assert "state" in source_types
+
+    @pytest.mark.asyncio
+    async def test_parallel_safe_handlers_merge_in_handler_order(self) -> None:
+        class ParallelHandler:
+            parallel_safe = True
+
+            def __init__(self, name: str, delay: float) -> None:
+                self._name = name
+                self._delay = delay
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+            async def enrich(self, ctx: ContextObject, session: Session) -> ContextObject:
+                await asyncio.sleep(self._delay)
+                source = ContextSource(source_type=self._name, content=self._name, token_count=1)
+                return ctx.model_copy(
+                    update={
+                        "sources": [*ctx.sources, source],
+                        "total_tokens": ctx.total_tokens + 1,
+                        "budget_remaining": ctx.budget_remaining - 1,
+                    }
+                )
+
+        settings = MagicMock()
+        settings.nextgen.parallel_execution_enabled = True
+        with patch("citnega.packages.config.loaders.load_settings", return_value=settings):
+            assembler = ContextAssembler(
+                [ParallelHandler("first", 0.03), ParallelHandler("second", 0.01)]
+            )
+            ctx = await assembler.assemble(_session(), "hello", "run-1")
+
+        assert [source.source_type for source in ctx.sources] == ["first", "second"]

@@ -7,7 +7,8 @@ Workfolder layout::
     ├── memory/
     ├── agents/
     ├── tools/
-    └── workflows/
+    ├── workflows/
+    └── skills/
 
 All filenames are derived from the class name via PascalCase → snake_case
 conversion.  Each write is atomic: content is written to a .tmp file then
@@ -30,7 +31,7 @@ class WorkspaceWriter:
         workfolder: Absolute path to the user's workfolder directory.
     """
 
-    _SUBDIRS = ("memory", "agents", "tools", "workflows")
+    _SUBDIRS = ("memory", "agents", "tools", "workflows", "skills")
 
     def __init__(self, workfolder: Path) -> None:
         self._root = Path(workfolder)
@@ -38,7 +39,7 @@ class WorkspaceWriter:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def ensure_dirs(self) -> None:
-        """Create memory/, agents/, tools/, and workflows/ subdirectories if absent."""
+        """Create memory/, agents/, tools/, workflows/, and skills/ if absent."""
         for sub in self._SUBDIRS:
             (self._root / sub).mkdir(parents=True, exist_ok=True)
 
@@ -53,6 +54,34 @@ class WorkspaceWriter:
     def write_workflow(self, class_name: str, source: str) -> Path:
         """Write a workflow module to workflows/<snake_name>.py."""
         return self._write(self._root / "workflows", class_name, source)
+
+    def write_workflow_template(self, name: str, source: str) -> Path:
+        """Write a workflow template to workflows/<snake_name>.yaml."""
+        directory = self._root / "workflows"
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{pascal_to_snake(name)}.yaml"
+        tmp = target.with_suffix(".tmp")
+        try:
+            tmp.write_text(source, encoding="utf-8")
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        return target
+
+    def write_skill(self, name: str, source: str) -> Path:
+        """Write a skill bundle to skills/<name>/SKILL.md."""
+        directory = self._root / "skills" / pascal_to_snake(name)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "SKILL.md"
+        tmp = target.with_suffix(".tmp")
+        try:
+            tmp.write_text(source, encoding="utf-8")
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        return target
 
     @property
     def root(self) -> Path:
@@ -73,6 +102,10 @@ class WorkspaceWriter:
     @property
     def workflows_dir(self) -> Path:
         return self._root / "workflows"
+
+    @property
+    def skills_dir(self) -> Path:
+        return self._root / "skills"
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

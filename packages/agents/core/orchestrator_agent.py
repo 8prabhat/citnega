@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from typing import TYPE_CHECKING, Any
+import uuid
 
 from pydantic import BaseModel, Field
 
@@ -200,6 +201,20 @@ class OrchestratorAgent(BaseCoreAgent):
                 generated_plan=generated_plan,
             )
 
+        if self._nextgen_execution_enabled() and all(
+            (step.execution_target or "local").strip().lower() == "local"
+            for step in steps
+        ):
+            nextgen_output = await self._execute_via_nextgen_engine(
+                input=input,
+                steps=steps,
+                callables=callables,
+                context=context,
+                generated_plan=generated_plan,
+            )
+            if nextgen_output is not None:
+                return nextgen_output
+
         step_results: list[OrchestrationStepResult] = []
         by_id: dict[str, OrchestrationStepResult] = {}
         successful_for_rollback: list[OrchestrationStep] = []
@@ -303,6 +318,138 @@ class OrchestratorAgent(BaseCoreAgent):
             completed_steps=completed_steps,
             failed_steps=failed_steps,
             rollback_actions=rollback_actions,
+            generated_plan=generated_plan,
+        )
+
+    async def _execute_via_nextgen_engine(
+        self,
+        *,
+        input: OrchestratorInput,
+        steps: list[OrchestrationStep],
+        callables: dict[str, IStreamable],
+        context: CallContext,
+        generated_plan: bool,
+    ) -> OrchestratorOutput | None:
+        from citnega.packages.capabilities import BuiltinCapabilityProvider, CapabilityRegistry
+        from citnega.packages.execution import ExecutionEngine
+        from citnega.packages.planning import (
+            CompiledPlan,
+            PlanStep,
+            PlanStepType,
+            PlanValidator,
+            RetryPolicy,
+        )
+        from citnega.packages.protocol.events.planning import PlanCompiledEvent, PlanValidatedEvent
+
+        registry = CapabilityRegistry()
+        records, diagnostics = BuiltinCapabilityProvider().load(callables)
+        if diagnostics.has_required_failures:
+            return None
+        registry.register_many(records, overwrite=True)
+
+        plan_steps: list[PlanStep] = []
+        for step in steps:
+            descriptor = registry.get_descriptor(step.callable_name)
+            if descriptor is None:
+                return None
+            plan_steps.append(
+                PlanStep(
+                    step_id=step.step_id,
+                    step_type=(
+                        PlanStepType.AGENT
+                        if descriptor.kind.value == "agent"
+                        else PlanStepType.TOOL
+                    ),
+                    capability_id=step.callable_name,
+                    args=self._build_payload(
+                        schema=callables[step.callable_name].input_schema,
+                        goal=input.goal,
+                        task=step.task,
+                        args=step.args,
+                        working_dir=input.working_dir,
+                    ),
+                    task=step.task or input.goal,
+                    depends_on=list(step.depends_on),
+                    can_run_in_parallel=descriptor.execution_traits.parallel_safe,
+                    retry_policy=RetryPolicy(
+                        max_attempts=max(1, (step.retries if step.retries > 0 else input.max_retries) + 1)
+                    ),
+                    rollback_capability_id=step.rollback_callable,
+                    rollback_args=dict(step.rollback_args),
+                    execution_target="local",
+                )
+            )
+
+        compiled_plan = CompiledPlan(
+            plan_id=f"orchestrated-{uuid.uuid4()}",
+            objective=input.goal,
+            steps=plan_steps,
+            generated_from="orchestrator_agent",
+            max_parallelism=max(1, len(plan_steps)),
+            metadata={"allow_remote": input.allow_remote, "generated_plan": generated_plan},
+        )
+        validation = PlanValidator().validate(compiled_plan, registry)
+        self._event_emitter.emit(
+            PlanCompiledEvent(
+                session_id=context.session_id,
+                run_id=context.run_id,
+                turn_id=context.turn_id,
+                callable_name=self.name,
+                callable_type=self.callable_type,
+                plan_id=compiled_plan.plan_id,
+                objective=compiled_plan.objective,
+                generated_from=compiled_plan.generated_from,
+                step_count=len(compiled_plan.steps),
+            )
+        )
+        self._event_emitter.emit(
+            PlanValidatedEvent(
+                session_id=context.session_id,
+                run_id=context.run_id,
+                turn_id=context.turn_id,
+                callable_name=self.name,
+                callable_type=self.callable_type,
+                plan_id=compiled_plan.plan_id,
+                valid=validation.valid,
+                errors=validation.errors,
+            )
+        )
+        if not validation.valid:
+            return None
+
+        engine = ExecutionEngine(event_emitter=self._event_emitter)
+        execution_result = await engine.execute(
+            compiled_plan,
+            registry,
+            context.child(self.name, self.callable_type),
+            fail_fast=input.fail_fast,
+            rollback_on_failure=input.rollback_on_failure,
+        )
+        step_results = [
+            OrchestrationStepResult(
+                step_id=item.step_id,
+                callable_name=item.capability_id,
+                status=item.status,
+                attempts=item.attempts,
+                dependency_ids=list(item.dependency_ids),
+                output_excerpt=item.output_excerpt,
+                error=item.error,
+                duration_ms=item.duration_ms,
+                execution_target=item.execution_target,
+            )
+            for item in execution_result.step_results
+        ]
+        return OrchestratorOutput(
+            response=execution_result.response,
+            plan=[
+                f"{step.step_id}: {step.callable_name} "
+                f"({'deps=' + ','.join(step.depends_on) if step.depends_on else 'deps=none'})"
+                for step in steps
+            ],
+            step_results=step_results,
+            completed_steps=sum(1 for item in step_results if item.status == "completed"),
+            failed_steps=sum(1 for item in step_results if item.status == "failed"),
+            rollback_actions=list(execution_result.rollback_actions),
             generated_plan=generated_plan,
         )
 
@@ -818,3 +965,12 @@ class OrchestratorAgent(BaseCoreAgent):
                 text = str(value)
                 return text[:280]
         return output.model_dump_json()[:280]
+
+    @staticmethod
+    def _nextgen_execution_enabled() -> bool:
+        try:
+            from citnega.packages.config.loaders import load_settings
+
+            return load_settings().nextgen.execution_enabled
+        except Exception:
+            return False

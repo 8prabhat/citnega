@@ -84,7 +84,7 @@ class GitOpsTool(BaseCallable):
 
         # Hard-block destructive shortcuts regardless of args
         for blocked in _BLOCKED:
-            if cmd.startswith(blocked) or " ".join([cmd] + input.args).startswith(blocked):
+            if cmd.startswith(blocked) or " ".join([cmd, *input.args]).startswith(blocked):
                 raise ArtifactError(
                     f"Blocked: '{blocked}' is too destructive to run via git_ops. "
                     "Use run_shell with explicit user approval if you really need this."

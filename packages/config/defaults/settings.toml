@@ -212,3 +212,10 @@ service_tls_client_ca_path = ""
 
 # Require client certificates when the reference worker serves HTTPS.
 service_tls_require_client_cert = false
+
+[nextgen]
+planning_enabled = false
+execution_enabled = false
+workflows_enabled = false
+skills_enabled = false
+parallel_execution_enabled = false

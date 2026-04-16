@@ -97,7 +97,7 @@ _KNOWN_REMOTE_ISOLATION_PROFILES = {"process", "container"}
 _KNOWN_REMOTE_CONTAINER_RUNTIMES = {"docker", "podman"}
 _KNOWN_TOML_SECTIONS = {
     "runtime", "session", "logging", "tui", "context",
-    "security", "conversation", "workspace", "policy", "remote",
+    "security", "conversation", "workspace", "policy", "remote", "nextgen",
 }
 
 

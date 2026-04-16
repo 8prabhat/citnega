@@ -84,34 +84,35 @@ class ContextAssembler(IContextAssembler):
             budget_remaining=max_tokens,
         )
 
-        for handler in self._handlers:
-            try:
-                coro = handler.enrich(context, session)
-                if self._handler_timeout_s is not None:
-                    context = await asyncio.wait_for(coro, timeout=self._handler_timeout_s)
-                else:
-                    context = await coro
-            except TimeoutError:
-                runtime_logger.warning(
-                    "context_handler_timeout",
-                    handler=handler.name,
-                    session_id=session.config.session_id,
-                    run_id=run_id,
-                    timeout_s=self._handler_timeout_s,
-                )
-                # Skip timed-out handler; context is unchanged
-            except CitnegaError:
-                # Re-raise policy / config errors
-                raise
-            except Exception as exc:
-                runtime_logger.warning(
-                    "context_handler_error",
-                    handler=handler.name,
-                    session_id=session.config.session_id,
-                    run_id=run_id,
-                    error=str(exc),
-                )
-                # Skip broken handler; context is unchanged
+        idx = 0
+        while idx < len(self._handlers):
+            if self._parallel_context_enabled():
+                parallel_group: list[IContextHandler] = []
+                start_idx = idx
+                while (
+                    idx < len(self._handlers)
+                    and getattr(self._handlers[idx], "parallel_safe", False)
+                ):
+                    parallel_group.append(self._handlers[idx])
+                    idx += 1
+                if parallel_group:
+                    context = await self._run_parallel_group(
+                        parallel_group,
+                        base_context=context,
+                        session=session,
+                        run_id=run_id,
+                    )
+                    continue
+                idx = start_idx
+
+            handler = self._handlers[idx]
+            idx += 1
+            context = await self._run_handler(
+                handler,
+                context=context,
+                session=session,
+                run_id=run_id,
+            )
 
         runtime_logger.debug(
             "context_assembled",
@@ -123,3 +124,93 @@ class ContextAssembler(IContextAssembler):
         )
 
         return context
+
+    async def _run_handler(
+        self,
+        handler: IContextHandler,
+        *,
+        context: ContextObject,
+        session: Session,
+        run_id: str,
+    ) -> ContextObject:
+        try:
+            coro = handler.enrich(context, session)
+            if self._handler_timeout_s is not None:
+                return await asyncio.wait_for(coro, timeout=self._handler_timeout_s)
+            return await coro
+        except TimeoutError:
+            runtime_logger.warning(
+                "context_handler_timeout",
+                handler=handler.name,
+                session_id=session.config.session_id,
+                run_id=run_id,
+                timeout_s=self._handler_timeout_s,
+            )
+        except CitnegaError:
+            raise
+        except Exception as exc:
+            runtime_logger.warning(
+                "context_handler_error",
+                handler=handler.name,
+                session_id=session.config.session_id,
+                run_id=run_id,
+                error=str(exc),
+            )
+        return context
+
+    async def _run_parallel_group(
+        self,
+        handlers: list[IContextHandler],
+        *,
+        base_context: ContextObject,
+        session: Session,
+        run_id: str,
+    ) -> ContextObject:
+        results: dict[str, ContextObject] = {}
+
+        async def _run(handler: IContextHandler) -> None:
+            results[handler.name] = await self._run_handler(
+                handler,
+                context=base_context,
+                session=session,
+                run_id=run_id,
+            )
+
+        async with asyncio.TaskGroup() as task_group:
+            for handler in handlers:
+                task_group.create_task(_run(handler))
+
+        merged = base_context
+        additions = []
+        token_delta = 0
+        for handler in handlers:
+            result = results.get(handler.name)
+            if result is None:
+                continue
+            new_sources = result.sources[len(base_context.sources) :]
+            additions.extend(new_sources)
+            token_delta += sum(source.token_count for source in new_sources)
+            if not merged.messages and result.messages:
+                merged = merged.model_copy(update={"messages": list(result.messages)})
+            if merged.active_model_id is None and result.active_model_id is not None:
+                merged = merged.model_copy(update={"active_model_id": result.active_model_id})
+
+        return merged.model_copy(
+            update={
+                "sources": [*merged.sources, *additions],
+                "total_tokens": merged.total_tokens + token_delta,
+                "budget_remaining": max(0, merged.budget_remaining - token_delta),
+                "truncated": merged.truncated or any(
+                    results.get(handler.name, base_context).truncated for handler in handlers
+                ),
+            }
+        )
+
+    @staticmethod
+    def _parallel_context_enabled() -> bool:
+        try:
+            from citnega.packages.config.loaders import load_settings
+
+            return load_settings().nextgen.parallel_execution_enabled
+        except Exception:
+            return False

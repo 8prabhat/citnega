@@ -7,23 +7,19 @@ and IFrameworkRunner's typed methods without accessing private attributes.
 
 from __future__ import annotations
 
-import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from citnega.packages.protocol.events.lifecycle import RunCompleteEvent
-from citnega.packages.protocol.events.streaming import TokenEvent
+from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
 from citnega.packages.protocol.models.approvals import ApprovalStatus
 from citnega.packages.protocol.models.runner import ConversationStats
 from citnega.packages.protocol.models.runs import RunState, RunSummary, StateSnapshot
-from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
+from citnega.packages.protocol.models.sessions import Session, SessionConfig
 from citnega.packages.runtime.app_service import ApplicationService
-
-from datetime import UTC, datetime
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +82,24 @@ class _MockRunner:
     def get_tool_history(self) -> list[dict[str, Any]]:
         return [{"name": "read_file", "success": True}]
 
+    def get_active_skills(self) -> list[str]:
+        return getattr(self, "_skills", [])
+
+    def set_active_skills(self, skill_names: list[str]) -> None:
+        self._skills = list(skill_names)
+
+    def get_mental_model_spec(self) -> dict[str, Any] | None:
+        return getattr(self, "_mental_model_spec", None)
+
+    def set_mental_model_spec(self, spec: dict[str, Any] | None) -> None:
+        self._mental_model_spec = spec
+
+    def get_compiled_plan_metadata(self) -> dict[str, Any]:
+        return getattr(self, "_compiled_plan_metadata", {})
+
+    def set_compiled_plan_metadata(self, metadata: dict[str, Any] | None) -> None:
+        self._compiled_plan_metadata = dict(metadata or {})
+
     async def add_tool_call(self, name, input_summary, output_summary, success, callable_type="tool"):
         pass
 
@@ -145,6 +159,20 @@ def _make_service(
         approval_manager=approval_manager,
     )
     return svc
+
+
+def _mock_capability(name: str, *, callable_type: CallableType = CallableType.CORE) -> MagicMock:
+    mock = MagicMock()
+    mock.name = name
+    mock.get_metadata.return_value = CallableMetadata(
+        name=name,
+        description=f"{name} description",
+        callable_type=callable_type,
+        input_schema_json={"type": "object", "properties": {"task": {"type": "string"}}},
+        output_schema_json={"type": "object", "properties": {"response": {"type": "string"}}},
+        policy=CallablePolicy(),
+    )
+    return mock
 
 
 # ── Session management tests ─────────────────────────────────────────────────
@@ -458,6 +486,72 @@ def test_list_frameworks():
     assert result == ["stub"]
 
 
+def test_compile_mental_model_persists_to_runner():
+    runner = _MockRunner()
+    svc = _make_service(runner=runner)
+
+    spec = svc.compile_mental_model("sess-1", "Ask before risky edits. Use parallel work where safe.")
+
+    assert spec["risk_posture"] == "balanced"
+    assert runner.get_mental_model_spec() == spec
+
+
+def test_set_session_skills_persists_to_runner():
+    runner = _MockRunner()
+    svc = _make_service(runner=runner)
+
+    svc.set_session_skills("sess-1", ["release", "review"])
+
+    assert svc.get_session_skills("sess-1") == ["release", "review"]
+
+
+def test_list_capabilities_and_compile_workflow_plan(tmp_path: Path):
+    runner = _MockRunner()
+    svc = _make_service(runner=runner)
+    svc._callable_registry.register("conversation_agent", _mock_capability("conversation_agent"), overwrite=True)
+    svc._callable_registry.register("qa_agent", _mock_capability("qa_agent", callable_type=CallableType.SPECIALIST), overwrite=True)
+
+    workfolder = tmp_path / "workfolder"
+    (workfolder / "skills" / "release").mkdir(parents=True)
+    (workfolder / "workflows").mkdir(parents=True)
+    (workfolder / "skills" / "release" / "SKILL.md").write_text(
+        "---\nname: release\ndescription: Release skill\n---\nUse it.",
+        encoding="utf-8",
+    )
+    (workfolder / "workflows" / "release.yaml").write_text(
+        (
+            "name: release\n"
+            "description: Release workflow\n"
+            "steps:\n"
+            "  - step_id: qa\n"
+            "    capability_id: qa_agent\n"
+            "    task: \"Review {target}\"\n"
+        ),
+        encoding="utf-8",
+    )
+
+    settings = MagicMock()
+    settings.workspace.workfolder_path = str(workfolder)
+    settings.nextgen.skills_enabled = True
+    settings.nextgen.workflows_enabled = True
+    settings.nextgen.planning_enabled = True
+    with patch("citnega.packages.config.loaders.load_settings", return_value=settings):
+        capabilities = svc.list_capabilities()
+        plan = svc.compile_plan(
+            "sess-1",
+            "Release readiness",
+            workflow_name="release",
+            variables={"target": "repo"},
+        )
+
+    capability_ids = {item.capability_id for item in capabilities}
+    assert "skill:release" in capability_ids
+    assert "workflow_template:release" in capability_ids
+    assert plan.generated_from == "workflow:release"
+    assert plan.steps[0].task == "Review repo"
+    assert runner.get_compiled_plan_metadata()["plan_id"] == plan.plan_id
+
+
 # ── KB tests ─────────────────────────────────────────────────────────────────
 
 
@@ -526,8 +620,8 @@ def test_no_runner_conv_access():
     conv_accesses = [
         line.strip()
         for line in source.splitlines()
-        if "runner._conv" in line or "._conv." in line
-        and not line.strip().startswith("#")
+        if "runner._conv" in line or ("._conv." in line
+        and not line.strip().startswith("#"))
     ]
     assert conv_accesses == [], (
         f"ApplicationService still accesses runner._conv: {conv_accesses}"

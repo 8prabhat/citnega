@@ -125,7 +125,10 @@ class ModelCommand(ISlashCommand):
 
 class ModeCommand(ISlashCommand):
     name = "mode"
-    help_text = "Show or switch session mode. Usage: /mode [chat|plan|explore]"
+    help_text = (
+        "Show or switch session mode. Usage: "
+        "/mode [chat|plan|explore|research|code|review|operate]"
+    )
 
     def __init__(self, service: Any) -> None:
         self._service = service

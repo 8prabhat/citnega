@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.models import Session, StateSnapshot
     from citnega.packages.protocol.models.checkpoints import CheckpointMeta
     from citnega.packages.protocol.models.context import ContextObject
-    from citnega.packages.protocol.models.runner import ConversationStats, ThinkingConfig
+    from citnega.packages.protocol.models.runner import ConversationStats
 
 
 class AdapterConfig(BaseModel):
@@ -60,6 +60,7 @@ class IFrameworkAdapter(ABC):
 
     async def set_session_model(self, session_id: str, model_id: str) -> None:
         """Switch the active model for an existing session. No-op by default."""
+        return None
 
 
 class IFrameworkRunner(ABC):
@@ -106,15 +107,23 @@ class IFrameworkRunner(ABC):
 
     def set_plan_phase(self, phase: str | None) -> None:
         """Set the plan phase (``"draft"`` | ``"execute"`` | None)."""
+        return None
+
+    def get_plan_phase(self) -> str:
+        """Return the current plan phase."""
+        return "draft"
 
     async def set_mode(self, mode_name: str) -> None:
         """Switch the session mode."""
+        return None
 
     async def set_model(self, model_id: str) -> None:
         """Switch the active model for this runner's session."""
+        return None
 
     async def set_thinking(self, value: bool | None) -> None:
         """Override thinking for the session."""
+        return None
 
     def get_thinking(self) -> bool | None:
         """Return the thinking override (``None`` = auto)."""
@@ -134,6 +143,30 @@ class IFrameworkRunner(ABC):
         """Return tool call history."""
         return []
 
+    def get_active_skills(self) -> list[str]:
+        """Return the active skill names for the session."""
+        return []
+
+    def set_active_skills(self, skill_names: list[str]) -> None:
+        """Persist active skill names for the session."""
+        return None
+
+    def get_mental_model_spec(self) -> dict[str, Any] | None:
+        """Return the compiled mental model spec for the session."""
+        return None
+
+    def set_mental_model_spec(self, spec: dict[str, Any] | None) -> None:
+        """Persist the compiled mental model spec for the session."""
+        return None
+
+    def get_compiled_plan_metadata(self) -> dict[str, Any]:
+        """Return persisted compiled-plan metadata for the session."""
+        return {}
+
+    def set_compiled_plan_metadata(self, metadata: dict[str, Any] | None) -> None:
+        """Persist compiled-plan metadata for the session."""
+        return None
+
     async def add_tool_call(
         self,
         name: str,
@@ -143,6 +176,7 @@ class IFrameworkRunner(ABC):
         callable_type: str = "tool",
     ) -> None:
         """Record a completed tool/agent call."""
+        return None
 
     async def compact(self, summary: str, *, keep_recent: int = 10) -> int:
         """Compact conversation. Returns the number of messages archived."""

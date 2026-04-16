@@ -17,9 +17,12 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 import json
+import os
 from typing import TYPE_CHECKING, Any
 import uuid
 
+from citnega.packages.capabilities import callable_to_descriptor
+from citnega.packages.config.loaders import load_settings
 from citnega.packages.model_gateway.provider_factory import ProviderFactory
 from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.events.streaming import TokenEvent
@@ -28,8 +31,8 @@ from citnega.packages.protocol.interfaces.adapter import IFrameworkRunner
 from citnega.packages.protocol.models.checkpoints import CheckpointMeta
 from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
 from citnega.packages.protocol.models.runs import RunState, StateSnapshot
+from citnega.packages.protocol.modes import get_mode
 from citnega.packages.runtime.context.conversation_store import ConversationStore
-from citnega.packages.runtime.session_modes import get_mode
 from citnega.packages.runtime.thinking_parser import ThinkingStreamParser
 
 if TYPE_CHECKING:
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.models.context import ContextObject
     from citnega.packages.protocol.models.model_gateway import ModelRequest, ModelResponse
+    from citnega.packages.protocol.models.runner import ConversationStats
     from citnega.packages.protocol.models.sessions import Session
 
 _MAX_TOOL_ROUNDS_DEFAULT = 5  # prevent infinite tool-call loops
@@ -367,22 +371,14 @@ class DirectModelRunner(IFrameworkRunner):
                 )
             )
 
-            for tc in pending_tool_calls:
-                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                name = fn.get("name", "")
-                raw_args = fn.get("arguments", "{}")
-                # Ollama may return arguments as a dict already; normalise to JSON string
-                if isinstance(raw_args, dict):
-                    args = json.dumps(raw_args)
-                else:
-                    args = raw_args or "{}"
-                tc_id = (
-                    tc.get("id", str(uuid.uuid4())) if isinstance(tc, dict) else str(uuid.uuid4())
-                )
-
-                result_text = await self._execute_tool(
-                    name, args, session_id, run_id, turn_id, event_queue
-                )
+            tool_results = await self._execute_pending_tool_calls(
+                pending_tool_calls,
+                session_id=session_id,
+                run_id=run_id,
+                turn_id=turn_id,
+                event_queue=event_queue,
+            )
+            for tc_id, result_text in tool_results:
                 current_messages.append(
                     ModelMessage(
                         role="tool",
@@ -404,6 +400,129 @@ class DirectModelRunner(IFrameworkRunner):
         )
 
         return run_id
+
+    async def _execute_pending_tool_calls(
+        self,
+        pending_tool_calls: list[dict],
+        *,
+        session_id: str,
+        run_id: str,
+        turn_id: str,
+        event_queue: asyncio.Queue,
+    ) -> list[tuple[str, str]]:
+        if not pending_tool_calls:
+            return []
+
+        if self._parallel_tool_execution_enabled() and self._can_fan_out_tool_calls(pending_tool_calls):
+            results_by_id: dict[str, str] = {}
+
+            async def _run_one(tool_call: dict) -> None:
+                tc_id, result_text = await self._execute_tool_call_delta(
+                    tool_call,
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    event_queue=event_queue,
+                )
+                results_by_id[tc_id] = result_text
+
+            async with asyncio.TaskGroup() as task_group:
+                for tool_call in pending_tool_calls:
+                    task_group.create_task(_run_one(tool_call))
+
+            return [
+                (self._tool_call_id(tool_call), results_by_id[self._tool_call_id(tool_call)])
+                for tool_call in pending_tool_calls
+            ]
+
+        results: list[tuple[str, str]] = []
+        for tool_call in pending_tool_calls:
+            results.append(
+                await self._execute_tool_call_delta(
+                    tool_call,
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    event_queue=event_queue,
+                )
+            )
+        return results
+
+    async def _execute_tool_call_delta(
+        self,
+        tool_call: dict,
+        *,
+        session_id: str,
+        run_id: str,
+        turn_id: str,
+        event_queue: asyncio.Queue,
+    ) -> tuple[str, str]:
+        fn = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+        name = fn.get("name", "")
+        raw_args = fn.get("arguments", "{}")
+        if isinstance(raw_args, dict):
+            args = json.dumps(raw_args)
+        else:
+            args = raw_args or "{}"
+        tc_id = self._tool_call_id(tool_call)
+        result_text = await self._execute_tool(
+            name, args, session_id, run_id, turn_id, event_queue
+        )
+        return tc_id, result_text
+
+    @staticmethod
+    def _tool_call_id(tool_call: dict) -> str:
+        return (
+            tool_call.get("id", str(uuid.uuid4()))
+            if isinstance(tool_call, dict)
+            else str(uuid.uuid4())
+        )
+
+    def _parallel_tool_execution_enabled(self) -> bool:
+        try:
+            return load_settings().nextgen.parallel_execution_enabled
+        except Exception:
+            return False
+
+    def _can_fan_out_tool_calls(self, pending_tool_calls: list[dict]) -> bool:
+        seen_scopes: set[str] = set()
+        for tool_call in pending_tool_calls:
+            fn = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
+            name = str(fn.get("name", "")).strip()
+            callable_obj = self._tools.get(name) or self._all_callables.get(name)
+            if callable_obj is None:
+                return False
+            try:
+                descriptor = callable_to_descriptor(callable_obj, source="runtime")
+            except Exception:
+                return False
+            if not descriptor.execution_traits.parallel_safe:
+                return False
+            args = self._safe_json_load(fn.get("arguments", "{}"))
+            scope = self._tool_call_scope(name, args)
+            if scope and scope in seen_scopes:
+                return False
+            if scope:
+                seen_scopes.add(scope)
+        return True
+
+    @staticmethod
+    def _safe_json_load(raw_args: object) -> dict[str, Any]:
+        if isinstance(raw_args, dict):
+            return raw_args
+        try:
+            decoded = json.loads(raw_args or "{}")
+        except Exception:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
+    @staticmethod
+    def _tool_call_scope(name: str, args: dict[str, Any]) -> str:
+        for key in ("file_path", "path", "working_dir", "root_path"):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return f"{name}:{os.path.abspath(value)}"
+        return name if name in {"run_shell", "git_ops", "write_file", "edit_file"} else ""
 
     # ── Tool calling helpers ──────────────────────────────────────────────────
 
@@ -543,7 +662,10 @@ class DirectModelRunner(IFrameworkRunner):
         return self._conv.mode_name
 
     def set_plan_phase(self, phase: str | None) -> None:
-        self._conv.set_plan_phase(phase)
+        self._conv.set_plan_phase(phase or "draft")
+
+    def get_plan_phase(self) -> str:
+        return self._conv.plan_phase
 
     async def set_mode(self, mode_name: str) -> None:
         await self._conv.set_mode(mode_name)
@@ -571,6 +693,24 @@ class DirectModelRunner(IFrameworkRunner):
 
     def get_tool_history(self) -> list[dict[str, Any]]:
         return self._conv.get_tool_history()
+
+    def get_active_skills(self) -> list[str]:
+        return self._conv.active_skills
+
+    def set_active_skills(self, skill_names: list[str]) -> None:
+        self._conv.set_active_skills(skill_names)
+
+    def get_mental_model_spec(self) -> dict[str, Any] | None:
+        return self._conv.mental_model_spec
+
+    def set_mental_model_spec(self, spec: dict[str, Any] | None) -> None:
+        self._conv.set_mental_model_spec(spec)
+
+    def get_compiled_plan_metadata(self) -> dict[str, Any]:
+        return self._conv.compiled_plan_metadata
+
+    def set_compiled_plan_metadata(self, metadata: dict[str, Any] | None) -> None:
+        self._conv.set_compiled_plan_metadata(metadata)
 
     async def add_tool_call(
         self,

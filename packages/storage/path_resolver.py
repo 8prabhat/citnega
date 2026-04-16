@@ -143,6 +143,12 @@ class PathResolver:
             return None
         return self._workfolder_root / "workflows"
 
+    @property
+    def workspace_skills_dir(self) -> Path | None:
+        if self._workfolder_root is None:
+            return None
+        return self._workfolder_root / "skills"
+
     def session_dir(self, session_id: str) -> Path:
         return self.sessions_dir / session_id
 
@@ -185,6 +191,7 @@ class PathResolver:
                 self.workspace_agents_dir,
                 self.workspace_tools_dir,
                 self.workspace_workflows_dir,
+                self.workspace_skills_dir,
             ]
             dirs.extend(d for d in workspace_dirs if d is not None)
         for d in dirs:

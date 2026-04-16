@@ -210,10 +210,69 @@ class CodeMode(ISessionMode):
         return base_prompt + suffix
 
 
+class ReviewMode(ISessionMode):
+    @property
+    def name(self) -> str:
+        return "review"
+
+    @property
+    def display_label(self) -> str:
+        return "[REVIEW]"
+
+    @property
+    def description(self) -> str:
+        return "Code review mode: prioritize bugs, regressions, and missing tests."
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Review Mode\n"
+            "Operate as a rigorous code reviewer.\n"
+            "- Prioritise bugs, risks, regressions, and missing tests.\n"
+            "- Be explicit about assumptions.\n"
+            "- Prefer findings over summaries.\n"
+            "- Cite concrete files and behaviors when available."
+        )
+        return base_prompt + suffix
+
+
+class OperateMode(ISessionMode):
+    @property
+    def name(self) -> str:
+        return "operate"
+
+    @property
+    def display_label(self) -> str:
+        return "[OPERATE]"
+
+    @property
+    def description(self) -> str:
+        return "Operational mode: execute controlled multi-step runbooks and checks."
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Operate Mode\n"
+            "Operate with runbook discipline.\n"
+            "- Prefer explicit plans and checkpoints.\n"
+            "- Record assumptions and state transitions.\n"
+            "- Favour verification after each mutating action.\n"
+            "- Treat safety and repeatability as first-class requirements."
+        )
+        return base_prompt + suffix
+
+
 # ── Registry (single source of truth — DRY) ──────────────────────────────────
 
 _REGISTRY: dict[str, ISessionMode] = {
-    m.name: m for m in (ChatMode(), PlanMode(), ExploreMode(), ResearchMode(), CodeMode())
+    m.name: m
+    for m in (
+        ChatMode(),
+        PlanMode(),
+        ExploreMode(),
+        ResearchMode(),
+        CodeMode(),
+        ReviewMode(),
+        OperateMode(),
+    )
 }
 
 VALID_MODES: list[str] = list(_REGISTRY)

@@ -27,6 +27,17 @@ from citnega.packages.protocol.events.lifecycle import (
     RunStateEvent,
     RunTerminalReasonEvent,
 )
+from citnega.packages.protocol.events.planning import (
+    CapabilityLoadFailedEvent,
+    ExecutionBatchCompletedEvent,
+    ExecutionBatchStartedEvent,
+    MentalModelCompiledEvent,
+    ParallelExecutionConflictEvent,
+    PlanCompiledEvent,
+    PlanValidatedEvent,
+    SkillActivatedEvent,
+    WorkflowTemplateExpandedEvent,
+)
 from citnega.packages.protocol.events.rate_limit import RateLimitEvent
 from citnega.packages.protocol.events.remote import RemoteExecutionEvent
 from citnega.packages.protocol.events.routing import RouterDecisionEvent
@@ -47,6 +58,15 @@ CanonicalEvent = (
     | RunStateEvent
     | RunCompleteEvent
     | RunTerminalReasonEvent
+    | PlanCompiledEvent
+    | PlanValidatedEvent
+    | SkillActivatedEvent
+    | MentalModelCompiledEvent
+    | WorkflowTemplateExpandedEvent
+    | ExecutionBatchStartedEvent
+    | ExecutionBatchCompletedEvent
+    | CapabilityLoadFailedEvent
+    | ParallelExecutionConflictEvent
     | ContextAssembledEvent
     | ContextTruncatedEvent
     | CheckpointEvent
@@ -67,18 +87,27 @@ __all__ = [
     "CallablePolicyEvent",
     "CallableStartEvent",
     "CanonicalEvent",
+    "CapabilityLoadFailedEvent",
     "CheckpointEvent",
     "ContextAssembledEvent",
     "ContextTruncatedEvent",
     "ErrorEvent",
+    "ExecutionBatchCompletedEvent",
+    "ExecutionBatchStartedEvent",
     "GenericFrameworkEvent",
+    "MentalModelCompiledEvent",
+    "ParallelExecutionConflictEvent",
+    "PlanCompiledEvent",
+    "PlanValidatedEvent",
     "RateLimitEvent",
     "RemoteExecutionEvent",
     "RouterDecisionEvent",
     "RunCompleteEvent",
     "RunStateEvent",
     "RunTerminalReasonEvent",
+    "SkillActivatedEvent",
     "StartupDiagnosticsEvent",
     "ThinkingEvent",
     "TokenEvent",
+    "WorkflowTemplateExpandedEvent",
 ]

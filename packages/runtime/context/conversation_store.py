@@ -101,16 +101,28 @@ class ConversationStore:
                     "messages": [],
                     "active_model_id": self._default_model_id,
                     "mode_name": "chat",
+                    "plan_phase": "draft",
+                    "active_skills": [],
+                    "mental_model_spec": None,
+                    "compiled_plan_metadata": {},
                 }
+            else:
+                self._data.setdefault("plan_phase", "draft")
+                self._data.setdefault("active_skills", [])
+                self._data.setdefault("mental_model_spec", None)
+                self._data.setdefault("compiled_plan_metadata", {})
 
     async def save(self) -> None:
         """Persist current state to disk."""
         async with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(
-                json.dumps(self._data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            self._write_now()
+
+    def _write_now(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(
+            json.dumps(self._data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     # ── Messages ──────────────────────────────────────────────────────────────
 
@@ -297,19 +309,42 @@ class ConversationStore:
             self._data["mode_name"] = mode_name
         await self.save()
 
-    # ── Plan phase (in-memory only, not persisted) ────────────────────────────
-
-    # Used by the controller to signal which plan phase the runner should use.
-    # Not persisted because it resets on restart intentionally.
-    _plan_phase: str = "draft"  # class-level default; overridden per instance
+    # ── Plan phase + nextgen session state ────────────────────────────────────
 
     @property
     def plan_phase(self) -> str:
-        return getattr(self, "_plan_phase_value", "draft")
+        return str(self._data.get("plan_phase") or "draft")
 
     def set_plan_phase(self, phase: str) -> None:
-        """Set the plan phase (``"draft"`` or ``"execute"``) in-memory only."""
-        self._plan_phase_value = phase
+        """Set the plan phase (``"draft"`` or ``"execute"``) and persist it."""
+        self._data["plan_phase"] = phase
+        self._write_now()
+
+    @property
+    def active_skills(self) -> list[str]:
+        return list(self._data.get("active_skills", []))
+
+    def set_active_skills(self, skill_names: list[str]) -> None:
+        self._data["active_skills"] = list(skill_names)
+        self._write_now()
+
+    @property
+    def mental_model_spec(self) -> dict[str, Any] | None:
+        value = self._data.get("mental_model_spec")
+        return value if isinstance(value, dict) else None
+
+    def set_mental_model_spec(self, spec: dict[str, Any] | None) -> None:
+        self._data["mental_model_spec"] = spec
+        self._write_now()
+
+    @property
+    def compiled_plan_metadata(self) -> dict[str, Any]:
+        value = self._data.get("compiled_plan_metadata")
+        return dict(value) if isinstance(value, dict) else {}
+
+    def set_compiled_plan_metadata(self, metadata: dict[str, Any] | None) -> None:
+        self._data["compiled_plan_metadata"] = dict(metadata or {})
+        self._write_now()
 
     # ── Thinking override ─────────────────────────────────────────────────────
 

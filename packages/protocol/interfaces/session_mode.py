@@ -10,7 +10,7 @@ class ISessionMode(ABC):
     A named conversation mode that decorates the system prompt.
 
     Modes are stateless singletons.  Callers obtain them from the
-    registry in ``packages/runtime/session_modes.py``; they never
+    registry in ``packages/protocol/modes.py``; they never
     construct concrete classes directly (DIP).
     """
 

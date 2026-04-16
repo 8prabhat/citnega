@@ -17,6 +17,7 @@ scattered across agent modules.
 
 from __future__ import annotations
 
+import traceback
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -127,10 +128,17 @@ class AgentRegistry:
         ]
 
         agents = []
+        failures: list[str] = []
         for cls in all_classes:
             try:
                 agents.append(self._make(cls))
-            except Exception:
-                pass  # skip any agent that fails to instantiate
+            except Exception as exc:
+                details = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+                failures.append(f"{cls.__name__}: {details}")
+
+        if failures:
+            raise RuntimeError(
+                "Agent registry bootstrap failed: " + "; ".join(failures)
+            )
 
         return agents

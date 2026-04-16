@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 import pytest
@@ -18,8 +18,9 @@ from citnega.packages.agents.core.orchestrator_agent import (
     OrchestratorInput,
 )
 from citnega.packages.protocol.callables.context import CallContext
+from citnega.packages.protocol.callables.interfaces import IInvocable
 from citnega.packages.protocol.callables.results import InvokeResult
-from citnega.packages.protocol.callables.types import CallableType
+from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
 from citnega.packages.protocol.models.sessions import SessionConfig
 from citnega.packages.runtime.events.emitter import EventEmitter
 from citnega.packages.runtime.events.tracer import Tracer
@@ -38,10 +39,11 @@ class _TaskOutput(BaseModel):
     response: str
 
 
-class _FakeCallable:
+class _FakeCallable(IInvocable):
     callable_type = CallableType.TOOL
     input_schema = _TaskInput
     output_schema = _TaskOutput
+    policy = CallablePolicy()
 
     def __init__(self, name: str, fail_times: int = 0) -> None:
         self.name = name
@@ -62,6 +64,16 @@ class _FakeCallable:
             callable_type=self.callable_type,
             output=_TaskOutput(response=f"{self.name} ok: {input_obj.task}"),
             duration_ms=1,
+        )
+
+    def get_metadata(self) -> CallableMetadata:
+        return CallableMetadata(
+            name=self.name,
+            description=f"{self.name} description",
+            callable_type=self.callable_type,
+            input_schema_json=self.input_schema.model_json_schema(),
+            output_schema_json=self.output_schema.model_json_schema(),
+            policy=self.policy,
         )
 
 
@@ -208,6 +220,42 @@ async def test_orchestrator_runs_rollbacks_after_failure() -> None:
     assert any("rollback via 'cleanup_tool' succeeded" in a for a in out.rollback_actions)
     step1 = next(s for s in out.step_results if s.step_id == "step1")
     assert step1.status == "rolled_back"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_nextgen_execution_engine_when_enabled() -> None:
+    agent = _make_agent()
+    repo_map = _FakeCallable("repo_map")
+    qa_agent = _FakeCallable("qa_agent")
+    agent.sync_tool_registry({"repo_map": repo_map, "qa_agent": qa_agent})
+
+    with patch("citnega.packages.config.loaders.load_settings") as mock_settings:
+        mock_settings.return_value = SimpleNamespace(
+            nextgen=SimpleNamespace(execution_enabled=True)
+        )
+        result = await agent.invoke(
+            OrchestratorInput(
+                goal="review repo",
+                steps=[
+                    OrchestrationStep(step_id="step1", callable_name="repo_map", task="map repo"),
+                    OrchestrationStep(step_id="step2", callable_name="qa_agent", task="review repo"),
+                ],
+                rollback_on_failure=False,
+                fail_fast=True,
+            ),
+            _context(),
+        )
+
+    assert result.success
+    out = result.output
+    assert out.failed_steps == 0
+    assert out.completed_steps == 2
+    queue = agent._event_emitter.get_queue("r1")
+    event_types = []
+    while not queue.empty():
+        event_types.append(type(queue.get_nowait()).__name__)
+    assert "PlanCompiledEvent" in event_types
+    assert "ExecutionBatchStartedEvent" in event_types
 
 
 @pytest.mark.asyncio

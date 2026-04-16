@@ -28,6 +28,8 @@ class RuntimeStateHandler(IContextHandler):
     If no snapshot has been set (e.g., first turn), nothing is injected.
     """
 
+    parallel_safe = True
+
     @property
     def name(self) -> str:
         return "runtime_state"

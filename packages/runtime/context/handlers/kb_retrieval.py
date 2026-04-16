@@ -36,6 +36,8 @@ class KBRetrievalHandler(IContextHandler):
         retrieve_limit: Max KB items to include per turn.
     """
 
+    parallel_safe = True
+
     @property
     def name(self) -> str:
         return "kb_retrieval"

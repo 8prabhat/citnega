@@ -20,7 +20,7 @@ from citnega.packages.protocol.interfaces.model_gateway import IModelProvider
 from citnega.packages.shared.errors import ProviderHTTPError
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, AsyncIterator, Callable
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from citnega.packages.protocol.models.model_gateway import (
         ModelChunk,
@@ -100,7 +100,8 @@ class BaseProvider(IModelProvider):
 
     async def _with_retry(self, fn: Callable[[ModelRequest], Awaitable[ModelResponse]], request: ModelRequest) -> ModelResponse:
         last_exc: Exception | None = None
-        for attempt in range(1, _get_max_retries() + 1):
+        max_retries = _get_max_retries()
+        for attempt in range(1, max_retries + 1):
             try:
                 return await fn(request)
             except httpx.HTTPStatusError as exc:
@@ -132,7 +133,7 @@ class BaseProvider(IModelProvider):
                 await asyncio.sleep(wait)
 
         raise ProviderHTTPError(
-            f"Provider {self._model_info.model_id} failed after {_MAX_RETRIES} retries: {last_exc}"
+            f"Provider {self._model_info.model_id} failed after {max_retries} retries: {last_exc}"
         ) from last_exc
 
     # ------------------------------------------------------------------
