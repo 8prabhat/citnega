@@ -131,7 +131,12 @@ class BaseFrameworkRunner(IFrameworkRunner):
 
             raise StorageError(f"Checkpoint {checkpoint_id!r} not found.")
         blob = self._serializer.load(str(matches[0]))
-        await self._do_restore_checkpoint(blob["framework_state"])  # type: ignore[arg-type]
+        fw_state = blob.get("framework_state", {})
+        if not isinstance(fw_state, dict):
+            from citnega.packages.shared.errors import StorageError
+
+            raise StorageError(f"Invalid framework_state in checkpoint {checkpoint_id!r}")
+        await self._do_restore_checkpoint(fw_state)
 
     # ------------------------------------------------------------------
     # Abstract hooks (implement in concrete runner)

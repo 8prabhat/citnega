@@ -18,11 +18,18 @@ from citnega.packages.protocol.events.callable import (
     CallableStartEvent,
 )
 from citnega.packages.protocol.events.checkpoint import CheckpointEvent
-from citnega.packages.protocol.events.context import ContextAssembledEvent
+from citnega.packages.protocol.events.context import ContextAssembledEvent, ContextTruncatedEvent
+from citnega.packages.protocol.events.diagnostics import StartupDiagnosticsEvent
 from citnega.packages.protocol.events.errors import ErrorEvent
 from citnega.packages.protocol.events.generic import GenericFrameworkEvent
-from citnega.packages.protocol.events.lifecycle import RunCompleteEvent, RunStateEvent
+from citnega.packages.protocol.events.lifecycle import (
+    RunCompleteEvent,
+    RunStateEvent,
+    RunTerminalReasonEvent,
+)
 from citnega.packages.protocol.events.rate_limit import RateLimitEvent
+from citnega.packages.protocol.events.remote import RemoteExecutionEvent
+from citnega.packages.protocol.events.routing import RouterDecisionEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
 from citnega.packages.protocol.events.thinking import ThinkingEvent
 
@@ -39,10 +46,15 @@ CanonicalEvent = (
     | ApprovalTimeoutEvent
     | RunStateEvent
     | RunCompleteEvent
+    | RunTerminalReasonEvent
     | ContextAssembledEvent
+    | ContextTruncatedEvent
     | CheckpointEvent
     | ErrorEvent
     | RateLimitEvent
+    | RemoteExecutionEvent
+    | RouterDecisionEvent
+    | StartupDiagnosticsEvent
     | GenericFrameworkEvent
 )
 
@@ -57,11 +69,16 @@ __all__ = [
     "CanonicalEvent",
     "CheckpointEvent",
     "ContextAssembledEvent",
+    "ContextTruncatedEvent",
     "ErrorEvent",
     "GenericFrameworkEvent",
     "RateLimitEvent",
+    "RemoteExecutionEvent",
+    "RouterDecisionEvent",
     "RunCompleteEvent",
     "RunStateEvent",
+    "RunTerminalReasonEvent",
+    "StartupDiagnosticsEvent",
     "ThinkingEvent",
     "TokenEvent",
 ]

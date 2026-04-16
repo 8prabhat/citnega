@@ -10,13 +10,33 @@ All built-in tools:
 This module provides:
   - ToolOutput — single-field output schema for simple text responses
   - tool_policy() — factory for common policy configurations
+  - resolve_file_path() — canonical path normaliser used by file tools AND
+    the policy checker so both operate on the same resolved path
 """
 
 from __future__ import annotations
 
+import pathlib
+
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.types import CallablePolicy
+
+
+def resolve_file_path(path_str: str) -> pathlib.Path:
+    """
+    Normalise a user-supplied file path to a canonical absolute Path.
+
+    Steps:
+      1. Expand leading ``~`` to the user home directory.
+      2. ``Path.resolve()`` — follows symlinks and collapses ``.`` / ``..``.
+
+    This is the single source of truth shared by file tools (read_file,
+    write_file, edit_file, list_dir) and path_check in policy/checks.py, so
+    both always operate on the same resolved path.
+    """
+    expanded = path_str.replace("~", str(pathlib.Path.home()))
+    return pathlib.Path(expanded).resolve()
 
 
 class ToolOutput(BaseModel):

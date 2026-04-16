@@ -24,8 +24,10 @@ from citnega.packages.shared.errors import (
     ApprovalDeniedError,
     ApprovalTimeoutError,
     CallableDepthError,
+    NetworkNotAllowedError,
     PathNotAllowedError,
 )
+from citnega.packages.tools.builtin._tool_base import resolve_file_path as _resolve_file_path
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
     from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.interfaces.events import IEventEmitter
+    from citnega.packages.runtime.policy.approval_manager import ApprovalManager
 
 
 async def depth_check(
@@ -62,22 +65,35 @@ async def path_check(
     input: BaseModel,
     context: CallContext,
     emitter: IEventEmitter,
+    path_vars: dict[str, str] | None = None,
 ) -> None:
     """
     Validate file paths in input against policy.allowed_paths.
 
     Looks for any field named *_path or *_file in the input model.
     Resolves symlinks and ensures path stays within the allowlist.
+
+    Supported placeholder substitutions in allowed_paths:
+      ${SESSION_ID}      — current session id
+      ${WORKSPACE_ROOT}  — workspace root from PolicyEnforcer path_vars
+      ${APP_HOME}        — application home directory from path_vars
     """
     if not callable.policy.allowed_paths:
         _emit_policy_event(emitter, context, "path", "passed")
         return
 
-    # Substitute ${SESSION_ID} in allowed paths
+    _vars = path_vars or {}
+
+    def _substitute(p: str) -> str:
+        p = p.replace("${SESSION_ID}", context.session_id)
+        p = p.replace("~", str(pathlib.Path.home()))
+        for key, val in _vars.items():
+            p = p.replace(f"${{{key}}}", val)
+        return p
+
+    # Substitute placeholders and resolve to absolute paths
     allowed = [
-        pathlib.Path(
-            p.replace("${SESSION_ID}", context.session_id).replace("~", str(pathlib.Path.home()))
-        ).resolve()
+        _resolve_file_path(_substitute(p))
         for p in callable.policy.allowed_paths
     ]
 
@@ -96,7 +112,7 @@ async def path_check(
 
     for pv in path_values:
         try:
-            resolved = pathlib.Path(pv.replace("~", str(pathlib.Path.home()))).resolve()
+            resolved = _resolve_file_path(pv)
             if not any(_is_within(resolved, allowed_root) for allowed_root in allowed):
                 _emit_policy_event(
                     emitter, context, "path", "denied", f"path={pv!r} not in allowlist"
@@ -125,12 +141,30 @@ async def network_check(
     input: BaseModel,
     context: CallContext,
     emitter: IEventEmitter,
+    deny_network: bool = False,
 ) -> None:
-    """Block network access if policy.network_allowed is False."""
-    # Checked at callable declaration level — if tool declares network=True
-    # but policy says False, it's a misconfiguration caught here.
-    # Runtime enforcement happens in tool's HTTP client (checked in tool policy).
-    # This check flags the policy-declared intent.
+    """Block network access when the runtime policy denies it.
+
+    Raises NetworkNotAllowedError when:
+      - deny_network is True (global policy disables all external calls), AND
+      - the callable declares network_allowed=True (it needs network).
+
+    Callables with network_allowed=False pass unconditionally — they do not
+    make external requests regardless of the global setting.
+    """
+    needs_network = getattr(callable.policy, "network_allowed", False)
+    if deny_network and needs_network:
+        _emit_policy_event(
+            emitter,
+            context,
+            "network",
+            "denied",
+            "network access disabled by runtime policy",
+        )
+        raise NetworkNotAllowedError(
+            f"Callable '{callable.name}' requires network access, "
+            "but network is disabled by runtime policy."
+        )
     _emit_policy_event(emitter, context, "network", "passed")
 
 
@@ -139,7 +173,7 @@ async def approval_check(
     input: BaseModel,
     context: CallContext,
     emitter: IEventEmitter,
-    approval_manager: ApprovalManager,  # type: ignore[name-defined]  # noqa: F821
+    approval_manager: ApprovalManager,
 ) -> None:
     """
     If policy.requires_approval is True, pause until the user approves/denies.
@@ -206,10 +240,10 @@ async def approval_check(
 
 def _summarise_input(input: object) -> str:
     try:
-        if hasattr(input, "model_dump_json"):
-            raw = input.model_dump_json()  # type: ignore[union-attr]
-            if isinstance(raw, str):
-                return raw[:512]
+        from pydantic import BaseModel as _BM
+
+        if isinstance(input, _BM):
+            return input.model_dump_json()[:512]
     except Exception:
         pass
     return str(repr(input))[:512]

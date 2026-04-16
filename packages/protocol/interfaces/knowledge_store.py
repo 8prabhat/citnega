@@ -29,8 +29,14 @@ class IKnowledgeStore(ABC):
         self,
         tags: list[str] | None = None,
         source_type: KBSourceType | None = None,
+        session_id: str | None = None,
         limit: int = 100,
     ) -> list[KBItem]: ...
 
     @abstractmethod
-    async def export_all(self) -> Path: ...
+    async def export_all(
+        self,
+        fmt: str = "jsonl",
+        output_path: Path | None = None,
+        session_id: str | None = None,
+    ) -> Path: ...

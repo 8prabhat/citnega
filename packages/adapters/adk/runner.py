@@ -131,6 +131,8 @@ class ADKRunner(BaseFrameworkRunner):
             app_name="citnega",
             session_service=session_service,
         )
+        # ADK 1.29: session must be created before first run_async call
+        self._adk_session_service = session_service
         return self._adk_runner
 
     async def _do_run_turn(
@@ -146,6 +148,21 @@ class ADKRunner(BaseFrameworkRunner):
 
         adk_runner = self._get_adk_runner()
         session_id = self._session.config.session_id
+
+        # ADK 1.29: ensure session exists (idempotent — create only if not already present)
+        if not getattr(self, "_adk_session_created", False):
+            svc = getattr(self, "_adk_session_service", None)
+            if svc is not None:
+                try:
+                    await svc.create_session(
+                        app_name="citnega",
+                        user_id=session_id,
+                        session_id=session_id,
+                    )
+                except Exception:
+                    pass  # already exists or unsupported — continue
+            self._adk_session_created = True
+
         message = Content(role="user", parts=[Part(text=user_input)])
 
         async for event in adk_runner.run_async(
@@ -203,4 +220,5 @@ class ADKRunner(BaseFrameworkRunner):
         }
 
     async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
-        self._history = framework_state.get("history", [])  # type: ignore[assignment]
+        history = framework_state.get("history", [])
+        self._history = list(history) if isinstance(history, list) else []

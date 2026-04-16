@@ -61,6 +61,7 @@ class DirectModelAdapter(IFrameworkAdapter):
         self._sessions_dir = sessions_dir
         self._yaml_config: ModelYAMLConfig = load_yaml_config(yaml_config_path)
         self._factory = _NoOpCallableFactory()
+        self._configured_default_model_id: str = ""
         # session_id → runner (for set_model routing)
         self._runners: dict[str, DirectModelRunner] = {}
 
@@ -69,7 +70,8 @@ class DirectModelAdapter(IFrameworkAdapter):
         return "direct"
 
     async def initialize(self, config: AdapterConfig) -> None:
-        pass  # no external SDK to initialise
+        # Keep the configured default model so runners can honour session/bootstrap defaults.
+        self._configured_default_model_id = config.default_model_id
 
     async def create_runner(
         self,
@@ -81,17 +83,30 @@ class DirectModelAdapter(IFrameworkAdapter):
         session_dir = self._sessions_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
+        default_model_id = (
+            session.config.default_model_id
+            or self._configured_default_model_id
+            or self._yaml_config.default_model
+        )
+
         conv_store = ConversationStore(
             session_dir=session_dir,
-            default_model_id=self._yaml_config.default_model,
+            default_model_id=default_model_id,
         )
         await conv_store.load()
+        # Remove any trailing user message that was saved before an aborted LLM call
+        conv_store.drop_dangling_user_turn()
 
+        from citnega.packages.config.loaders import load_settings
+
+        _settings = load_settings()
         runner = DirectModelRunner(
             session=session,
             yaml_config=self._yaml_config,
             conversation_store=conv_store,
             callables=list(callables),
+            model_gateway=model_gateway,
+            max_tool_rounds=_settings.runtime.max_tool_rounds,
         )
         self._runners[session_id] = runner
         return runner

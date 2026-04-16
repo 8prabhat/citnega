@@ -24,6 +24,8 @@ import textwrap
 from typing import TYPE_CHECKING
 import uuid
 
+import pytest
+
 from citnega.packages.bootstrap.bootstrap import (
     EXIT_ADAPTER_ERROR,
     create_application,
@@ -251,6 +253,64 @@ class TestCreateApplication:
                 assert svc._agent_registry["planner_agent"].__class__.__name__ == "WorkspacePlannerAgent"
                 planner = svc._agent_registry["planner_agent"]
                 assert planner._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
+
+        _run(_do())
+
+    def test_bootstrap_fails_when_manifest_required_and_missing(self, tmp_path: Path) -> None:
+        workfolder = tmp_path / "workfolder"
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "settings.toml").write_text(
+            textwrap.dedent(
+                f"""
+                [workspace]
+                workfolder_path = {str(workfolder)!r}
+                onboarding_require_manifest = true
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        async def _do():
+            async with create_application(
+                app_home=tmp_path,
+                framework="stub",
+                run_migrations=False,
+                skip_provider_health_check=True,
+            ):
+                raise AssertionError("bootstrap should not succeed without required manifest")
+
+        with pytest.raises(ValueError, match="manifest is required but missing"):
+            _run(_do())
+
+    def test_bootstrap_wires_remote_execution_defaults_to_orchestrator(self, tmp_path: Path) -> None:
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "settings.toml").write_text(
+            textwrap.dedent(
+                """
+                [remote]
+                enabled = true
+                worker_mode = "inprocess"
+                workers = 3
+                require_signed_envelopes = true
+                envelope_signing_key = "test-secret"
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        async def _do():
+            async with create_application(
+                app_home=tmp_path,
+                framework="stub",
+                run_migrations=False,
+                skip_provider_health_check=True,
+            ) as svc:
+                orchestrator = svc._agent_registry["orchestrator_agent"]
+                assert getattr(orchestrator, "_remote_enabled_default", False) is True
+                assert getattr(orchestrator, "_remote_workers", 0) == 3
+                assert getattr(orchestrator, "_remote_worker_mode", "") == "inprocess"
 
         _run(_do())
 

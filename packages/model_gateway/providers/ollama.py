@@ -55,10 +55,8 @@ class OllamaProvider(BaseProvider):
             "model": self._model_info.model_name,
             "messages": _to_ollama_messages(request.messages),
             "stream": False,
-            "options": {"temperature": request.temperature},
+            "options": {"temperature": request.temperature, **({"num_predict": request.max_tokens} if request.max_tokens else {})},
         }
-        if request.max_tokens:
-            payload["options"] = {**payload["options"], "num_predict": request.max_tokens}  # type: ignore[arg-type]
         if request.tools:
             payload["tools"] = request.tools
 

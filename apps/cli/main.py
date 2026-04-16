@@ -21,8 +21,11 @@ import typer
 from citnega.apps.cli.commands import (
     approve,
     config,
+    doctor,
     kb,
     migrate,
+    remote,
+    replay,
     run,
     session,
 )
@@ -40,6 +43,9 @@ app.add_typer(approve.app, name="approve", help="Respond to a pending approval r
 app.add_typer(kb.app, name="kb", help="Knowledge base operations (Phase 8).")
 app.add_typer(config.app, name="config", help="Validate or display configuration.")
 app.add_typer(migrate.app, name="migrate", help="Run database migrations.")
+app.add_typer(doctor.app, name="doctor", help="Runtime self-diagnostics (check wiring and config).")
+app.add_typer(remote.app, name="remote", help="Reference remote worker service controls.")
+app.add_typer(replay.app, name="replay", help="Replay events from a persisted run.")
 
 
 def main() -> None:

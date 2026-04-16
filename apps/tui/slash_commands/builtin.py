@@ -118,6 +118,7 @@ class ModelCommand(ISlashCommand):
                 status.set_model(model_id)
             except Exception:
                 pass
+            app_context._update_context_bar(model=model_id)
         except Exception as exc:
             await app_context._append_message("system", f"Model switch failed: {exc}")
 
@@ -130,7 +131,7 @@ class ModeCommand(ISlashCommand):
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
-        from citnega.packages.runtime.session_modes import all_modes
+        from citnega.packages.protocol.modes import all_modes
 
         session_id = getattr(app_context, "_session_id", None)
         current = self._service.get_session_mode(session_id) if session_id else "chat"
@@ -164,7 +165,7 @@ class ModeCommand(ISlashCommand):
         await self._switch_mode(app_context, session_id, args[0].lower())
 
     async def _switch_mode(self, app_context: Any, session_id: str | None, requested: str) -> None:
-        from citnega.packages.runtime.session_modes import all_modes, get_mode
+        from citnega.packages.protocol.modes import all_modes, get_mode
 
         valid = [m.name for m in all_modes()]
         if requested not in valid:
@@ -186,6 +187,7 @@ class ModeCommand(ISlashCommand):
             except Exception:
                 pass
             label = mode_obj.display_label or "[CHAT]"
+            app_context._update_context_bar(mode=requested)
             await app_context._append_message(
                 "system", f"{label} Mode active — {mode_obj.description}"
             )
@@ -236,6 +238,7 @@ class ThinkCommand(ISlashCommand):
         try:
             await self._service.set_session_thinking(session_id, value)
             label = {True: "on", False: "off", None: "auto"}[value]
+            app_context._update_context_bar(think=label)
             await app_context._append_message("system", f"Thinking set to: {label}")
         except Exception as exc:
             await app_context._append_message("system", f"Failed: {exc}")
@@ -319,17 +322,31 @@ class NewSessionCommand(ISlashCommand):
         from citnega.packages.protocol.models.sessions import SessionConfig
 
         try:
+            framework = "direct"
+            default_model_id = ""
+            try:
+                frameworks = self._service.list_frameworks()
+                if isinstance(frameworks, list) and frameworks and isinstance(frameworks[0], str):
+                    framework = frameworks[0]
+            except Exception:
+                pass
+            try:
+                models = self._service.list_models()
+                if isinstance(models, list) and models and isinstance(models[0].model_id, str):
+                    default_model_id = models[0].model_id
+            except Exception:
+                pass
+
             cfg = SessionConfig(
                 session_id=str(uuid.uuid4()),
                 name="new-session",
-                framework="stub",
-                default_model_id="",
+                framework=framework,
+                default_model_id=default_model_id,
             )
             session = await self._service.create_session(cfg)
             # Update context
             app_context._session_id = session.config.session_id
-            if hasattr(app_context._app, "_session_id"):
-                app_context._app._session_id = session.config.session_id
+            app_context._app._session_id = session.config.session_id
 
             # Clear the chat window
             screen = app_context._app.screen
@@ -383,65 +400,140 @@ class SessionsCommand(ISlashCommand):
             return
 
         # ── Interactive picker ─────────────────────────────────────────────
-        if not sessions:
-            await app_context._append_message("system", "No sessions found. Use /new to start one.")
-            return
-
         current = getattr(app_context, "_session_id", None)
-        from citnega.apps.tui.screens.session_picker import _format_age
 
-        # Sort most-recently-active first
-        sessions.sort(key=lambda s: s.last_active_at or "", reverse=True)
+        _NEW_SESSION_SENTINEL = "__new__"
 
-        options = []
-        for s in sessions:
-            age = _format_age(s.last_active_at) if s.last_active_at else "?"
-            marker = "* " if s.config.session_id == current else "  "
-            label = f"{marker}{s.config.name:<28}  {s.config.session_id[:8]}  {age}"
-            options.append((s.config.session_id, label))
+        options = [(_NEW_SESSION_SENTINEL, "  + New session")]
+
+        if sessions:
+            from citnega.apps.tui.screens.session_picker import _format_age
+            sessions.sort(key=lambda s: s.last_active_at or "", reverse=True)
+            for s in sessions:
+                age = _format_age(s.last_active_at) if s.last_active_at else "?"
+                marker = "* " if s.config.session_id == current else "  "
+                label = f"{marker}{s.config.name:<28}  {s.config.session_id[:8]}  {age}"
+                options.append((s.config.session_id, label))
 
         async def _on_select(value: str, label: str) -> None:
+            if value == _NEW_SESSION_SENTINEL:
+                await NewSessionCommand(self._service).execute([], app_context)
+                return
             target = next((s for s in sessions if s.config.session_id == value), None)
             if target:
                 await self._switch_session(app_context, target)
 
         await app_context._append_picker(
-            title=f"Select session  [{len(sessions)} total]",
+            title=f"Sessions  [{len(sessions)} saved]",
             options=options,
             on_select=_on_select,
         )
-        await app_context._append_message(
-            "system", "Tip: you can also type  /sessions <id_prefix>  directly."
-        )
 
     async def _switch_session(self, app_context: Any, session) -> None:
+        from textual.containers import VerticalScroll
+        from textual.widgets import Label as _Label
+
         sid = session.config.session_id
         app_context._session_id = sid
-        if hasattr(app_context._app, "_session_id"):
-            app_context._app._session_id = sid
-        app_context._app.screen.action_clear_chat()
+        app_context._app._session_id = sid
+
+        # ── Hard-clear both panels with await so removal is complete before
+        #    we start mounting history.  Using action_clear_chat() without
+        #    await leaves old nodes registered when _append_message runs.
+        screen = app_context._app.screen
+        try:
+            scroll = screen.query_one("#chat-scroll", VerticalScroll)
+            await scroll.remove_children()
+        except Exception:
+            scroll = None
+
+        try:
+            tools_panel = screen.query_one("#tools-panel", VerticalScroll)
+            await tools_panel.remove_children()
+        except Exception:
+            tools_panel = None
+
         try:
             from citnega.apps.tui.widgets.status_bar import StatusBar
-
-            status = app_context._app.screen.query_one(StatusBar)
-            status.session_id = sid
+            screen.query_one(StatusBar).session_id = sid
         except Exception:
             pass
 
-        # ── Load and render conversation history ───────────────────────────
+        # ── Load message history of the selected session ──────────────────
+        messages_loaded = 0
+        raw_messages = []
         try:
-            messages = self._service.get_conversation_messages(sid)
-            for msg in messages:
+            raw_messages = self._service.get_conversation_messages(sid)
+            for msg in raw_messages:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 if not content:
                     continue
                 if role in ("user", "assistant"):
                     await app_context._append_message(role, content)
+                    messages_loaded += 1
                 elif role == "system" and content.startswith("[Compacted"):
                     await app_context._append_message("system", content)
+                    messages_loaded += 1
         except Exception:
             pass
+
+        # ── Restore tool call / agent call history ────────────────────────
+        tool_history = []
+        if tools_panel is not None:
+            try:
+                from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
+                from citnega.apps.tui.widgets.tool_call_block import ToolCallBlock
+
+                tool_history = self._service.get_session_tool_history(sid)
+                for entry in tool_history[-50:]:  # show last 50
+                    ct = entry.get("callable_type", "tool")
+                    is_agent = ct in ("specialist", "core")
+                    if is_agent:
+                        block = AgentCallBlock(
+                            agent_name=entry.get("name", "?"),
+                            input_summary=entry.get("input_summary", ""),
+                        )
+                    else:
+                        block = ToolCallBlock(
+                            tool_name=entry.get("name", "?"),
+                            input_summary=entry.get("input_summary", ""),
+                        )
+                    await tools_panel.mount(block)
+                    if entry.get("success", True):
+                        block.set_result(entry.get("output_summary", ""))
+                    else:
+                        block.set_error(entry.get("output_summary", ""))
+            except Exception:
+                pass
+
+        # ── Seed SmartInput arrow-key history ─────────────────────────────
+        try:
+            from citnega.apps.tui.widgets.smart_input import SmartInput
+
+            smart = screen.query_one("#chat-input", SmartInput)
+            user_msgs = [
+                m["content"]
+                for m in raw_messages
+                if m.get("role") == "user" and m.get("content")
+            ]
+            smart.seed_history(user_msgs)
+        except Exception:
+            pass
+
+        # ── Restore placeholders if panels are still empty ────────────────
+        if scroll is not None and messages_loaded == 0 and not scroll.query("#empty-hint"):
+            try:
+                from citnega.apps.tui.widgets.welcome_banner import WelcomeBanner
+                await scroll.mount(WelcomeBanner(id="empty-hint"))
+            except Exception:
+                pass
+
+        if tools_panel is not None and not tool_history and not tools_panel.query("#tools-empty"):
+            try:
+                await tools_panel.mount(_Label("No active tools", id="tools-empty"))
+            except Exception:
+                pass
 
         await app_context._append_message(
             "system", f"Switched to: {session.config.name}  [{sid[:8]}…]"
@@ -486,3 +578,103 @@ class CompactCommand(ISlashCommand):
                 )
         except Exception as exc:
             await app_context._append_message("system", f"Compact failed: {exc}")
+
+
+class RenameCommand(ISlashCommand):
+    name = "rename"
+    help_text = "Rename the current session. Usage: /rename <new_name>"
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], app_context: Any) -> None:
+        session_id = getattr(app_context, "_session_id", None)
+        if not session_id:
+            await app_context._append_message("system", "No active session.")
+            return
+        if not args:
+            await app_context._append_message("system", "Usage: /rename <new_name>")
+            return
+        new_name = " ".join(args).strip()
+        if not new_name:
+            await app_context._append_message("system", "New name must not be empty.")
+            return
+        try:
+            await self._service.rename_session(session_id, new_name)
+            # Update status bar if available
+            try:
+                from citnega.apps.tui.widgets.status_bar import StatusBar
+                status = app_context._app.screen.query_one(StatusBar)
+                status.session_name = new_name
+            except Exception:
+                pass
+            await app_context._append_message(
+                "system", f"Session renamed to: {new_name!r}"
+            )
+        except Exception as exc:
+            await app_context._append_message("system", f"Rename failed: {exc}")
+
+
+class DeleteSessionCommand(ISlashCommand):
+    name = "delete"
+    help_text = "Delete the current session and start a new one. Usage: /delete [--yes]"
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], app_context: Any) -> None:
+        session_id = getattr(app_context, "_session_id", None)
+        if not session_id:
+            await app_context._append_message("system", "No active session to delete.")
+            return
+
+        skip_confirm = "--yes" in args or "-y" in args
+
+        if not skip_confirm:
+            await app_context._append_message(
+                "system",
+                f"Delete session {session_id[:8]}…? Type  /delete --yes  to confirm.",
+            )
+            return
+
+        try:
+            await self._service.delete_session(session_id)
+            await app_context._append_message(
+                "system", f"Session {session_id[:8]}… deleted."
+            )
+            # Start a fresh session automatically
+            await NewSessionCommand(self._service).execute([], app_context)
+        except Exception as exc:
+            await app_context._append_message("system", f"Delete failed: {exc}")
+
+
+class ShowSessionCommand(ISlashCommand):
+    name = "show"
+    help_text = "Show details for the current session."
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], app_context: Any) -> None:
+        session_id = getattr(app_context, "_session_id", None)
+        if not session_id:
+            await app_context._append_message("system", "No active session.")
+            return
+        try:
+            session = await self._service.get_session(session_id)
+            if session is None:
+                await app_context._append_message("system", "Session not found.")
+                return
+            lines = [
+                f"id:        {session.config.session_id}",
+                f"name:      {session.config.name}",
+                f"framework: {session.config.framework}",
+                f"model:     {session.config.default_model_id}",
+                f"state:     {session.state.value}",
+                f"runs:      {session.run_count}",
+                f"created:   {session.created_at.isoformat()}",
+                f"active:    {session.last_active_at.isoformat()}",
+            ]
+            await app_context._append_message("system", "\n".join(lines))
+        except Exception as exc:
+            await app_context._append_message("system", f"Show failed: {exc}")

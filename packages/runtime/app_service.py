@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from citnega.packages.protocol.events.lifecycle import RunCompleteEvent
 from citnega.packages.protocol.interfaces.application_service import IApplicationService
@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
+    from citnega.packages.protocol.interfaces.adapter import IFrameworkRunner
+    from citnega.packages.protocol.interfaces.events import ITracer
+    from citnega.packages.protocol.interfaces.knowledge_store import IKnowledgeStore
+    from citnega.packages.protocol.interfaces.model_gateway import IModelGateway
+    from citnega.packages.protocol.interfaces.policy import IPolicyEnforcer
     from citnega.packages.protocol.models import (
         KBItem,
         KBSearchResult,
@@ -35,18 +40,15 @@ if TYPE_CHECKING:
     from citnega.packages.runtime.core_runtime import CoreRuntime
     from citnega.packages.runtime.events.emitter import EventEmitter
     from citnega.packages.runtime.policy.approval_manager import ApprovalManager
-
-# ── sentinel ──────────────────────────────────────────────────────────────────
-_STREAM_TIMEOUT = 60.0  # seconds to wait for the next event before giving up
+    from citnega.packages.shared.registry import CallableRegistry
 
 
 class ApplicationService(IApplicationService):
     """
     Concrete IApplicationService.
 
-    Only the constructor touches runtime internals; every public method uses
-    the injected interface.  KB, export/import, and model list are stubs until
-    Phase 8 / Phase 9.
+    All access to runtime internals goes through CoreRuntime's public API
+    or the typed IFrameworkRunner interface.  No private-attribute access.
     """
 
     def __init__(
@@ -55,12 +57,11 @@ class ApplicationService(IApplicationService):
         emitter: EventEmitter,
         approval_manager: ApprovalManager,
         *,
-        model_gateway=None,  # IModelGateway | None
-        kb_store=None,  # IKnowledgeStore | None — None until Phase 8 wiring
-        tool_registry: dict | None = None,
-        agent_registry: dict | None = None,
-        enforcer=None,  # IPolicyEnforcer — needed by DynamicLoader for hot-reload
-        tracer=None,  # ITracer          — needed by DynamicLoader for hot-reload
+        model_gateway: IModelGateway | None = None,
+        kb_store: IKnowledgeStore | None = None,
+        callable_registry: CallableRegistry | None = None,
+        enforcer: IPolicyEnforcer | None = None,
+        tracer: ITracer | None = None,
         app_home: Path | None = None,
     ) -> None:
         self._runtime = runtime
@@ -68,8 +69,12 @@ class ApplicationService(IApplicationService):
         self._approval_manager = approval_manager
         self._model_gateway = model_gateway
         self._kb_store = kb_store
-        self._tool_registry = tool_registry or {}
-        self._agent_registry = agent_registry or {}
+        self._callable_registry: CallableRegistry
+        if callable_registry is not None:
+            self._callable_registry = callable_registry
+        else:
+            from citnega.packages.shared.registry import CallableRegistry as _CR
+            self._callable_registry = _CR()
         self._enforcer = enforcer
         self._tracer = tracer
         self._app_home = app_home
@@ -81,39 +86,45 @@ class ApplicationService(IApplicationService):
 
     async def get_session(self, session_id: str) -> Session | None:
         try:
-            return await self._runtime._sessions.get(session_id)
+            return await self._runtime.get_session(session_id)
         except Exception:
             return None
 
     async def list_sessions(self, limit: int = 50) -> list[Session]:
-        all_sessions = await self._runtime._sessions.list_all()
-        return all_sessions[:limit]
+        return await self._runtime.list_sessions(limit=limit)
 
     async def delete_session(self, session_id: str) -> None:
-        await self._runtime._sessions.delete(session_id)
+        await self._runtime.delete_session(session_id)
 
     # ── Run execution ──────────────────────────────────────────────────────────
 
     async def run_turn(self, session_id: str, user_input: str) -> str:
         run_id = await self._runtime.run_turn(session_id, user_input)
 
+        # Load settings once per turn — shared by compact + rename checks below.
+        try:
+            from citnega.packages.config.loaders import load_settings as _ls
+            _turn_settings = _ls()
+        except Exception:
+            _turn_settings = None
+
         # Auto-compact if thresholds are exceeded
         try:
-            await self._maybe_auto_compact(session_id)
+            await self._maybe_auto_compact(session_id, _turn_settings)
         except Exception:
             pass  # auto-compact failure must never surface to the user
 
         # Auto-rename new session from first user message
         with contextlib.suppress(Exception):
-            await self._maybe_auto_rename(session_id, user_input)
+            await self._maybe_auto_rename(session_id, user_input, _turn_settings)
 
         return run_id
 
-    async def _maybe_auto_compact(self, session_id: str) -> None:
+    async def _maybe_auto_compact(self, session_id: str, settings: Any = None) -> None:
         """Trigger compaction when configured thresholds are exceeded."""
-        from citnega.packages.config.loaders import load_settings
-
-        settings = load_settings()
+        if settings is None:
+            from citnega.packages.config.loaders import load_settings
+            settings = load_settings()
         cfg = settings.conversation
 
         if not cfg.auto_compact:
@@ -140,20 +151,16 @@ class ApplicationService(IApplicationService):
             )
             await self.compact_conversation(session_id)
 
-    async def _maybe_auto_rename(self, session_id: str, user_input: str) -> None:
+    async def _maybe_auto_rename(self, session_id: str, user_input: str, settings: Any = None) -> None:
         """Rename a brand-new session to the first user message text."""
-        from citnega.packages.config.loaders import load_settings
-
-        settings = load_settings()
+        if settings is None:
+            from citnega.packages.config.loaders import load_settings
+            settings = load_settings()
         if not settings.conversation.auto_name_from_first_message:
             return
 
-        stats = self.get_conversation_stats(session_id)
-        if stats["message_count"] != 2:  # user + assistant = first turn
-            return
-
         try:
-            session = await self._runtime._session_manager.get(session_id)
+            session = await self._runtime.get_session(session_id)
         except Exception:
             return
 
@@ -165,38 +172,36 @@ class ApplicationService(IApplicationService):
         name = user_input.strip().splitlines()[0][:60] or "session"
         await self.rename_session(session_id, name)
 
-    async def stream_events(self, run_id: str) -> AsyncIterator[CanonicalEvent]:  # type: ignore[override]
+    async def stream_events(self, run_id: str) -> AsyncIterator[CanonicalEvent]:
         """
         Async generator: yields events for *run_id* until RunCompleteEvent
         arrives or the stream times out.
-
-        Usage::
-
-            async for event in svc.stream_events(run_id):
-                ...
         """
+        from citnega.packages.config.loaders import load_settings
+
+        try:
+            timeout = load_settings().runtime.stream_timeout_seconds
+        except Exception:
+            timeout = 60.0
+
         queue = self._emitter.get_queue(run_id)
         try:
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=_STREAM_TIMEOUT)
+                    event = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
                     break
                 yield event
                 if isinstance(event, RunCompleteEvent):
                     break
         finally:
-            # Consumer owns queue cleanup — safe to remove now that we're done.
             self._emitter.close_queue(run_id)
 
     async def get_run(self, run_id: str) -> RunSummary | None:
-        try:
-            return await self._runtime._runs.get(run_id)
-        except Exception:
-            return None
+        return await self._runtime.get_run_summary(run_id)
 
     async def list_runs(self, session_id: str, limit: int = 50) -> list[RunSummary]:
-        return await self._runtime._runs.list_for_session(session_id, limit=limit)
+        return await self._runtime.list_runs_for_session(session_id, limit=limit)
 
     # ── Run control ────────────────────────────────────────────────────────────
 
@@ -242,87 +247,78 @@ class ApplicationService(IApplicationService):
 
     # ── Import / export ────────────────────────────────────────────────────────
 
-    async def export_session(self, session_id: str) -> Path:
-        """Export KB items for *session_id* to JSONL.  Full export in Phase 9."""
+    async def export_session(
+        self,
+        session_id: str,
+        fmt: str = "jsonl",
+        output_path: Path | None = None,
+    ) -> Path:
+        """Export KB items to JSONL or Markdown."""
         if self._kb_store is None:
-            raise NotImplementedError("Session export requires a KB store (Phase 9).")
-        return await self._kb_store.export_all()
+            raise NotImplementedError("Session export requires a KB store.")
+        scoped_id = None if session_id in ("all", None) else session_id
+        return await self._kb_store.export_all(fmt=fmt, output_path=output_path, session_id=scoped_id)
 
     async def import_session(self, path: Path) -> Session:
-        raise NotImplementedError("Session import is not yet available (Phase 9).")
+        raise NotImplementedError("Session import is not yet available.")
 
     # ── Model management ──────────────────────────────────────────────────────
 
     async def set_session_model(self, session_id: str, model_id: str) -> None:
-        """
-        Switch the active model for *session_id*.
-
-        Delegates to the adapter if it supports per-session model switching
-        (e.g. DirectModelAdapter).  Silently no-ops otherwise.
-        """
-        adapter = self._runtime._adapter
-        if hasattr(adapter, "set_session_model"):
-            await adapter.set_session_model(session_id, model_id)
+        """Switch the active model for *session_id*."""
+        adapter = self._runtime.adapter
+        await adapter.set_session_model(session_id, model_id)
 
     def get_session_model(self, session_id: str) -> str | None:
         """Return the active model ID for *session_id*, or None if unknown."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "_conv"):
-            return runner._conv.active_model_id
+        if runner is not None:
+            return runner.get_active_model_id()
         return None
 
     def set_session_plan_phase(self, session_id: str, phase: str) -> None:
         """Set the plan phase (``"draft"`` | ``"execute"``) synchronously."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "set_plan_phase"):
+        if runner is not None:
             runner.set_plan_phase(phase)
 
     async def set_session_mode(self, session_id: str, mode_name: str) -> None:
-        """
-        Switch the session mode (``"chat"`` | ``"plan"`` | ``"explore"``).
-
-        Delegates to the runner so the mode is persisted in ConversationStore.
-        Silently no-ops for adapters that do not support modes.
-        """
+        """Switch the session mode (``"chat"`` | ``"plan"`` | ``"explore"``)."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "set_mode"):
+        if runner is not None:
             await runner.set_mode(mode_name)
 
     def get_session_mode(self, session_id: str) -> str:
         """Return the active mode name for *session_id*, defaulting to ``"chat"``."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "_conv"):
-            return runner._conv.mode_name
+        if runner is not None:
+            return runner.get_mode()
         return "chat"
 
     async def set_session_thinking(self, session_id: str, value: bool | None) -> None:
-        """
-        Override thinking for *session_id*.
-
-        ``True`` = force on, ``False`` = force off, ``None`` = auto (model YAML default).
-        """
+        """Override thinking for *session_id*."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "set_thinking"):
+        if runner is not None:
             await runner.set_thinking(value)
 
     def get_session_thinking(self, session_id: str) -> bool | None:
         """Return the thinking override for *session_id* (``None`` = auto)."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "get_thinking"):
+        if runner is not None:
             return runner.get_thinking()
         return None
 
     # ── Conversation management ───────────────────────────────────────────────
 
-    def get_conversation_stats(self, session_id: str) -> dict:
+    def get_conversation_stats(self, session_id: str) -> dict[str, int]:
         """Return message_count, token_estimate, and compaction_count for *session_id*."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "_conv"):
-            conv = runner._conv
+        if runner is not None:
+            stats = runner.get_conversation_stats()
             return {
-                "message_count": conv.message_count,
-                "token_estimate": conv.token_estimate,
-                "compaction_count": conv.compaction_count,
+                "message_count": stats.message_count,
+                "token_estimate": stats.token_estimate,
+                "compaction_count": stats.compaction_count,
             }
         return {"message_count": 0, "token_estimate": 0, "compaction_count": 0}
 
@@ -345,38 +341,37 @@ class ApplicationService(IApplicationService):
         cfg = settings.conversation
 
         runner = self._get_runner(session_id)
-        if runner is None or not hasattr(runner, "_conv"):
+        if runner is None:
             return 0
 
-        conv = runner._conv
         keep = keep_recent if keep_recent is not None else cfg.compact_keep_recent
 
         # Build summary
         if cfg.compact_use_model:
             try:
-                summary = await self._generate_compact_summary(runner, conv)
+                summary = await self._generate_compact_summary(runner)
             except Exception:
-                summary = self._fallback_compact_summary(conv)
+                summary = self._fallback_compact_summary(runner)
         else:
-            summary = self._fallback_compact_summary(conv)
+            summary = self._fallback_compact_summary(runner)
 
-        return await conv.compact(summary, keep_recent=keep)
+        return await runner.compact(summary, keep_recent=keep)
 
-    async def _generate_compact_summary(self, runner, conv) -> str:
+    async def _generate_compact_summary(self, runner: IFrameworkRunner) -> str:
         """Ask the model to summarise the conversation for compaction."""
         from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
 
-        messages = conv.get_messages()
+        messages = runner.get_messages()
         if not messages:
-            return self._fallback_compact_summary(conv)
+            return self._fallback_compact_summary(runner)
 
         # Build a condensed transcript
         lines = []
         for m in messages:
             role = m.get("role", "?")
-            content = m.get("content", "")[:400]  # truncate long messages
+            content = m.get("content", "")[:400]
             lines.append(f"{role}: {content}")
-        transcript = "\n".join(lines[-60:])  # cap at last 60 messages
+        transcript = "\n".join(lines[-60:])
 
         summarise_msg = (
             "Please write a concise summary (3-10 sentences) of the conversation above, "
@@ -384,11 +379,28 @@ class ApplicationService(IApplicationService):
             "the conversation. Be factual and brief."
         )
 
-        model_id = conv.active_model_id
+        model_id = runner.get_active_model_id()
+        if not model_id:
+            return self._fallback_compact_summary(runner)
+
+        # Use the adapter to resolve the provider for model-based compaction
+        adapter = self._runtime.adapter
+        adapter_runner = adapter.get_runner("")  # check if adapter supports _resolve_provider
+        # If the adapter's runner has _resolve_provider, use it; otherwise fallback
+        if getattr(adapter, "_yaml_config", None) is None:
+            return self._fallback_compact_summary(runner)
+
         try:
-            provider, _ = runner._resolve_provider(model_id)
+            from citnega.packages.model_gateway.provider_factory import ProviderFactory
+            from citnega.packages.model_gateway.yaml_config import load_yaml_config
+
+            yaml_config = getattr(adapter, "_yaml_config", None)
+            if yaml_config is None:
+                return self._fallback_compact_summary(runner)
+            factory = ProviderFactory(yaml_config)
+            provider = factory.build(model_id)
         except Exception:
-            return self._fallback_compact_summary(conv)
+            return self._fallback_compact_summary(runner)
 
         req = ModelRequest(
             model_id=model_id,
@@ -406,58 +418,78 @@ class ApplicationService(IApplicationService):
         async for chunk in provider.stream_generate(req):
             if chunk.content:
                 full_text.append(chunk.content)
-        return "".join(full_text).strip() or self._fallback_compact_summary(conv)
+        return "".join(full_text).strip() or self._fallback_compact_summary(runner)
 
     @staticmethod
-    def _fallback_compact_summary(conv) -> str:
-        count = conv.message_count
-        return f"[Auto-summary] Conversation had {count} messages before compaction."
+    def _fallback_compact_summary(runner: IFrameworkRunner) -> str:
+        stats = runner.get_conversation_stats()
+        return f"[Auto-summary] Conversation had {stats.message_count} messages before compaction."
 
     async def rename_session(self, session_id: str, name: str) -> None:
         """Rename *session_id* to *name* in the session store."""
         try:
-            session = await self._runtime._session_manager.get(session_id)
+            session = await self._runtime.get_session(session_id)
         except Exception:
             return
         new_config = session.config.model_copy(update={"name": name})
         updated = session.model_copy(update={"config": new_config})
-        await self._runtime._session_manager._repo.save(updated)
+        await self._runtime.save_session(updated)
 
-    def _get_runner(self, session_id: str):
+    def _get_runner(self, session_id: str) -> IFrameworkRunner | None:
         """Return the framework runner for *session_id*, or None."""
-        adapter = self._runtime._adapter
-        if hasattr(adapter, "get_runner"):
-            runner = adapter.get_runner(session_id)
-            if runner is not None:
-                return runner
-        if hasattr(self._runtime, "get_runner"):
-            return self._runtime.get_runner(session_id)
-        return None
+        runner = self._runtime.get_runner(session_id)
+        if runner is not None:
+            return runner
+        # Also try the adapter (for Direct adapter which keeps its own runner map)
+        adapter = self._runtime.adapter
+        return adapter.get_runner(session_id)
 
     # ── Session conversation access ───────────────────────────────────────────
 
-    def get_conversation_messages(self, session_id: str) -> list[dict]:
-        """
-        Return the stored message list for *session_id*.
-
-        Tries the in-memory runner first (fast path); falls back to a direct
-        disk read of ``conversation.json`` so callers don't need a warm runner.
-        """
+    async def record_tool_call(
+        self,
+        session_id: str,
+        name: str,
+        input_summary: str,
+        output_summary: str,
+        success: bool,
+        callable_type: str = "tool",
+    ) -> None:
+        """Persist a completed tool/agent call into the session's tool history."""
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "_conv"):
-            return runner._conv.get_messages()
+        if runner is not None:
+            await runner.add_tool_call(
+                name, input_summary, output_summary, success, callable_type=callable_type
+            )
 
-        # Fallback: read directly from disk
-        adapter = self._runtime._adapter
+    def get_session_tool_history(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the stored tool call history for *session_id*."""
+        runner = self._get_runner(session_id)
+        if runner is not None:
+            return runner.get_tool_history()
+        # Fallback: disk read when no warm runner is available
+        return self._read_conversation_field(session_id, "tool_history")
+
+    def get_conversation_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the stored message list for *session_id*."""
+        runner = self._get_runner(session_id)
+        if runner is not None:
+            return runner.get_messages()
+        # Fallback: disk read when no warm runner is available
+        return self._read_conversation_field(session_id, "messages")
+
+    def _read_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
+        """Read a field from the on-disk conversation.json for *session_id*."""
+        adapter = self._runtime.adapter
         sessions_dir = getattr(adapter, "_sessions_dir", None)
         if sessions_dir is not None:
-            import json
+            import json as _json
 
             conv_file = Path(sessions_dir) / session_id / "conversation.json"
             if conv_file.exists():
                 try:
-                    data = json.loads(conv_file.read_text(encoding="utf-8"))
-                    return data.get("messages", [])
+                    data = _json.loads(conv_file.read_text(encoding="utf-8"))
+                    return data.get(field, [])
                 except Exception:
                     pass
         return []
@@ -466,17 +498,11 @@ class ApplicationService(IApplicationService):
         """
         Ensure a framework runner exists for *session_id*.
 
-        Safe to call even if a runner already exists — it is a no-op in that
-        case.  Used on session open so ``get_conversation_messages()`` always
-        returns up-to-date in-memory data.
+        Safe to call even if a runner already exists — it is a no-op in that case.
         """
         if self._get_runner(session_id) is not None:
             return
-        try:
-            if hasattr(self._runtime, "ensure_runner"):
-                await self._runtime.ensure_runner(session_id)
-        except Exception:
-            pass
+        await self._runtime.ensure_runner(session_id)
 
     # ── Workspace / hot-reload ────────────────────────────────────────────────
 
@@ -484,48 +510,48 @@ class ApplicationService(IApplicationService):
         """
         Register a callable live (overwriting any previous entry with the same name).
 
-        Updates all three registries so the callable is immediately available
+        Registers in both the ApplicationService's local ``_callable_registry``
+        and the CoreRuntime's registry so the callable is immediately available
         for tool-calling AND appears in list_tools() / list_agents().
         """
-        from citnega.packages.protocol.callables.types import CallableType
+        from citnega.packages.workspace.contract_verifier import verify_callable_contract
 
         name = getattr(callable_obj, "name", None)
         if not name:
             raise ValueError("Callable has no 'name' attribute.")
 
-        # Register in the unified callable registry used by the runner
-        self._runtime._registry.register(name, callable_obj, overwrite=True)  # type: ignore[attr-defined]
+        verify_callable_contract(callable_obj)
 
-        callable_type = getattr(callable_obj, "callable_type", None)
-        if callable_type == CallableType.TOOL:
-            self._tool_registry[name] = callable_obj  # type: ignore[assignment]
-        else:
-            # SPECIALIST, CORE, or workflow — goes into agent registry
-            self._agent_registry[name] = callable_obj  # type: ignore[assignment]
+        # Register in the unified callable registry (both local view and runtime)
+        self._callable_registry.register(name, callable_obj, overwrite=True)  # type: ignore[arg-type]
+        self._runtime.callable_registry.register(name, callable_obj, overwrite=True)
 
         from citnega.packages.agents.registry import AgentRegistry
 
-        AgentRegistry.wire_core_agents(self._agent_registry, self._tool_registry)  # type: ignore[arg-type]
+        AgentRegistry.wire_core_agents(
+            self._callable_registry.get_agents(),
+            self._callable_registry.get_tools(),
+        )
 
     async def hot_reload_workfolder(
         self,
         workfolder: Path,
         loader: object,
-    ) -> dict:
+    ) -> dict[str, list[str]]:
         """
         Scan *workfolder* for new/changed callables and register them all.
-
-        Args:
-            workfolder: Absolute path to the user's workfolder.
-            loader:     A ``DynamicLoader`` instance with injected dependencies.
 
         Returns:
             ``{"registered": [name, ...], "errors": ["name: msg", ...]}``
         """
+        from citnega.packages.config.loaders import load_settings
+        from citnega.packages.workspace.onboarding import enforce_workspace_onboarding
         from citnega.packages.workspace.writer import WorkspaceWriter
 
+        settings = load_settings(app_home=self._app_home)
         writer = WorkspaceWriter(workfolder)
-        loaded_workspace = loader.load_workspace(writer)  # type: ignore[attr-defined]
+        enforce_workspace_onboarding(writer.root, settings.workspace)
+        loaded_workspace = loader.load_workspace(writer)
 
         registered: list[str] = []
         errors: list[str] = []
@@ -536,18 +562,20 @@ class ApplicationService(IApplicationService):
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
 
-        refresh_result = {"refreshed": [], "skipped": []}
-        if hasattr(self._runtime, "refresh_runners"):
-            try:
-                refresh_result = await self._runtime.refresh_runners()
-            except Exception:
-                refresh_result = {"refreshed": [], "skipped": []}
+        refreshed: list[str] = []
+        skipped: list[str] = []
+        try:
+            refresh_result = await self._runtime.refresh_runners()
+            refreshed = refresh_result.get("refreshed", [])
+            skipped = refresh_result.get("skipped", [])
+        except Exception:
+            pass
 
         return {
             "registered": registered,
             "errors": errors,
-            "refreshed_sessions": refresh_result["refreshed"],
-            "skipped_sessions": refresh_result["skipped"],
+            "refreshed_sessions": refreshed,
+            "skipped_sessions": skipped,
         }
 
     def save_workspace_path(self, path: str) -> None:
@@ -560,22 +588,19 @@ class ApplicationService(IApplicationService):
     # ── Registry queries ───────────────────────────────────────────────────────
 
     def list_agents(self) -> list[CallableMetadata]:
-        return [
-            v.get_metadata() for v in self._agent_registry.values() if hasattr(v, "get_metadata")
-        ]
+        return [v.get_metadata() for v in self._callable_registry.get_agents().values()]
 
     def list_tools(self) -> list[CallableMetadata]:
-        return [
-            v.get_metadata() for v in self._tool_registry.values() if hasattr(v, "get_metadata")
-        ]
+        return [v.get_metadata() for v in self._callable_registry.get_tools().values()]
 
     def list_frameworks(self) -> list[str]:
-        return [self._runtime._adapter.framework_name]
+        return [self._runtime.adapter.framework_name]
 
     def list_models(self) -> list[ModelInfo]:
         # 1. Prefer YAML-driven config from DirectModelAdapter
-        adapter = self._runtime._adapter
-        if hasattr(adapter, "_yaml_config"):
+        adapter = self._runtime.adapter
+        yaml_config = getattr(adapter, "_yaml_config", None)
+        if yaml_config is not None:
             try:
                 from citnega.packages.model_gateway.provider_factory import (
                     _make_model_info,
@@ -583,7 +608,7 @@ class ApplicationService(IApplicationService):
 
                 return [
                     _make_model_info(entry)
-                    for entry in sorted(adapter._yaml_config.models, key=lambda m: -m.priority)
+                    for entry in sorted(yaml_config.models, key=lambda m: -m.priority)
                 ]
             except Exception:
                 pass
@@ -591,7 +616,7 @@ class ApplicationService(IApplicationService):
         # 2. Injected model gateway
         if self._model_gateway is not None:
             try:
-                return list(self._model_gateway._registry.list_all())
+                return list(self._model_gateway.list_models())
             except Exception:
                 pass
 

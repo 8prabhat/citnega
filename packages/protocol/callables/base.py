@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -38,6 +38,12 @@ class BaseCallable(IStreamable):
     Subclasses must set class-level ``name``, ``description``,
     ``callable_type``, ``input_schema``, ``output_schema``, and ``policy``,
     then implement ``_execute()``.
+
+    ``llm_direct_access`` controls whether this callable appears in the
+    LLM's function-calling schema.  Set to ``False`` for tools that should
+    only be called by specialist agents (e.g. web-access tools that the
+    research_agent wraps).  Defaults to ``True`` for all tools; specialist
+    agents always appear in the schema regardless of this flag.
     """
 
     name: str
@@ -46,6 +52,7 @@ class BaseCallable(IStreamable):
     input_schema: type[BaseModel]
     output_schema: type[BaseModel]
     policy: CallablePolicy = CallablePolicy()
+    llm_direct_access: bool = True  # override to False for agent-internal tools
 
     def __init__(
         self,
@@ -80,7 +87,7 @@ class BaseCallable(IStreamable):
             input.model_dump() if isinstance(input, BaseModel) else input
         )
 
-        self._event_emitter.emit(CallableStartEvent.from_invocation(self, context))
+        self._event_emitter.emit(CallableStartEvent.from_invocation(self, context, validated))
 
         start = time.monotonic()
         result: InvokeResult
@@ -136,7 +143,7 @@ class BaseCallable(IStreamable):
         """Subclasses implement the actual work here."""
         ...
 
-    async def stream_invoke(
+    async def stream_invoke(  # type: ignore[override,misc]
         self,
         input: BaseModel,
         context: CallContext,
@@ -170,6 +177,7 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
     """
 
     callable_type: CallableType = CallableType.CORE
+    _REQUIRES_TOOL_REGISTRY: bool = True
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         # Accept optional tool_registry as 4th positional or keyword arg
@@ -180,7 +188,7 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._sub_callables: dict[str, IStreamable] = {}
         self._routing_policy: IRoutingPolicy | None = None
-        self._tool_registry: dict = tool_registry if isinstance(tool_registry, dict) else {}
+        self._tool_registry: dict[str, Any] = tool_registry if isinstance(tool_registry, dict) else {}
 
     def register_sub_callable(self, callable: IStreamable) -> None:  # type: ignore[override]
         if callable.name == self.name:
@@ -195,7 +203,7 @@ class BaseCoreAgent(BaseCallable, IOrchestrable):
             callable.name: callable for callable in callables if callable.name != self.name
         }
 
-    def sync_tool_registry(self, tool_registry: dict) -> None:
+    def sync_tool_registry(self, tool_registry: dict[str, Any]) -> None:
         self._tool_registry = tool_registry if isinstance(tool_registry, dict) else {}
 
     def set_routing_policy(self, policy: IRoutingPolicy) -> None:

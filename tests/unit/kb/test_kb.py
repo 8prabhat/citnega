@@ -182,3 +182,141 @@ class TestExportMarkdown:
         export_markdown([item], dest)
         text = dest.read_text()
         assert "> unique content string xyz" in text
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped export (FR-KB-003)
+# ---------------------------------------------------------------------------
+
+
+def _make_item_for_session(session_id: str, content: str = "content") -> KBItem:
+    now = datetime.now(tz=UTC)
+    return KBItem(
+        item_id=str(uuid.uuid4()),
+        title=f"Item for {session_id}",
+        content=content,
+        source_type=KBSourceType.NOTE,
+        source_session_id=session_id,
+        tags=[],
+        created_at=now,
+        updated_at=now,
+        content_hash=content_hash(content + session_id),
+    )
+
+
+class TestKnowledgeStoreSessionExport:
+    """
+    Tests for session-scoped export using a stub KnowledgeStore.
+
+    We stub list_items() to return session-filtered items without a real DB.
+    """
+
+    import pytest
+
+    @pytest.mark.asyncio
+    async def test_export_all_session_scoped_jsonl(self, tmp_path: Path) -> None:
+        """export_all(session_id=X) must only include items from session X."""
+        from unittest.mock import MagicMock
+
+        from citnega.packages.kb.store import KnowledgeStore
+
+        item_s1 = _make_item_for_session("sess-1", "content A")
+        item_s2 = _make_item_for_session("sess-2", "content B")
+
+        store = MagicMock(spec=KnowledgeStore)
+        store._pr = MagicMock()
+        store._pr.kb_exports_dir = tmp_path
+
+        # list_items filters by session_id — return only matching items
+        async def _list_items(tags=None, source_type=None, session_id=None, limit=100):
+            all_items = [item_s1, item_s2]
+            if session_id is not None:
+                return [i for i in all_items if i.source_session_id == session_id]
+            return all_items
+
+        store.list_items = _list_items
+
+        # Call the real export_all method (not mocked)
+        dest = tmp_path / "session_export.jsonl"
+        result = await KnowledgeStore.export_all(store, fmt="jsonl", output_path=dest, session_id="sess-1")
+
+        text = dest.read_text()
+        assert "content A" in text
+        assert "content B" not in text
+        assert result == dest
+
+    @pytest.mark.asyncio
+    async def test_export_all_global_includes_all(self, tmp_path: Path) -> None:
+        """export_all(session_id=None) must include all items."""
+        from unittest.mock import MagicMock
+
+        from citnega.packages.kb.store import KnowledgeStore
+
+        item_s1 = _make_item_for_session("sess-1", "content A")
+        item_s2 = _make_item_for_session("sess-2", "content B")
+
+        store = MagicMock(spec=KnowledgeStore)
+        store._pr = MagicMock()
+        store._pr.kb_exports_dir = tmp_path
+
+        async def _list_items(tags=None, source_type=None, session_id=None, limit=100):
+            return [item_s1, item_s2]
+
+        store.list_items = _list_items
+
+        dest = tmp_path / "global_export.jsonl"
+        result = await KnowledgeStore.export_all(store, fmt="jsonl", output_path=dest, session_id=None)
+
+        text = dest.read_text()
+        assert "content A" in text
+        assert "content B" in text
+
+    @pytest.mark.asyncio
+    async def test_export_all_markdown_session_scoped(self, tmp_path: Path) -> None:
+        """export_all with fmt='markdown' and session_id must produce scoped Markdown."""
+        from unittest.mock import MagicMock
+
+        from citnega.packages.kb.store import KnowledgeStore
+
+        item = _make_item_for_session("sess-x", "markdown content")
+
+        store = MagicMock(spec=KnowledgeStore)
+        store._pr = MagicMock()
+        store._pr.kb_exports_dir = tmp_path
+
+        async def _list_items(tags=None, source_type=None, session_id=None, limit=100):
+            return [item] if session_id == "sess-x" else []
+
+        store.list_items = _list_items
+
+        dest = tmp_path / "session_export.md"
+        await KnowledgeStore.export_all(store, fmt="markdown", output_path=dest, session_id="sess-x")
+
+        text = dest.read_text()
+        assert "markdown content" in text
+
+
+class TestDefaultExportPath:
+    def test_default_path_uses_fmt_extension(self, tmp_path: Path) -> None:
+        from citnega.packages.kb.export import default_export_path
+
+        path = default_export_path(tmp_path, fmt="jsonl")
+        assert path.suffix == ".jsonl"
+        assert path.parent == tmp_path
+
+    def test_default_path_markdown_extension(self, tmp_path: Path) -> None:
+        from citnega.packages.kb.export import default_export_path
+
+        path = default_export_path(tmp_path, fmt="markdown")
+        assert path.suffix == ".markdown"
+
+    def test_two_calls_different_paths(self, tmp_path: Path) -> None:
+        """Timestamped paths should be unique across calls."""
+        import time
+
+        from citnega.packages.kb.export import default_export_path
+
+        p1 = default_export_path(tmp_path, fmt="jsonl")
+        time.sleep(1.1)
+        p2 = default_export_path(tmp_path, fmt="jsonl")
+        assert p1 != p2

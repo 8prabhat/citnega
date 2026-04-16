@@ -14,6 +14,7 @@ from citnega.packages.protocol.models.model_gateway import (
     ModelResponse,
     TaskNeeds,
 )
+from citnega.packages.protocol.models.runner import ConversationStats, ThinkingConfig
 from citnega.packages.protocol.models.runs import (
     TERMINAL_RUN_STATES,
     VALID_RUN_TRANSITIONS,
@@ -29,6 +30,7 @@ __all__ = [
     "Approval",
     "ApprovalStatus",
     "CheckpointMeta",
+    "ConversationStats",
     "ContextObject",
     "ContextSource",
     "KBItem",
@@ -49,4 +51,5 @@ __all__ = [
     "SessionState",
     "StateSnapshot",
     "TaskNeeds",
+    "ThinkingConfig",
 ]

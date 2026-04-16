@@ -77,7 +77,7 @@ class SetWorkfolderCommand(ISlashCommand):
             )
             return
 
-        path_str = " ".join(args).strip()
+        path_str = " ".join(args).strip().strip("'\"")  # strip surrounding quotes
         path = Path(path_str).expanduser().resolve()
 
         if not path.exists():
@@ -107,6 +107,7 @@ class SetWorkfolderCommand(ISlashCommand):
         writer = WorkspaceWriter(path)
         writer.ensure_dirs()
 
+        app_context._update_context_bar(folder=str(path))
         await app_context._append_message(
             "system",
             f"Workfolder set to: {path}\n"

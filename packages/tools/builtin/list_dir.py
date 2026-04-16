@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pathlib
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -10,7 +9,7 @@ from pydantic import BaseModel, Field
 from citnega.packages.protocol.callables.base import BaseCallable
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.shared.errors import ArtifactError
-from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
+from citnega.packages.tools.builtin._tool_base import ToolOutput, resolve_file_path, tool_policy
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
@@ -34,7 +33,7 @@ class ListDirTool(BaseCallable):
     )
 
     async def _execute(self, input: ListDirInput, context: CallContext) -> ToolOutput:
-        path = pathlib.Path(input.dir_path.replace("~", str(pathlib.Path.home())))
+        path = resolve_file_path(input.dir_path)
         if not path.exists():
             raise ArtifactError(f"Directory not found: {path}")
         if not path.is_dir():

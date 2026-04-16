@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from citnega.packages.protocol.callables.base import BaseCallable
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.shared.errors import ArtifactError
-from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
+from citnega.packages.tools.builtin._tool_base import ToolOutput, resolve_file_path, tool_policy
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
@@ -34,9 +34,7 @@ class ReadFileTool(BaseCallable):
     )
 
     async def _execute(self, input: ReadFileInput, context: CallContext) -> ToolOutput:
-        import pathlib
-
-        path = pathlib.Path(input.file_path.replace("~", str(pathlib.Path.home())))
+        path = resolve_file_path(input.file_path)
         if not path.exists():
             raise ArtifactError(f"File not found: {path}")
         if not path.is_file():

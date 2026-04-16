@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -100,7 +100,12 @@ class IApplicationService(ABC):
     # ── Import / export ────────────────────────────────────────────────────────
 
     @abstractmethod
-    async def export_session(self, session_id: str) -> Path: ...
+    async def export_session(
+        self,
+        session_id: str,
+        fmt: str = "jsonl",
+        output_path: Path | None = None,
+    ) -> Path: ...
 
     @abstractmethod
     async def import_session(self, path: Path) -> Session: ...
@@ -111,7 +116,7 @@ class IApplicationService(ABC):
     def register_callable(self, callable_obj: object) -> None: ...
 
     @abstractmethod
-    async def hot_reload_workfolder(self, workfolder: Path, loader: object) -> dict: ...
+    async def hot_reload_workfolder(self, workfolder: Path, loader: object) -> dict[str, Any]: ...
 
     @abstractmethod
     def save_workspace_path(self, path: str) -> None: ...

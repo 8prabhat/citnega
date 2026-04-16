@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import typer
@@ -35,7 +36,10 @@ async def run_command(
     json_out: bool = typer.Option(False, "--json", "-j", help="Emit raw JSON events."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress event output."),
 ) -> None:
-    """Start a turn and stream its events to stdout until completion."""
+    """Start a turn and stream its events to stdout until completion.
+
+    Press Ctrl+C to cancel the active run gracefully.
+    """
     async with cli_bootstrap() as svc:
         # Verify session exists
         session = await svc.get_session(session_id)
@@ -49,38 +53,63 @@ async def run_command(
             typer.echo(f"run_id: {run_id}", err=True)
 
         exit_code = 0
-        async for event in svc.stream_events(run_id):
-            if quiet:
-                continue
+        try:
+            async for event in svc.stream_events(run_id):
+                if quiet:
+                    continue
 
-            if json_out:
-                typer.echo(json.dumps(event.model_dump(), default=str))
-                continue
+                if json_out:
+                    typer.echo(json.dumps(event.model_dump(), default=str))
+                    continue
 
-            etype = type(event).__name__
-            if etype not in _VERBOSE_TYPES:
-                continue
+                etype = type(event).__name__
+                if etype not in _VERBOSE_TYPES:
+                    continue
 
-            if isinstance(event, TokenEvent):
-                typer.echo(event.token, nl=False)
+                if isinstance(event, TokenEvent):
+                    typer.echo(event.token, nl=False)
 
-            elif isinstance(event, RunStateEvent):
-                typer.echo(
-                    f"\n[{event.from_state.value} → {event.to_state.value}]",
-                    err=True,
-                )
+                elif isinstance(event, RunStateEvent):
+                    typer.echo(
+                        f"\n[{event.from_state.value} → {event.to_state.value}]",
+                        err=True,
+                    )
 
-            elif isinstance(event, RunCompleteEvent):
-                final = event.final_state.value
-                typer.echo(f"\n[complete: {final}]", err=True)
-                if final not in ("completed", "cancelled"):
-                    exit_code = 1
+                elif isinstance(event, RunCompleteEvent):
+                    final = event.final_state.value
+                    typer.echo(f"\n[complete: {final}]", err=True)
+                    if final not in ("completed", "cancelled"):
+                        exit_code = 1
 
-            else:
-                typer.echo(f"[{etype}]", err=True)
+                else:
+                    typer.echo(f"[{etype}]", err=True)
+
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            typer.echo("\n[cancelling…]", err=True)
+            try:
+                await svc.cancel_run(run_id)
+                typer.echo(f"[run {run_id[:8]} cancelled]", err=True)
+            except Exception as exc:
+                typer.echo(f"[cancel failed: {exc}]", err=True)
+            exit_code = 130  # standard Ctrl+C exit code
 
     if exit_code:
         raise typer.Exit(code=exit_code)
+
+
+@app.command("cancel")
+@run_async
+async def cancel_command(
+    run_id: str = typer.Option(..., "--run-id", "-r", help="Run ID to cancel."),
+) -> None:
+    """Cancel an active or queued run by its ID."""
+    async with cli_bootstrap() as svc:
+        try:
+            await svc.cancel_run(run_id)
+            typer.echo(f"Run {run_id} cancelled.")
+        except Exception as exc:
+            typer.echo(f"Cancel failed: {exc}", err=True)
+            raise typer.Exit(code=1)
 
 
 # Allow `citnega run` as a shorthand (no sub-subcommand needed)

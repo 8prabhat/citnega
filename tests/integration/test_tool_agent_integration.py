@@ -212,17 +212,15 @@ def test_get_conversation_messages_reads_disk(tmp_path):
     # Build a minimal stub service where adapter._sessions_dir = tmp_path
     adapter = MagicMock()
     adapter._sessions_dir = tmp_path
+    adapter.get_runner = MagicMock(return_value=None)
     runtime = MagicMock()
-    runtime._adapter = adapter
-    runtime._adapter.get_runner = MagicMock(return_value=None)
+    runtime.adapter = adapter
+    runtime.get_runner = MagicMock(return_value=None)
 
     svc = ApplicationService.__new__(ApplicationService)
     svc._runtime = runtime
     svc._tool_registry = {}
     svc._agent_registry = {}
-
-    # Patch _get_runner to return None
-    svc._get_runner = lambda _sid: None
 
     result = svc.get_conversation_messages(sid)
     assert result == msgs, f"Expected {msgs}, got {result}"

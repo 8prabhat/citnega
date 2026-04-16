@@ -287,11 +287,12 @@ class TestApprovalBlock:
             )
             await scroll.mount(block)
             await pilot.pause(0.1)
+            scroll.scroll_to_widget(block, animate=False)
+            await pilot.pause(0.1)
 
-            # Capture the Resolved message
-            app.on_approval_block_resolved if hasattr(app, "on_approval_block_resolved") else None
-
-            await pilot.click("#btn-approve")
+            # Press the button directly — avoids OutOfBounds in headless mode
+            from textual.widgets import Button
+            block.query_one("#btn-approve", Button).press()
             await pilot.pause(0.2)
 
             assert block._resolved is True

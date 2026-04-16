@@ -33,6 +33,15 @@ _DEFAULT_MAX_TOKENS = 512
 _CHARS_PER_TOKEN = 4
 
 
+def _get_default_chunk_tokens() -> int:
+    try:
+        from citnega.packages.config.loaders import load_settings
+
+        return load_settings().context.kb_chunk_size_tokens
+    except Exception:
+        return _DEFAULT_MAX_TOKENS
+
+
 # ── Public helpers ────────────────────────────────────────────────────────────
 
 
@@ -44,14 +53,15 @@ def content_hash(text: str) -> str:
 def chunk_text(
     text: str,
     *,
-    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
 ) -> list[str]:
     """
     Split *text* into chunks that each fit within *max_tokens*.
 
-    Returns a list of non-empty strings.
+    Returns a list of non-empty strings.  Defaults to settings.context.kb_chunk_size_tokens.
     """
-    max_chars = max_tokens * _CHARS_PER_TOKEN
+    effective_max = max_tokens if max_tokens is not None else _get_default_chunk_tokens()
+    max_chars = effective_max * _CHARS_PER_TOKEN
     return list(_do_chunk(text, max_chars))
 
 

@@ -36,16 +36,16 @@ jobs:
         run: uv run ruff format --check packages/ apps/ tests/
 
       - name: Type check (mypy)
-        # Non-blocking: mypy strict mode is aspirational; failures are tracked
-        # separately. Remove `continue-on-error` once the type debt is resolved.
+        # ~30 justified type: ignore remain; ~298 errors need incremental cleanup.
+        # Track progress: reduce errors each PR until this can be made blocking.
         continue-on-error: true
         run: uv run mypy citnega/packages/ citnega/apps/
 
       - name: Architecture contracts (import-linter)
-        # Non-blocking: some transitive imports via ApplicationService are expected.
-        # Remove `continue-on-error` once service interface layer is fully abstracted.
-        continue-on-error: true
         run: uv run lint-imports --config import-linter.ini
+
+      - name: Workspace onboarding gate
+        run: uv run pytest tests/integration/workspace/test_onboarding_gate.py -q
 
       - name: Run tests with coverage
         run: uv run pytest --cov=citnega --cov-report=xml --cov-report=term-missing
@@ -56,3 +56,98 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  scorecard_gate:
+    needs: [test]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Horizontal demo evidence gate
+        run: uv run python scripts/run_horizontal_demos.py
+
+      - name: Independent 9+ scorecard gate
+        run: uv run python scripts/generate_9plus_scorecard.py
+
+      - name: Upload scorecard evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-evidence
+          path: |
+            docs/evidence/horizontal_demos_latest.json
+            docs/evidence/horizontal_demos_latest.md
+            docs/evidence/9plus_scorecard_latest.json
+            docs/evidence/9plus_scorecard_latest.md
+
+  benchmark_matrix:
+    needs: [test]
+    strategy:
+      fail-fast: false
+      matrix:
+        os:             [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Restore benchmark history cache
+        id: benchmark-history-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            docs/evidence/benchmark_matrix_history.jsonl
+            docs/evidence/benchmark_publication_history.jsonl
+          key: benchmark-history-${{ matrix.os }}-py${{ matrix.python-version }}-${{ github.run_id }}
+          restore-keys: |
+            benchmark-history-${{ matrix.os }}-py${{ matrix.python-version }}-
+
+      - name: Benchmark matrix sample
+        env:
+          CITNEGA_BENCHMARK_LABEL: ${{ matrix.os }}-py${{ matrix.python-version }}
+          CITNEGA_BENCHMARK_PUBLICATION_REQUIRE_SIGNATURE: "true"
+          CITNEGA_BENCHMARK_PUBLICATION_SIGNING_KEY: ${{ secrets.CITNEGA_BENCHMARK_PUBLICATION_SIGNING_KEY }}
+          CITNEGA_BENCHMARK_PUBLICATION_SIGNING_KEY_ID: ${{ secrets.CITNEGA_BENCHMARK_PUBLICATION_SIGNING_KEY_ID }}
+          CITNEGA_BENCHMARK_PUBLICATION_BRANCH: ${{ github.ref_name }}
+          CITNEGA_BENCHMARK_PUBLICATION_GIT_REF: ${{ github.ref }}
+          CITNEGA_BENCHMARK_PUBLICATION_GIT_SHA: ${{ github.sha }}
+          CITNEGA_BENCHMARK_PUBLICATION_REPOSITORY: ${{ github.repository }}
+        run: uv run python scripts/run_benchmark_matrix.py
+
+      - name: Save benchmark history cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            docs/evidence/benchmark_matrix_history.jsonl
+            docs/evidence/benchmark_publication_history.jsonl
+          key: benchmark-history-${{ matrix.os }}-py${{ matrix.python-version }}-${{ github.run_id }}
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            docs/evidence/benchmark_matrix_latest.json
+            docs/evidence/benchmark_matrix_latest.md
+            docs/evidence/benchmark_matrix_history.jsonl
+            docs/evidence/benchmark_publication_latest.json
+            docs/evidence/benchmark_publication_latest.md
+            docs/evidence/benchmark_publication_history.jsonl

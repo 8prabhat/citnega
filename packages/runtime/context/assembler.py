@@ -15,6 +15,7 @@ Handler chain (configured in settings.toml [context].handlers):
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -33,12 +34,28 @@ class ContextAssembler(IContextAssembler):
 
     Handlers are injected at construction time by the bootstrap (or test
     fixtures).  Order matters: TokenBudgetHandler MUST be last.
+
+    Parameters
+    ----------
+    handlers
+        Ordered list of context handlers to run.
+    handler_timeout_ms
+        Per-handler timeout in milliseconds.  0 (default) = no timeout.
+        When a handler exceeds its budget it is skipped with a warning,
+        same as any other handler error.
     """
 
-    def __init__(self, handlers: list[IContextHandler]) -> None:
+    def __init__(
+        self,
+        handlers: list[IContextHandler],
+        handler_timeout_ms: int = 0,
+    ) -> None:
         if not handlers:
             raise ValueError("ContextAssembler requires at least one handler.")
         self._handlers = handlers
+        self._handler_timeout_s: float | None = (
+            handler_timeout_ms / 1000.0 if handler_timeout_ms > 0 else None
+        )
 
     @property
     def handlers(self) -> list[IContextHandler]:
@@ -69,7 +86,20 @@ class ContextAssembler(IContextAssembler):
 
         for handler in self._handlers:
             try:
-                context = await handler.enrich(context, session)
+                coro = handler.enrich(context, session)
+                if self._handler_timeout_s is not None:
+                    context = await asyncio.wait_for(coro, timeout=self._handler_timeout_s)
+                else:
+                    context = await coro
+            except TimeoutError:
+                runtime_logger.warning(
+                    "context_handler_timeout",
+                    handler=handler.name,
+                    session_id=session.config.session_id,
+                    run_id=run_id,
+                    timeout_s=self._handler_timeout_s,
+                )
+                # Skip timed-out handler; context is unchanged
             except CitnegaError:
                 # Re-raise policy / config errors
                 raise

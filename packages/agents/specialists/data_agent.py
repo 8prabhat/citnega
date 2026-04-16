@@ -55,8 +55,7 @@ class DataAgent(SpecialistBase):
                     child_ctx,
                 )
                 if res.success and res.output:
-                    out = res.output  # type: ignore[attr-defined]
-                    script_output = f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+                    script_output = f"stdout:\n{res.get_output_field('stdout')}\nstderr:\n{res.get_output_field('stderr')}"
                     tool_calls_made.append("run_shell")
 
         # Build analysis prompt

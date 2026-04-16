@@ -23,15 +23,17 @@ import sys
 from typing import TYPE_CHECKING
 
 from citnega.packages.observability.logging_setup import configure_logging, runtime_logger
-from citnega.packages.protocol.interfaces.context import IContextHandler
 from citnega.packages.runtime.app_service import ApplicationService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from citnega.packages.protocol.models.context import ContextObject
-    from citnega.packages.protocol.models.sessions import Session
+    from citnega.packages.config.settings import CitnegaSettings
+    from citnega.packages.model_gateway.gateway import ModelGateway
+    from citnega.packages.protocol.interfaces.adapter import IFrameworkAdapter
+    from citnega.packages.protocol.interfaces.events import IEventEmitter
+    from citnega.packages.storage.path_resolver import PathResolver
 
 # ---------------------------------------------------------------------------
 # Exit code constants
@@ -48,18 +50,8 @@ EXIT_MIGRATION_ERROR = 5
 # ---------------------------------------------------------------------------
 
 
-class _PassThroughContextHandler(IContextHandler):
-    """Identity handler ensuring ContextAssembler has at least one handler."""
 
-    @property
-    def name(self) -> str:
-        return "pass_through"
-
-    async def enrich(self, context: ContextObject, session: Session) -> ContextObject:
-        return context
-
-
-def _select_adapter(framework: str, path_resolver):  # type: ignore[no-untyped-def]
+def _select_adapter(framework: str, path_resolver: PathResolver) -> IFrameworkAdapter:
     """
     Return the correct IFrameworkAdapter instance for the configured framework.
 
@@ -79,6 +71,10 @@ def _select_adapter(framework: str, path_resolver):  # type: ignore[no-untyped-d
             from citnega.packages.adapters.crewai.adapter import CrewAIFrameworkAdapter
 
             return CrewAIFrameworkAdapter(path_resolver)
+        elif framework == "direct":
+            from citnega.packages.adapters.direct.adapter import DirectModelAdapter
+
+            return DirectModelAdapter(path_resolver.sessions_dir)
         elif framework == "stub":
             # Allowed in test / dev contexts; not for production use
             from tests.fixtures.stub_adapter import StubFrameworkAdapter
@@ -88,7 +84,7 @@ def _select_adapter(framework: str, path_resolver):  # type: ignore[no-untyped-d
             runtime_logger.error(
                 "bootstrap_unknown_framework",
                 framework=framework,
-                supported=["adk", "langgraph", "crewai"],
+                supported=["adk", "langgraph", "crewai", "direct"],
             )
             sys.exit(EXIT_ADAPTER_ERROR)
     except ImportError as exc:
@@ -107,7 +103,7 @@ def _select_adapter(framework: str, path_resolver):  # type: ignore[no-untyped-d
         sys.exit(EXIT_ADAPTER_ERROR)
 
 
-async def _build_model_gateway(settings, emitter):  # type: ignore[no-untyped-def]
+async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter) -> ModelGateway:
     """
     Build and health-check the ModelGateway.
 
@@ -228,12 +224,20 @@ async def create_application(
     try:
         # ── Step 1: Load and validate settings ────────────────────────────────
         try:
-            from citnega.packages.config.loaders import load_settings
+            from citnega.packages.config.loaders import load_settings, validate_settings
             from citnega.packages.storage.path_resolver import PathResolver
             from citnega.packages.workspace.overlay import resolve_workfolder_path
 
             path_resolver = PathResolver(app_home=app_home or (db_path.parent if db_path else None))
-            settings = load_settings(app_home=path_resolver.app_home)
+            _raw_toml: dict = {}
+            settings = load_settings(app_home=path_resolver.app_home, _out_raw=_raw_toml)
+
+            _config_errors = validate_settings(settings, raw_toml=_raw_toml)
+            if _config_errors:
+                for _err in _config_errors:
+                    print(f"[citnega] Config error: {_err}", file=sys.stderr)
+                sys.exit(EXIT_CONFIG_ERROR)
+
             workfolder_root = resolve_workfolder_path(settings.workspace.workfolder_path)
             path_resolver = PathResolver(
                 app_home=path_resolver.app_home,
@@ -265,12 +269,12 @@ async def create_application(
                 KeyringKeyStore,
             )
 
-            CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
+            key_store = CompositeKeyStore([KeyringKeyStore(), EnvVarKeyStore()])
         except Exception as exc:
             runtime_logger.warning("bootstrap_keystore_init_failed", error=str(exc))
             from citnega.packages.security.key_store import EnvVarKeyStore
 
-            EnvVarKeyStore()  # type: ignore[assignment]
+            key_store = EnvVarKeyStore()
 
         # ── Step 5: Database (connect + WAL PRAGMAs) ──────────────────────────
         from citnega.packages.storage.database import DatabaseFactory
@@ -299,6 +303,9 @@ async def create_application(
 
         await db.connect()
 
+        # Resolve active framework once so all downstream components agree.
+        _framework = framework or settings.runtime.framework
+
         # ── Step 7: Repositories & managers ──────────────────────────────────
         from citnega.packages.runtime.runs import RunManager
         from citnega.packages.runtime.sessions import SessionManager
@@ -307,23 +314,52 @@ async def create_application(
 
         session_repo = SessionRepository(db)
         run_repo = RunRepository(db)
-        session_mgr = SessionManager(session_repo)
+        session_mgr = SessionManager(
+            session_repo,
+            default_framework=_framework,
+            strict_framework_validation=settings.runtime.strict_framework_validation,
+            active_frameworks=frozenset({_framework}),
+        )
         run_mgr = RunManager(run_repo)
 
         # ── Step 8: Event emitter ─────────────────────────────────────────────
         from citnega.packages.runtime.events.emitter import EventEmitter
 
-        emitter = EventEmitter(event_log_dir=path_resolver.event_logs_dir)
+        emitter = EventEmitter(
+            event_log_dir=path_resolver.event_logs_dir,
+            max_queue_size=settings.runtime.event_queue_max_size,
+        )
 
         # ── Step 9: Policy ────────────────────────────────────────────────────
         from citnega.packages.runtime.policy.approval_manager import ApprovalManager
         from citnega.packages.runtime.policy.enforcer import PolicyEnforcer
+        from citnega.packages.runtime.policy.templates import (
+            apply_policy_template_to_tools,
+            resolve_policy_template,
+        )
 
         approval_mgr = ApprovalManager()
-        enforcer = PolicyEnforcer(emitter, approval_mgr)
+        effective_policy = resolve_policy_template(settings.policy)
+        # Build path variable map for policy substitution in allowed_paths.
+        # Tools can declare allowed_paths=["${WORKSPACE_ROOT}"] to allow the
+        # configured workspace directory without hardcoding absolute paths.
+        _workspace_root = (
+            settings.policy.workspace_root
+            or settings.workspace.workfolder_path
+            or str(path_resolver.app_home)
+        )
+        _policy_path_vars = {
+            "WORKSPACE_ROOT": _workspace_root,
+            "APP_HOME": str(path_resolver.app_home),
+        }
+        enforcer = PolicyEnforcer(
+            emitter,
+            approval_mgr,
+            deny_network=effective_policy.enforce_network_deny,
+            path_vars=_policy_path_vars,
+        )
 
         # ── Step 10: Framework adapter ────────────────────────────────────────
-        _framework = framework or settings.runtime.framework
         adapter = _select_adapter(_framework, path_resolver)
         from citnega.packages.protocol.interfaces.adapter import AdapterConfig
 
@@ -335,9 +371,10 @@ async def create_application(
         )
 
         # ── Step 11: Model gateway ────────────────────────────────────────────
+        model_gateway = None
         if not skip_provider_health_check:
             try:
-                await _build_model_gateway(settings, emitter)
+                model_gateway = await _build_model_gateway(settings, emitter)
             except SystemExit:
                 raise
             except Exception as exc:
@@ -352,12 +389,64 @@ async def create_application(
         # ── Step 13: Context handlers ─────────────────────────────────────────
         from citnega.packages.runtime.context.assembler import ContextAssembler
         from citnega.packages.runtime.context.handlers.kb_retrieval import KBRetrievalHandler
+        from citnega.packages.runtime.context.handlers.recent_turns import RecentTurnsHandler
+        from citnega.packages.runtime.context.handlers.runtime_state import RuntimeStateHandler
+        from citnega.packages.runtime.context.handlers.session_summary import SessionSummaryHandler
+        from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
+        from citnega.packages.storage.repositories.message_repo import MessageRepository
+
+        _KNOWN_HANDLERS = frozenset(
+            {"recent_turns", "session_summary", "kb_retrieval", "runtime_state", "token_budget"}
+        )
+        _unknown = [h for h in settings.context.handlers if h not in _KNOWN_HANDLERS]
+        if _unknown:
+            if settings.context.strict_handler_loading:
+                from citnega.packages.shared.errors import InvalidConfigError as _ICE
+
+                raise _ICE(
+                    f"Unknown context handler(s) in config: {_unknown}. "
+                    "Set strict_handler_loading=false to skip unknown handlers."
+                )
+            else:
+                runtime_logger.warning("unknown_context_handlers_skipped", handlers=_unknown)
+
+        message_repo = MessageRepository(db)
+        handler_names = [h for h in settings.context.handlers if h in _KNOWN_HANDLERS]
+        if not handler_names:
+            from citnega.packages.shared.errors import InvalidConfigError as _ICE
+
+            raise _ICE(
+                "No valid context handlers configured. "
+                "At least one of recent_turns/session_summary/kb_retrieval/"
+                "runtime_state/token_budget is required."
+            )
+
+        if "token_budget" in handler_names and handler_names[-1] != "token_budget":
+            runtime_logger.warning(
+                "token_budget_handler_reordered",
+                original_order=handler_names,
+            )
+            handler_names = [h for h in handler_names if h != "token_budget"] + ["token_budget"]
+
+        _handler_factories = {
+            "recent_turns": lambda: RecentTurnsHandler(
+                message_repo,
+                recent_turns_count=settings.context.recent_turns_count,
+            ),
+            "session_summary": lambda: SessionSummaryHandler(run_repo),
+            "kb_retrieval": lambda: KBRetrievalHandler(kb_store=kb_store),
+            "runtime_state": lambda: RuntimeStateHandler(),
+            "token_budget": lambda: TokenBudgetHandler(
+                max_context_tokens=settings.session.max_context_tokens,
+                emitter=emitter,
+                priorities=dict(settings.context.token_budget_priorities),
+                default_priority=settings.context.token_budget_default_priority,
+            ),
+        }
 
         assembler = ContextAssembler(
-            [
-                _PassThroughContextHandler(),
-                KBRetrievalHandler(kb_store=kb_store),
-            ]
+            [_handler_factories[name]() for name in handler_names],
+            handler_timeout_ms=settings.context.handler_timeout_ms,
         )
 
         # ── Step 14: Tracer ───────────────────────────────────────────────────
@@ -384,8 +473,22 @@ async def create_application(
             emitter=emitter,
             tracer=tracer,
             tool_registry=built_in_tools,
+            workspace_settings=settings.workspace,
         )
         tools = {**built_in_tools, **workspace_overlay.tools}
+        apply_policy_template_to_tools(
+            tools,
+            effective_policy,
+            workspace_root=_workspace_root,
+            app_home=path_resolver.app_home,
+        )
+        runtime_logger.info(
+            "policy_template_applied",
+            template=effective_policy.template_name,
+            enforce_network_deny=effective_policy.enforce_network_deny,
+            enforce_workspace_bounds=effective_policy.enforce_workspace_bounds,
+            approval_tools=len(effective_policy.require_approval_tools),
+        )
 
         # ── Step 16: Agent registry ───────────────────────────────────────────
         from citnega.packages.agents.registry import AgentRegistry
@@ -402,12 +505,24 @@ async def create_application(
             **workspace_overlay.agents,
             **workspace_overlay.workflows,
         }
+        from citnega.packages.agents.core.orchestrator_agent import OrchestratorAgent
+
+        for _agent in agents.values():
+            if isinstance(_agent, OrchestratorAgent):
+                try:
+                    _agent.configure_remote_execution(settings.remote)
+                except Exception as exc:
+                    runtime_logger.warning(
+                        "agent_remote_configuration_failed",
+                        agent=getattr(_agent, "name", "<unknown>"),
+                        error=str(exc),
+                    )
         AgentRegistry.wire_core_agents(agents, tools)
 
         # ── Step 17: Unified callable registry ───────────────────────────────
-        from citnega.packages.shared.registry import BaseRegistry
+        from citnega.packages.shared.registry import CallableRegistry
 
-        registry: BaseRegistry = BaseRegistry()
+        registry = CallableRegistry()
         for name, callable_obj in {**tools, **agents}.items():
             try:
                 registry.register(name, callable_obj)
@@ -431,6 +546,7 @@ async def create_application(
             framework_adapter=adapter,
             event_emitter=emitter,
             callable_registry=registry,
+            model_gateway=model_gateway,
         )
 
         # ── Step 19: ApplicationService ───────────────────────────────────────
@@ -439,8 +555,7 @@ async def create_application(
             emitter=emitter,
             approval_manager=approval_mgr,
             kb_store=kb_store,
-            tool_registry=tools,
-            agent_registry=agents,
+            callable_registry=registry,
             enforcer=enforcer,
             tracer=tracer,
             app_home=path_resolver.app_home,
@@ -451,6 +566,28 @@ async def create_application(
             framework=_framework,
             db=str(resolved_db),
         )
+
+        # Emit startup diagnostics event so event consumers can confirm
+        # bootstrap succeeded and surface any skipped checks.
+        from citnega.packages.protocol.events.diagnostics import StartupDiagnosticsEvent
+
+        _diag_checks = ["db_connection", "adapter_init", "callable_registry"]
+        _diag_failures: list[str] = []
+        if skip_provider_health_check:
+            _diag_checks.append("model_gateway")
+            _diag_failures.append("model_gateway")  # skipped = treated as degraded
+        _diag_status = "degraded" if _diag_failures else "passed"
+        emitter.emit(
+            StartupDiagnosticsEvent(
+                session_id="",
+                run_id="",
+                checks=_diag_checks,
+                status=_diag_status,
+                failures=_diag_failures,
+                details={"model_gateway": "skipped in test mode"} if skip_provider_health_check else {},
+            )
+        )
+
         yield svc
     finally:
         if runtime is not None:

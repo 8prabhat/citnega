@@ -101,6 +101,33 @@ class TestLoadDirectory:
         assert "reload_tool" in first
         assert "reload_tool" in second
 
+    def test_invalid_contract_callable_is_skipped(self, tmp_path: Path) -> None:
+        invalid_source = """
+from pydantic import BaseModel
+
+from citnega.packages.protocol.callables.base import BaseCallable
+from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
+
+
+class Input(BaseModel):
+    text: str = ""
+
+
+class BrokenTool(BaseCallable):
+    name = "broken_tool"
+    description = "missing output_schema on purpose"
+    callable_type = CallableType.TOOL
+    input_schema = Input
+    policy = CallablePolicy()
+
+    async def _execute(self, input, context):
+        return Input(text="x")
+"""
+        (tmp_path / "broken_tool.py").write_text(invalid_source, encoding="utf-8")
+        loader = _make_loader()
+        loaded = loader.load_directory(tmp_path)
+        assert "broken_tool" not in loaded
+
 
 class TestLoadWorkfolder:
     def test_loads_across_subdirs(self, tmp_path: Path) -> None:

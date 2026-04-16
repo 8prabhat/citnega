@@ -32,8 +32,7 @@ if TYPE_CHECKING:
     from citnega.packages.storage.database import DatabaseFactory
 
 
-# How long (seconds) to wait for the event-queue drain before giving up.
-_DRAIN_TIMEOUT = 5.0
+_DRAIN_TIMEOUT_DEFAULT = 5.0
 
 
 class ShutdownCoordinator:
@@ -43,7 +42,7 @@ class ShutdownCoordinator:
     Steps on signal receipt:
       1. Set the shutdown flag (idempotent — second signal exits immediately).
       2. Cancel all active runs via ``CoreRuntime.shutdown()``.
-      3. Drain open EventEmitter queues (up to ``_DRAIN_TIMEOUT`` seconds).
+      3. Drain open EventEmitter queues (up to ``drain_timeout`` seconds).
       4. Disconnect the database.
       5. Log shutdown complete and call ``sys.exit(0)``.
     """
@@ -53,10 +52,12 @@ class ShutdownCoordinator:
         runtime: CoreRuntime,
         emitter: EventEmitter,
         db: DatabaseFactory,
+        drain_timeout: float = _DRAIN_TIMEOUT_DEFAULT,
     ) -> None:
         self._runtime = runtime
         self._emitter = emitter
         self._db = db
+        self._drain_timeout = drain_timeout
         self._shutdown_flag = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -145,7 +146,7 @@ class ShutdownCoordinator:
 
     async def _drain_queues(self) -> None:
         """
-        Wait for all open event queues to empty, up to _DRAIN_TIMEOUT seconds.
+        Wait for all open event queues to empty, up to self._drain_timeout seconds.
 
         EventEmitter stores queues in ``_queues`` (dict keyed by run_id).
         We iterate a snapshot so new queues added during drain are ignored.
@@ -162,8 +163,10 @@ class ShutdownCoordinator:
 
         runtime_logger.info("shutdown_draining_queues", queue_count=len(queues))
 
-        async def _drain_one(run_id: str, queue: asyncio.Queue) -> None:  # type: ignore[type-arg]
-            deadline = asyncio.get_event_loop().time() + _DRAIN_TIMEOUT
+        drain_timeout = self._drain_timeout
+
+        async def _drain_one(run_id: str, queue: asyncio.Queue[object]) -> None:
+            deadline = asyncio.get_event_loop().time() + drain_timeout
             while not queue.empty():
                 remaining = deadline - asyncio.get_event_loop().time()
                 if remaining <= 0:
@@ -178,7 +181,7 @@ class ShutdownCoordinator:
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*drain_tasks, return_exceptions=True),
-                    timeout=_DRAIN_TIMEOUT + 1.0,
+                    timeout=drain_timeout + 1.0,
                 )
             except TimeoutError:
                 runtime_logger.warning("shutdown_drain_global_timeout")

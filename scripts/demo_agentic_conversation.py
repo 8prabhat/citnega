@@ -18,11 +18,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 import sys
 import textwrap
 import uuid
-from pathlib import Path
-from typing import AsyncIterator
 
 # ── repo root on path ──────────────────────────────────────────────────────────
 _REPO = Path(__file__).resolve().parent.parent
@@ -262,9 +261,9 @@ async def part1_model_driven_tools(service, model_id: str) -> None:
 async def part2_specialist_agent(service) -> None:
     _section("PART 2 — ResearchSynthesizerAgent (specialist calls 3 tools)", BLU)
 
-    from citnega.packages.tools.builtin.list_dir     import ListDirTool
+    from citnega.packages.tools.builtin.list_dir import ListDirTool
+    from citnega.packages.tools.builtin.read_file import ReadFileTool
     from citnega.packages.tools.builtin.search_files import SearchFilesTool
-    from citnega.packages.tools.builtin.read_file    import ReadFileTool
 
     emitter = _Emitter()
     enforcer = _Enforcer()

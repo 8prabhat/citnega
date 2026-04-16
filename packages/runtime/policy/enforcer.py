@@ -29,6 +29,8 @@ from citnega.packages.runtime.policy.checks import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from pydantic import BaseModel
 
     from citnega.packages.protocol.callables.context import CallContext
@@ -50,9 +52,15 @@ class PolicyEnforcer(IPolicyEnforcer):
         self,
         emitter: IEventEmitter,
         approval_manager: ApprovalManager,
+        deny_network: bool = False,
+        path_vars: dict[str, str] | None = None,
     ) -> None:
         self._emitter = emitter
         self._approval_manager = approval_manager
+        # When True, callables that declare network_allowed=True are blocked.
+        self._deny_network = deny_network
+        # Variable substitutions for allowed_paths: e.g. {"WORKSPACE_ROOT": "/tmp/ws"}
+        self._path_vars: dict[str, str] = path_vars or {}
 
     async def enforce(
         self,
@@ -76,11 +84,13 @@ class PolicyEnforcer(IPolicyEnforcer):
         # 1. Depth limit
         await depth_check(callable, input, context, self._emitter)
 
-        # 2. Path allowlist
-        await path_check(callable, input, context, self._emitter)
+        # 2. Path allowlist (with workspace/app_home variable substitution)
+        await path_check(callable, input, context, self._emitter, path_vars=self._path_vars)
 
-        # 3. Network intent vs. policy declaration
-        await network_check(callable, input, context, self._emitter)
+        # 3. Network — enforce deny if configured
+        await network_check(
+            callable, input, context, self._emitter, deny_network=self._deny_network
+        )
 
         # 6. Approval gate (runs last so trivial violations are caught first)
         await approval_check(callable, input, context, self._emitter, self._approval_manager)
@@ -138,9 +148,9 @@ class PolicyEnforcer(IPolicyEnforcer):
         )
 
     @staticmethod
-    async def run_with_timeout(
+    async def run_with_timeout(  # type: ignore[override]
         callable: IInvocable,
-        coro: asyncio.coroutine,  # type: ignore[type-arg]
+        coro: Awaitable[object],
         context: CallContext,
         emitter: IEventEmitter,
     ) -> object:
@@ -155,7 +165,7 @@ class PolicyEnforcer(IPolicyEnforcer):
 
         timeout = callable.policy.timeout_seconds
         try:
-            result = await asyncio.wait_for(coro, timeout=float(timeout))
+            result: object = await asyncio.wait_for(coro, timeout=float(timeout))
         except TimeoutError:
             emitter.emit(
                 CallablePolicyEvent(

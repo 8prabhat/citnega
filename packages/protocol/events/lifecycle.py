@@ -23,3 +23,24 @@ class RunCompleteEvent(BaseEvent):
 
     event_type: str = "RunCompleteEvent"
     final_state: RunState
+
+
+class RunTerminalReasonEvent(BaseEvent):
+    """
+    Emitted immediately before RunCompleteEvent to explain *why* the run
+    reached its terminal state.
+
+    Fields
+    ------
+    reason
+        Short machine-readable reason code:
+        ``"completed"`` | ``"cancelled"`` | ``"failed"`` |
+        ``"depth_limit"`` | ``"timeout"`` | ``"approval_denied"``
+    details
+        Human-readable explanation (exception message, policy detail, etc.).
+        Empty string when the run completed normally.
+    """
+
+    event_type: str = "RunTerminalReasonEvent"
+    reason: str
+    details: str = ""

@@ -10,42 +10,72 @@ from textual.widgets import Label, Markdown, Static
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
+_ROLE_LABEL = {"user": "You", "assistant": "Citnega", "system": "System"}
+
 
 class MessageBlock(Widget):
     """
     An immutable message bubble.
 
     Args:
-        role:    "user" | "assistant" | "system"
+        role:    ``"user"`` | ``"assistant"`` | ``"system"``
         content: Full text of the message.
 
-    Assistant messages are rendered as Markdown (code blocks, bold, etc.).
-    User and system messages are rendered as plain text.
+    Click to focus; Ctrl+Y copies the focused block's content.
     """
+
+    can_focus = True
 
     DEFAULT_CSS = """
     MessageBlock {
         height: auto;
         margin: 0 0 1 0;
-        padding: 0 1;
+        padding: 0 1 1 1;
     }
+
+    /* ── User bubble ──────────────────────────────────────── */
     MessageBlock.user {
         border-left: thick $accent;
         background: $boost;
     }
+    MessageBlock.user .role-label {
+        color: $accent;
+    }
+
+    /* ── Assistant bubble ─────────────────────────────────── */
     MessageBlock.assistant {
         border-left: thick $success;
         background: $surface;
     }
-    MessageBlock.system {
-        border-left: thick $warning;
-        background: $surface;
-        color: $text-muted;
+    MessageBlock.assistant .role-label {
+        color: $success;
     }
-    MessageBlock .role-label {
+
+    /* ── System / info bubble ─────────────────────────────── */
+    MessageBlock.system {
+        border-left: thick $panel-lighten-3;
+        background: $surface;
+    }
+    MessageBlock.system .role-label {
+        color: $text-disabled;
+    }
+    MessageBlock.system .content {
         color: $text-muted;
+        text-style: italic;
+    }
+
+    /* ── Focus highlight (click-to-select) ────────────────── */
+    MessageBlock:focus {
+        border: dashed $accent-darken-1;
+        background: $boost;
+        outline: none;
+    }
+
+    /* ── Shared label / content ───────────────────────────── */
+    MessageBlock .role-label {
         text-style: bold;
         height: 1;
+        margin-bottom: 0;
     }
     MessageBlock .content {
         height: auto;
@@ -66,9 +96,12 @@ class MessageBlock(Widget):
         self._content = content
 
     def compose(self) -> ComposeResult:
-        _ROLE_LABELS = {"user": "You", "assistant": "Citnega", "system": "System"}
-        yield Label(_ROLE_LABELS.get(self._role, self._role), classes="role-label")
+        yield Label(_ROLE_LABEL.get(self._role, self._role), classes="role-label")
         if self._role == "assistant":
             yield Markdown(self._content, classes="content")
         else:
             yield Static(self._content, classes="content", markup=False)
+
+    def on_click(self) -> None:
+        """Clicking a message block focuses it so Ctrl+Y can copy it."""
+        self.focus()

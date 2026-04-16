@@ -29,11 +29,56 @@ class ConversationStore:
     the source of truth for both the message history and the active model.
     """
 
+    # Base system prompt — no hardcoded tool names.
+    # The runner appends a dynamic "## Available Tools" section built from
+    # the actual registered callables, so this stays accurate regardless of
+    # which tools are installed.
     _SYSTEM_PROMPT = (
         "You are Citnega, a helpful, concise, and thoughtful AI assistant. "
-        "Respond clearly and accurately. When writing code, use appropriate "
-        "fenced code blocks. Be direct and avoid unnecessary verbosity."
+        "Respond clearly and accurately. Use fenced code blocks for code. "
+        "Be direct and avoid unnecessary verbosity.\n\n"
+        "## Memory\n\n"
+        "You have two memory systems:\n"
+        "  • **Session memory** — the conversation history above (what was said this session).\n"
+        "  • **Persistent knowledge base** — use `read_kb` to recall facts, notes, and research "
+        "saved across sessions; use `write_kb` to save important discoveries for future use.\n\n"
+        "Always check session history before asking a clarifying question the user already answered.\n\n"
+        "## Tool Use — mandatory rules\n\n"
+        "Your training has a cutoff date — never rely on memory alone for anything "
+        "that could have changed. Use your available tools proactively.\n\n"
+        "**When to use tools (non-exhaustive):**\n"
+        "  • Anything about current events, conflicts, geopolitics, elections, sanctions\n"
+        "  • Economic events: markets, prices, company news, product launches\n"
+        "  • Sports: live scores, results, standings, schedules, venues\n"
+        "  • Technology: software versions, API changes, security advisories\n"
+        "  • Any analytical question ('what is the logic/reasoning behind X') where X "
+        "is an ongoing or recent situation — find the CURRENT state first, then analyse\n"
+        "  • Anything that may have changed in the past 12 months\n"
+        "  • File operations: read_file, write_file, edit_file, list_dir, search_files\n"
+        "  • Shell commands and tests: run_shell\n"
+        "  • Git operations: git_ops (status, diff, log, commit, etc.)\n\n"
+        "**Rule of thumb:** When in doubt, use a tool first and answer second. "
+        "Fresh facts + good reasoning beats stale memory every time.\n\n"
+        "The available tools and their purposes are listed below."
     )
+
+    @staticmethod
+    def build_tools_section(llm_tools: dict[str, Any]) -> str:
+        """
+        Build a '## Available Tools' section from the callable registry.
+
+        Called by the runner at turn start so the prompt always reflects
+        what is actually registered — no hardcoded names anywhere.
+        """
+        if not llm_tools:
+            return ""
+        lines = ["\n\n## Available Tools\n"]
+        for name, tool in sorted(llm_tools.items()):
+            desc = getattr(tool, "description", "").strip()
+            # One sentence max in the prompt listing
+            short = desc.split(".")[0] if "." in desc else desc
+            lines.append(f"  • **`{name}`** — {short}.")
+        return "\n".join(lines)
 
     def __init__(self, session_dir: Path, default_model_id: str = "") -> None:
         self._path = session_dir / "conversation.json"
@@ -73,6 +118,36 @@ class ConversationStore:
         """Return the stored message list (shallow copy)."""
         return list(self._data.get("messages", []))
 
+    # ── Tool history ──────────────────────────────────────────────────────────
+
+    def get_tool_history(self) -> list[dict[str, Any]]:
+        """Return the stored tool call history (shallow copy)."""
+        return list(self._data.get("tool_history", []))
+
+    async def add_tool_call(
+        self,
+        name: str,
+        input_summary: str,
+        output_summary: str,
+        success: bool,
+        callable_type: str = "tool",
+    ) -> None:
+        """Append a completed tool/agent call record and save.  Capped at 200 entries."""
+        async with self._lock:
+            history = self._data.setdefault("tool_history", [])
+            history.append(
+                {
+                    "name": name,
+                    "input_summary": input_summary,
+                    "output_summary": output_summary,
+                    "success": success,
+                    "callable_type": callable_type,
+                }
+            )
+            if len(history) > 200:
+                self._data["tool_history"] = history[-200:]
+        await self.save()
+
     async def add_message(self, role: str, content: str) -> None:
         """Append a message and save."""
         async with self._lock:
@@ -84,6 +159,26 @@ class ConversationStore:
         async with self._lock:
             self._data["messages"] = []
         await self.save()
+
+    def drop_dangling_user_turn(self) -> bool:
+        """
+        Remove a trailing user message with no assistant reply.
+
+        Called after load() to handle sessions where the process was killed
+        after saving the user message but before the assistant replied.
+
+        Returns True if a dangling message was removed.
+        """
+        msgs = self._data.get("messages", [])
+        content_msgs = [m for m in msgs if m.get("role") in ("user", "assistant")]
+        if content_msgs and content_msgs[-1].get("role") == "user":
+            # Trailing unanswered user message — remove it from stored list
+            self._data["messages"] = [
+                m for m in msgs
+                if m is not content_msgs[-1]
+            ]
+            return True
+        return False
 
     def build_messages_for_model(
         self,

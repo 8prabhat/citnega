@@ -17,12 +17,11 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from citnega.packages.model_gateway.provider_factory import ProviderFactory
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.events.callable import CallableEndEvent, CallableStartEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
 from citnega.packages.protocol.events.thinking import ThinkingEvent
 from citnega.packages.protocol.interfaces.adapter import IFrameworkRunner
@@ -38,9 +37,49 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.models.context import ContextObject
+    from citnega.packages.protocol.models.model_gateway import ModelRequest, ModelResponse
     from citnega.packages.protocol.models.sessions import Session
 
-_MAX_TOOL_ROUNDS = 5  # prevent infinite tool-call loops
+_MAX_TOOL_ROUNDS_DEFAULT = 5  # prevent infinite tool-call loops
+
+
+class _RunnerModelGateway:
+    """
+    Thin IModelGateway adapter wrapping a ProviderFactory.
+
+    Passed into CallContext so specialist agents called during tool execution
+    can make non-streaming model calls via context.model_gateway.generate().
+    """
+
+    def __init__(self, factory: ProviderFactory, model_id: str) -> None:
+        self._factory = factory
+        self._model_id = model_id
+
+    async def generate(self, request: ModelRequest) -> ModelResponse:
+        from citnega.packages.protocol.models.model_gateway import ModelResponse as _MR
+
+        effective_id = request.model_id or self._model_id
+        try:
+            provider, effective_id = self._factory.build(effective_id), effective_id
+        except KeyError:
+            entries = self._factory.list_entries()
+            if not entries:
+                return _MR(content="[no model available]", model_id=effective_id)
+            effective_id = entries[0].id
+            provider = self._factory.build(effective_id)
+
+        req = request.model_copy(update={"model_id": effective_id, "stream": False})
+        return await provider.generate(req)
+
+    async def stream_generate(self, request):
+        # Specialists called by the runner use generate(); streaming not needed here.
+        raise NotImplementedError("stream_generate not supported in _RunnerModelGateway")
+
+    async def list_models(self):
+        return []
+
+    async def health_check_all(self):
+        return {}
 
 
 class DirectModelRunner(IFrameworkRunner):
@@ -57,19 +96,67 @@ class DirectModelRunner(IFrameworkRunner):
         yaml_config: ModelYAMLConfig,
         conversation_store: ConversationStore,
         callables: list[IInvocable] | None = None,
+        model_gateway: object | None = None,
+        max_tool_rounds: int = _MAX_TOOL_ROUNDS_DEFAULT,
     ) -> None:
         self._session = session
         self._factory = ProviderFactory(yaml_config)
         self._conv = conversation_store
         self._cancelled = False
         self._paused = False
-        # Only expose TOOL-type callables to the model for function calling
+        self._current_model_id: str = ""
+        self._max_tool_rounds = max_tool_rounds
+        # Injected ModelGateway (routing + rate-limiting). Falls back to
+        # _RunnerModelGateway (direct ProviderFactory) when not provided.
+        self._model_gateway = model_gateway
+        # Expose TOOL and SPECIALIST callables to the model for function calling.
+        # SPECIALIST agents appear as callable tools so the model can invoke them.
         from citnega.packages.protocol.callables.types import CallableType
 
+        # ── Which callables the LLM sees in its function-calling schema ─────────
+        #
+        # Design principle: the LLM is an orchestrator, not a low-level caller.
+        #
+        #   SPECIALIST agents  → always in the LLM schema.
+        #   TOOL               → in the schema only when llm_direct_access=True
+        #                        (the default).  Tools that set llm_direct_access=False
+        #                        are agent-internal and never shown to the LLM directly.
+        #
+        # Each tool controls its own visibility via the llm_direct_access class flag —
+        # no hardcoded allowlist here.
+
+        def _llm_visible(c: IInvocable) -> bool:
+            if not getattr(c, "callable_type", None):
+                return False
+            if c.callable_type == CallableType.SPECIALIST:
+                return True
+            if c.callable_type == CallableType.TOOL:
+                return getattr(c, "llm_direct_access", True)
+            if c.callable_type == CallableType.CORE:
+                # CORE agents are LLM-visible only when they explicitly opt in via
+                # llm_direct_access = True.  RouterAgent is internal (called by
+                # ConversationAgent), so it stays hidden.  ConversationAgent and
+                # PlannerAgent are exposed so the LLM can invoke multi-step
+                # orchestration when the task warrants it.
+                return getattr(c, "llm_direct_access", False)
+            return False
+
         self._tools: dict[str, IInvocable] = {
+            c.name: c for c in (callables or []) if _llm_visible(c)
+        }
+        # Keep ALL callables (TOOL + SPECIALIST + CORE) so that:
+        #   • tools with llm_direct_access=False are reachable by specialists
+        #   • CORE agents (ConversationAgent, RouterAgent, PlannerAgent) are
+        #     reachable when the LLM calls them via function-calling
+        self._all_callables: dict[str, IInvocable] = {
             c.name: c
             for c in (callables or [])
-            if hasattr(c, "callable_type") and c.callable_type == CallableType.TOOL
+            if getattr(c, "callable_type", None) is not None
+            and c.callable_type in (
+                CallableType.TOOL,
+                CallableType.SPECIALIST,
+                CallableType.CORE,
+            )
         }
 
     # ── IFrameworkRunner ──────────────────────────────────────────────────────
@@ -105,16 +192,19 @@ class DirectModelRunner(IFrameworkRunner):
 
         # 2. Build provider (with fallback)
         provider, model_id = self._resolve_provider(model_id)
+        self._current_model_id = model_id
 
         # 3. Augment system prompt with session mode + phase
         mode = get_mode(self._conv.mode_name)
         phase = self._conv.plan_phase
+        base_prompt = (
+            ConversationStore._SYSTEM_PROMPT
+            + ConversationStore.build_tools_section(self._tools)
+        )
         try:
-            system_prompt = mode.augment_system_prompt(
-                ConversationStore._SYSTEM_PROMPT, phase=phase
-            )
+            system_prompt = mode.augment_system_prompt(base_prompt, phase=phase)
         except TypeError:
-            system_prompt = mode.augment_system_prompt(ConversationStore._SYSTEM_PROMPT)
+            system_prompt = mode.augment_system_prompt(base_prompt)
 
         # 3b. Inject KB context sources into the system prompt
         kb_sources = [s for s in (context.sources or []) if s.source_type == "kb"]
@@ -127,10 +217,17 @@ class DirectModelRunner(IFrameworkRunner):
                 + "\n---"
             )
 
-        # 4. Build initial message list
-        messages_dicts = self._conv.build_messages_for_model(
-            user_input, system_prompt=system_prompt
-        )
+        # 4. Persist user message NOW (before LLM call) so it survives
+        #    process termination mid-stream.  The assistant reply is saved below.
+        await self._conv.add_message("user", user_input)
+
+        # 4b. Build message list for the model.
+        #     user_input is already the last item in stored history, so we
+        #     take the full history slice (which ends with user_input) and
+        #     prepend only the system prompt — no re-appending needed.
+        all_stored = self._conv.get_messages()
+        history_slice = all_stored[-40:] if len(all_stored) > 40 else all_stored
+        messages_dicts = [{"role": "system", "content": system_prompt}, *history_slice]
         current_messages = [
             ModelMessage(role=m["role"], content=m["content"]) for m in messages_dicts
         ]
@@ -150,7 +247,7 @@ class DirectModelRunner(IFrameworkRunner):
         # 7. Multi-round tool-calling loop
         full_response: list[str] = []
 
-        for _round in range(_MAX_TOOL_ROUNDS):
+        for _round in range(self._max_tool_rounds):
             parser = ThinkingStreamParser() if use_thinking else None
 
             request = ModelRequest(
@@ -165,50 +262,65 @@ class DirectModelRunner(IFrameworkRunner):
             round_content: list[str] = []
 
             try:
-                async for chunk in provider.stream_generate(request):
-                    if self._cancelled:
-                        break
+                async with asyncio.timeout(300.0):  # 5-min hard cap; prevents hung streams
+                    async for chunk in provider.stream_generate(request):
+                        if self._cancelled:
+                            break
 
-                    # 7a. Native thinking field (Ollama gemma4 etc.)
-                    if chunk.thinking and use_thinking:
-                        await self._emit(
-                            event_queue,
-                            session_id,
-                            run_id,
-                            turn_id,
-                            chunk.thinking,
-                            is_thinking=True,
-                        )
-
-                    # 7b. Regular content (may contain <think> tags for tag-based models)
-                    if chunk.content:
-                        if parser is not None:
-                            for is_thinking, text in parser.feed(chunk.content):
-                                await self._emit(
-                                    event_queue, session_id, run_id, turn_id, text, is_thinking
-                                )
-                                if not is_thinking:
-                                    round_content.append(text)
-                        else:
-                            round_content.append(chunk.content)
-                            await event_queue.put(
-                                TokenEvent(
-                                    session_id=session_id,
-                                    run_id=run_id,
-                                    turn_id=turn_id,
-                                    token=chunk.content,
-                                )
+                        # 7a. Native thinking field (Ollama gemma4 etc.)
+                        if chunk.thinking and use_thinking:
+                            await self._emit(
+                                event_queue,
+                                session_id,
+                                run_id,
+                                turn_id,
+                                chunk.thinking,
+                                is_thinking=True,
                             )
 
-                    # 7c. Accumulate tool calls
-                    if chunk.tool_call_delta:
-                        if isinstance(chunk.tool_call_delta, list):
-                            pending_tool_calls.extend(chunk.tool_call_delta)
-                        else:
-                            pending_tool_calls.append(chunk.tool_call_delta)
+                        # 7b. Regular content (may contain <think> tags for tag-based models)
+                        if chunk.content:
+                            if parser is not None:
+                                for is_thinking, text in parser.feed(chunk.content):
+                                    await self._emit(
+                                        event_queue, session_id, run_id, turn_id, text, is_thinking
+                                    )
+                                    if not is_thinking:
+                                        round_content.append(text)
+                            else:
+                                round_content.append(chunk.content)
+                                await event_queue.put(
+                                    TokenEvent(
+                                        session_id=session_id,
+                                        run_id=run_id,
+                                        turn_id=turn_id,
+                                        token=chunk.content,
+                                    )
+                                )
+
+                        # 7c. Accumulate tool calls
+                        if chunk.tool_call_delta:
+                            if isinstance(chunk.tool_call_delta, list):
+                                pending_tool_calls.extend(chunk.tool_call_delta)
+                            else:
+                                pending_tool_calls.append(chunk.tool_call_delta)
 
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                # asyncio.timeout() fired — stream hung for > 300 s.
+                # Treat as a graceful partial response rather than a hard crash.
+                timeout_text = "\n\n[Response timed out — partial output above]"
+                round_content.append(timeout_text)
+                await event_queue.put(
+                    TokenEvent(
+                        session_id=session_id,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                        token=timeout_text,
+                    )
+                )
+                break  # exit the tool-calling loop with what we have
             except Exception as exc:
                 runtime_logger.error(
                     "direct_runner_stream_error",
@@ -279,9 +391,8 @@ class DirectModelRunner(IFrameworkRunner):
                     )
                 )
 
-        # 8. Persist turn
+        # 8. Persist assistant reply (user message was already saved in step 4)
         assistant_reply = "".join(full_response)
-        await self._conv.add_message("user", user_input)
         await self._conv.add_message("assistant", assistant_reply)
 
         runtime_logger.debug(
@@ -333,24 +444,14 @@ class DirectModelRunner(IFrameworkRunner):
         turn_id: str,
         event_queue: asyncio.Queue,
     ) -> str:
-        """Execute a registered tool by name and return its string result."""
-        tool = self._tools.get(name)
+        """Execute a registered callable by name and return its string result.
+
+        Looks in self._tools first (LLM-accessible).  For agent sub-calls that
+        need web tools not in self._tools, falls back to self._all_callables.
+        """
+        tool = self._tools.get(name) or self._all_callables.get(name)
         if tool is None:
             return f"[Tool error: '{name}' not registered]"
-
-        # Emit CallableStartEvent so TUI shows a ToolCallBlock
-        await event_queue.put(
-            CallableStartEvent(
-                session_id=session_id,
-                run_id=run_id,
-                turn_id=turn_id,
-                callable_name=name,
-                callable_type=tool.callable_type,
-                input_summary=args_str[:128],
-                depth=1,
-                parent_callable=None,
-            )
-        )
 
         try:
             args = json.loads(args_str) if args_str else {}
@@ -359,16 +460,29 @@ class DirectModelRunner(IFrameworkRunner):
 
         try:
             input_obj = tool.input_schema.model_validate(args)
-            # Build a minimal CallContext for tool execution
+            # Build a minimal CallContext for tool/specialist execution.
+            # Specialists need a working model gateway to make their own model calls.
+            # NOTE: We do NOT manually emit CallableStart/EndEvent here.
+            # BaseCallable.invoke() emits them via the injected event_emitter, which
+            # shares the same underlying asyncio.Queue as event_queue (both route by
+            # run_id through the EventEmitter). Manual emission would cause duplicate
+            # sidebar blocks in the TUI.
             from citnega.packages.protocol.callables.context import CallContext
 
+            # Prefer the injected full ModelGateway (routing + rate-limiting).
+            # Fall back to the thin _RunnerModelGateway wrapper when not available.
+            gateway = self._model_gateway or (
+                _RunnerModelGateway(self._factory, self._current_model_id)
+                if self._current_model_id
+                else None
+            )
             ctx = CallContext(
                 session_id=session_id,
                 run_id=run_id,
                 turn_id=turn_id,
                 depth=1,
                 session_config=self._session.config,
-                model_gateway=None,
+                model_gateway=gateway,
             )
             result = await tool.invoke(input_obj, ctx)
             if result.success and result.output:
@@ -379,20 +493,6 @@ class DirectModelRunner(IFrameworkRunner):
                 output_text = ""
         except Exception as exc:
             output_text = f"[Tool execution error: {exc}]"
-
-        # Emit CallableEndEvent
-        await event_queue.put(
-            CallableEndEvent(
-                session_id=session_id,
-                run_id=run_id,
-                turn_id=turn_id,
-                callable_name=name,
-                callable_type=tool.callable_type,
-                output_summary=output_text[:128],
-                duration_ms=0,
-                policy_result="passed" if not output_text.startswith("[Tool error") else "failed",
-            )
-        )
 
         return output_text
 
@@ -434,22 +534,58 @@ class DirectModelRunner(IFrameworkRunner):
     async def restore_checkpoint(self, checkpoint_id: str) -> None:
         pass
 
-    # ── Model / mode switching (called by adapter) ────────────────────────────
+    # ── IFrameworkRunner typed accessors ─────────────────────────────────────
 
-    async def set_model(self, model_id: str) -> None:
-        await self._conv.set_active_model(model_id)
+    def get_active_model_id(self) -> str | None:
+        return self._conv.active_model_id
+
+    def get_mode(self) -> str:
+        return self._conv.mode_name
+
+    def set_plan_phase(self, phase: str | None) -> None:
+        self._conv.set_plan_phase(phase)
 
     async def set_mode(self, mode_name: str) -> None:
         await self._conv.set_mode(mode_name)
 
-    def set_plan_phase(self, phase: str) -> None:
-        self._conv.set_plan_phase(phase)
+    async def set_model(self, model_id: str) -> None:
+        await self._conv.set_active_model(model_id)
 
     async def set_thinking(self, value: bool | None) -> None:
         await self._conv.set_thinking_enabled(value)
 
     def get_thinking(self) -> bool | None:
         return self._conv.thinking_enabled
+
+    def get_conversation_stats(self) -> ConversationStats:
+        from citnega.packages.protocol.models.runner import ConversationStats as _CS
+
+        return _CS(
+            message_count=self._conv.message_count,
+            token_estimate=self._conv.token_estimate,
+            compaction_count=self._conv.compaction_count,
+        )
+
+    def get_messages(self) -> list[dict[str, Any]]:
+        return self._conv.get_messages()
+
+    def get_tool_history(self) -> list[dict[str, Any]]:
+        return self._conv.get_tool_history()
+
+    async def add_tool_call(
+        self,
+        name: str,
+        input_summary: str,
+        output_summary: str,
+        success: bool,
+        callable_type: str = "tool",
+    ) -> None:
+        await self._conv.add_tool_call(
+            name, input_summary, output_summary, success, callable_type=callable_type
+        )
+
+    async def compact(self, summary: str, *, keep_recent: int = 10) -> int:
+        return await self._conv.compact(summary, keep_recent=keep_recent)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

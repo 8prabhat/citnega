@@ -1,16 +1,12 @@
 """
 ConversationAgent — primary core agent for interactive sessions.
 
-Uses hybrid routing: dispatches to specialists based on task type,
-or handles general conversation directly via the model gateway.
-
-Routing logic (StaticPriorityPolicy order):
-  - research / search / web → ResearchAgent
-  - summarise / tldr         → SummaryAgent
-  - file / read / write      → FileAgent
-  - data / analyse / csv     → DataAgent
-  - write / draft / edit     → WritingAgent
-  - general                  → direct model call
+Delegates to specialists via a supervisor loop:
+  1. Ask RouterAgent which specialist to call (or if done).
+  2. Invoke the specialist and accumulate its result.
+  3. Repeat up to MAX_ROUNDS times.
+  4. If multiple results accumulated, synthesise a final answer.
+  5. Fall back to a direct model response when router is unavailable.
 """
 
 from __future__ import annotations
@@ -24,6 +20,56 @@ from citnega.packages.protocol.callables.types import CallablePolicy, CallableTy
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.callables.interfaces import IStreamable
+
+_MAX_SUPERVISOR_ROUNDS_DEFAULT = 3
+
+
+def _get_max_supervisor_rounds() -> int:
+    try:
+        from citnega.packages.config.loaders import load_settings
+
+        return load_settings().runtime.max_supervisor_rounds
+    except Exception:
+        return _MAX_SUPERVISOR_ROUNDS_DEFAULT
+
+# Common primary-text field names used across specialist input schemas, in
+# priority order.  The first one that exists in the schema is used.
+_TEXT_FIELD_CANDIDATES = ("query", "task", "text", "user_input", "prompt", "input")
+
+
+def _build_specialist_input(schema: type, user_input: str) -> dict:
+    """
+    Build a minimal input dict for a specialist by inspecting its schema.
+
+    Finds the first required (or optional) string field whose name suggests
+    it is the primary text input, maps user_input to it, and leaves all other
+    fields at their defaults.  This avoids both the "spray every known name"
+    anti-pattern and hard crashes on missing required fields.
+    """
+    try:
+        fields = schema.model_fields  # pydantic v2
+    except AttributeError:
+        # Fallback: return a dict with all candidate keys — Pydantic ignores unknowns
+        return dict.fromkeys(_TEXT_FIELD_CANDIDATES, user_input)
+
+    # Build a dict: required string fields → user_input; everything else omitted
+    result: dict = {}
+    for candidate in _TEXT_FIELD_CANDIDATES:
+        if candidate in fields:
+            result[candidate] = user_input
+            break  # one primary text field is enough
+
+    # If no candidate matched, fill the first required field that has no default
+    if not result:
+        for name, field_info in fields.items():
+            is_required = field_info.is_required()
+            annotation = field_info.annotation
+            if is_required and annotation in (str, "str"):
+                result[name] = user_input
+                break
+
+    return result
 
 
 class ConversationInput(BaseModel):
@@ -33,36 +79,35 @@ class ConversationInput(BaseModel):
 
 class ConversationOutput(BaseModel):
     response: str = Field(description="Agent's text response.")
-    routed_to: str | None = Field(default=None, description="Specialist routed to, if any.")
+    routed_to: str | None = Field(default=None, description="Specialist(s) routed to, if any.")
     tool_calls: list[str] = Field(default_factory=list)
 
 
-# Keyword → specialist name mapping (ordered by specificity)
-_ROUTING_KEYWORDS: list[tuple[list[str], str]] = [
-    (["research", "search the web", "look up", "find online"], "research_agent"),
-    (["summarise", "summarize", "tldr", "tl;dr", "brief summary"], "summary_agent"),
-    (["read file", "write file", "create file", "list dir", "search files"], "file_agent"),
-    (
-        ["analyse data", "analyze data", "data analysis", "run script", "csv", "json data"],
-        "data_agent",
-    ),
-    (["draft", "write an essay", "rewrite", "edit text", "translate"], "writing_agent"),
-]
+_DIRECT_SYSTEM_PROMPT = (
+    "You are Citnega, a helpful, honest, and capable AI assistant. "
+    "Answer questions directly and concisely. Ask for clarification when needed. "
+    "Never make up facts. Cite sources when available."
+)
 
-
-def _route(user_input: str) -> str | None:
-    """Return specialist name based on keyword heuristics, or None for direct."""
-    lower = user_input.lower()
-    for keywords, specialist in _ROUTING_KEYWORDS:
-        if any(kw in lower for kw in keywords):
-            return specialist
-    return None
+_SYNTHESIS_SYSTEM_PROMPT = (
+    "You are Citnega. Combine the specialist results below into a single, "
+    "coherent, concise answer for the user. Do not repeat the raw results verbatim; "
+    "synthesise them into a natural response."
+)
 
 
 class ConversationAgent(BaseCoreAgent):
     name = "conversation_agent"
-    description = "Primary conversational agent with hybrid specialist routing."
+    description = (
+        "Multi-step orchestrator: routes a complex request through the right specialists "
+        "and synthesises their outputs into a single coherent response. "
+        "Use this when a task needs multiple specialists working together "
+        "(e.g. research + summarise, or read files + analyse + write report). "
+        "For single-specialist tasks call the specialist directly instead."
+    )
     callable_type = CallableType.CORE
+    # Exposed to the LLM so it can invoke orchestration for complex multi-step tasks.
+    llm_direct_access: bool = True
     input_schema = ConversationInput
     output_schema = ConversationOutput
     policy = CallablePolicy(
@@ -72,46 +117,148 @@ class ConversationAgent(BaseCoreAgent):
         max_depth_allowed=4,
     )
 
-    SYSTEM_PROMPT = (
-        "You are Citnega, a helpful, honest, and capable AI assistant. "
-        "Answer questions directly and concisely. Ask for clarification when needed. "
-        "Never make up facts. Cite sources when available."
-    )
+    # ── Entry point ───────────────────────────────────────────────────────────
 
     async def _execute(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
-        # Try specialist routing
-        specialist_name = _route(input.user_input)
-        if specialist_name:
-            specialist = next(
-                (c for c in self.list_sub_callables() if c.name == specialist_name),
-                None,
-            )
-            if specialist:
-                child_ctx = context.child(self.name, self.callable_type)
-                # Build appropriate input for the specialist
-                spec_input = specialist.input_schema.model_validate(
-                    {"task": input.user_input, "query": input.user_input, "text": input.user_input}
-                )
-                result = await specialist.invoke(spec_input, child_ctx)
-                if result.success and result.output:
-                    out = result.output  # type: ignore[attr-defined]
-                    return ConversationOutput(
-                        response=out.response,
-                        routed_to=specialist_name,
-                        tool_calls=getattr(out, "tool_calls_made", []),
-                    )
+        router = self._get_peer("router_agent")
 
-        # Direct model response
-        if context.model_gateway is None:
-            return ConversationOutput(
-                response="(model gateway unavailable)",
-                routed_to=None,
+        if router is None or context.model_gateway is None:
+            # No router or no model — skip supervisor, go direct
+            return await self._direct_response(input, context)
+
+        accumulated: list[tuple[str, str]] = []  # [(agent_name, result_text)]
+
+        for _round in range(_get_max_supervisor_rounds()):
+            route = await self._ask_router(
+                router,
+                input.user_input,
+                [r for _, r in accumulated],
+                context,
             )
+
+            if route is None:
+                break
+
+            # Router says we're done or wants conversation_agent (direct answer)
+            if route.is_complete or route.agent in ("none", self.name, "conversation_agent", ""):
+                break
+
+            specialist = self._get_peer(route.agent)
+            if specialist is None:
+                break
+
+            result_text = await self._invoke_specialist(specialist, input.user_input, context)
+            accumulated.append((route.agent, result_text))
+
+        if accumulated:
+            return await self._synthesise(input, accumulated, context)
+
+        return await self._direct_response(input, context)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _get_peer(self, name: str) -> IStreamable | None:
+        """Return a sub_callable by name, or None."""
+        for c in self.list_sub_callables():
+            if c.name == name:
+                return c
+        return None
+
+    async def _ask_router(
+        self,
+        router: IStreamable,
+        user_input: str,
+        previous_results: list[str],
+        context: CallContext,
+    ):
+        """Call RouterAgent and return its output, or None on failure."""
+        from citnega.packages.agents.core.router import RouterInput
+
+        try:
+            child_ctx = context.child(self.name, self.callable_type)
+            result = await router.invoke(
+                RouterInput(user_input=user_input, previous_results=previous_results),
+                child_ctx,
+            )
+            if result.success and result.output:
+                return result.output
+        except Exception:
+            pass
+        return None
+
+    async def _invoke_specialist(
+        self,
+        specialist: IStreamable,
+        user_input: str,
+        context: CallContext,
+    ) -> str:
+        """Invoke a specialist with a best-effort input and return text result."""
+        child_ctx = context.child(self.name, self.callable_type)
+        try:
+            input_obj = specialist.input_schema.model_validate(
+                _build_specialist_input(specialist.input_schema, user_input)
+            )
+            result = await specialist.invoke(input_obj, child_ctx)
+            if result.success and result.output:
+                out = result.output
+                # Try common response field names
+                for field in ("response", "result", "content", "summary", "output"):
+                    val = getattr(out, field, None)
+                    if val:
+                        return str(val)
+                return out.model_dump_json()
+            if result.error:
+                return f"[{specialist.name} error: {result.error.message}]"
+        except Exception as exc:
+            return f"[{specialist.name} error: {exc}]"
+        return ""
+
+    async def _synthesise(
+        self,
+        input: ConversationInput,
+        accumulated: list[tuple[str, str]],
+        context: CallContext,
+    ) -> ConversationOutput:
+        """Merge multiple specialist results into a single coherent response."""
+        from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
+
+        if context.model_gateway is None:
+            # No gateway — join results with labels
+            parts = [f"**{name}**: {text}" for name, text in accumulated]
+            return ConversationOutput(
+                response="\n\n".join(parts),
+                routed_to=", ".join(n for n, _ in accumulated),
+            )
+
+        results_block = "\n\n".join(
+            f"[{name}]:\n{text}" for name, text in accumulated
+        )
+        messages = [
+            ModelMessage(role="system", content=_SYNTHESIS_SYSTEM_PROMPT),
+            ModelMessage(role="system", content=f"Specialist results:\n{results_block}"),
+            ModelMessage(role="user", content=input.user_input),
+        ]
+        response = await context.model_gateway.generate(
+            ModelRequest(messages=messages, stream=False, temperature=0.7)
+        )
+        return ConversationOutput(
+            response=response.content,
+            routed_to=", ".join(n for n, _ in accumulated),
+        )
+
+    async def _direct_response(
+        self,
+        input: ConversationInput,
+        context: CallContext,
+    ) -> ConversationOutput:
+        """Direct model call — no specialist routing."""
+        if context.model_gateway is None:
+            return ConversationOutput(response="(model gateway unavailable)", routed_to=None)
 
         from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
 
-        messages = [
-            ModelMessage(role="system", content=self.SYSTEM_PROMPT),
+        messages: list[ModelMessage] = [
+            ModelMessage(role="system", content=_DIRECT_SYSTEM_PROMPT),
         ]
         if input.session_context:
             messages.append(

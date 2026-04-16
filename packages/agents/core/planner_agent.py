@@ -46,8 +46,11 @@ You are a planning assistant. Given a goal, produce a step-by-step plan.
 Format each step as:
   STEP N: <agent_name> | <task description>
 
-Available agents: research_agent, summary_agent, file_agent, data_agent, writing_agent, direct
-Use "direct" if the step should be answered directly without a specialist.
+Available agents:
+{agent_menu}
+  direct | answer this step directly without a specialist
+
+Use "direct" if the step needs no specialist.
 End the plan with "DONE" on its own line.
 Produce at most {max_steps} steps. Be concise."""
 
@@ -69,8 +72,15 @@ def _parse_plan(text: str) -> list[tuple[str, str]]:
 
 class PlannerAgent(BaseCoreAgent):
     name = "planner_agent"
-    description = "Decomposes complex tasks into plans and executes them via specialists."
+    description = (
+        "Decomposes a complex multi-step goal into an ordered plan and executes each step "
+        "via the right specialist. Use for goals that clearly require 2+ sequential specialist "
+        "actions (e.g. 'research X, then write a report', 'read files, analyse, then summarise'). "
+        "For single-step tasks call the specialist directly."
+    )
     callable_type = CallableType.CORE
+    # Exposed to the LLM so it can invoke structured multi-step planning.
+    llm_direct_access: bool = True
     input_schema = PlannerInput
     output_schema = PlannerOutput
     policy = CallablePolicy(
@@ -89,8 +99,20 @@ class PlannerAgent(BaseCoreAgent):
 
         from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
 
+        # Build dynamic agent menu from wired sub_callables
+        sub_callables = {c.name: c for c in self.list_sub_callables()}
+        menu_lines = [
+            f"  {c.name} | {getattr(c, 'description', '').split('.')[0]}"
+            for c in sub_callables.values()
+            if c.name not in (self.name, "router_agent", "conversation_agent")
+        ]
+        agent_menu = "\n".join(menu_lines) if menu_lines else "  research_agent | web research"
+
         # Step 1: generate plan
-        plan_system = _PLAN_SYSTEM_PROMPT.format(max_steps=input.max_steps)
+        plan_system = _PLAN_SYSTEM_PROMPT.format(
+            max_steps=input.max_steps,
+            agent_menu=agent_menu,
+        )
         plan_prompt = f"Goal: {input.goal}"
         if input.constraints:
             plan_prompt += f"\nConstraints: {input.constraints}"
@@ -112,10 +134,9 @@ class PlannerAgent(BaseCoreAgent):
             # Fallback: single direct step
             steps = [("direct", input.goal)]
 
-        # Step 2: execute each step
+        # Step 2: execute each step (reuse sub_callables dict built for the menu)
         step_labels: list[str] = []
         step_outputs: list[str] = []
-        sub_callables = {c.name: c for c in self.list_sub_callables()}
 
         for agent_name, task in steps:
             step_labels.append(f"{agent_name}: {task}")
@@ -141,8 +162,7 @@ class PlannerAgent(BaseCoreAgent):
             )
             result = await specialist.invoke(spec_input, child_ctx)
             if result.success and result.output:
-                out = result.output  # type: ignore[attr-defined]
-                step_outputs.append(getattr(out, "response", str(out)))
+                step_outputs.append(result.get_output_field("response", str(result.output)))
             else:
                 step_outputs.append(f"(step failed: {result.error})")
 

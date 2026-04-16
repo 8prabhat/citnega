@@ -61,3 +61,9 @@ name        = "summarize_text"
 module      = "citnega.packages.tools.builtin.summarize_text"
 class_name  = "SummarizeTextTool"
 enabled     = true
+
+[[tools]]
+name        = "artifact_pack"
+module      = "citnega.packages.tools.builtin.artifact_pack"
+class_name  = "ArtifactPackTool"
+enabled     = true

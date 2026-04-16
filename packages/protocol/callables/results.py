@@ -63,6 +63,17 @@ class InvokeResult(BaseModel):
     def success(self) -> bool:
         return self.error is None
 
+    def get_output_field(self, field: str, default: str = "") -> str:
+        """Safely extract a string field from the output model.
+
+        Most tool outputs expose a ``result`` field; specialist outputs use
+        ``response``.  This helper avoids ``type: ignore[attr-defined]`` at
+        every call site.
+        """
+        if self.output is None:
+            return default
+        return str(getattr(self.output, field, default))
+
     @classmethod
     def ok(
         cls,

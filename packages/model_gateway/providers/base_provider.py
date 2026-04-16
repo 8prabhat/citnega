@@ -20,7 +20,7 @@ from citnega.packages.protocol.interfaces.model_gateway import IModelProvider
 from citnega.packages.shared.errors import ProviderHTTPError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import Awaitable, AsyncIterator, Callable
 
     from citnega.packages.protocol.models.model_gateway import (
         ModelChunk,
@@ -30,8 +30,17 @@ if TYPE_CHECKING:
     )
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
-_MAX_RETRIES = 3
+_MAX_RETRIES_DEFAULT = 3
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _get_max_retries() -> int:
+    try:
+        from citnega.packages.config.loaders import load_settings
+
+        return load_settings().runtime.provider_max_retries
+    except Exception:
+        return _MAX_RETRIES_DEFAULT
 
 
 class BaseProvider(IModelProvider):
@@ -58,7 +67,9 @@ class BaseProvider(IModelProvider):
         return bool(getattr(self._model_info.capabilities, capability, False))
 
     def count_tokens(self, text: str) -> int:
-        return max(1, (len(text) + 3) // 4)
+        from citnega.packages.model_gateway.token_counter import CharApproxCounter
+
+        return CharApproxCounter().count(text)
 
     # ------------------------------------------------------------------
     # IModelProvider — with retry wrapper
@@ -87,9 +98,9 @@ class BaseProvider(IModelProvider):
     # Retry helper
     # ------------------------------------------------------------------
 
-    async def _with_retry(self, fn, request: ModelRequest) -> ModelResponse:  # type: ignore[type-arg]
+    async def _with_retry(self, fn: Callable[[ModelRequest], Awaitable[ModelResponse]], request: ModelRequest) -> ModelResponse:
         last_exc: Exception | None = None
-        for attempt in range(1, _MAX_RETRIES + 1):
+        for attempt in range(1, _get_max_retries() + 1):
             try:
                 return await fn(request)
             except httpx.HTTPStatusError as exc:

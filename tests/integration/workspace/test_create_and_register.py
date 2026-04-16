@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from citnega.packages.protocol.callables.types import CallableType
 from citnega.packages.runtime.app_service import ApplicationService
-from citnega.packages.shared.registry import BaseRegistry
+from citnega.packages.shared.registry import BaseRegistry, CallableRegistry
 from citnega.packages.workspace.loader import DynamicLoader
 from citnega.packages.workspace.scaffold import ScaffoldGenerator
 from citnega.packages.workspace.templates import ScaffoldSpec
@@ -53,6 +53,20 @@ class _MockRuntime:
     def __init__(self):
         self._registry = BaseRegistry("integration-test")
 
+    @property
+    def callable_registry(self):
+        return self._registry
+
+    @property
+    def adapter(self):
+        return MagicMock()
+
+    def get_runner(self, session_id: str):
+        return None
+
+    async def refresh_runners(self):
+        return {"refreshed": [], "skipped": []}
+
 
 def _make_service() -> ApplicationService:
     svc = ApplicationService.__new__(ApplicationService)
@@ -61,8 +75,7 @@ def _make_service() -> ApplicationService:
     svc._approval_manager = MagicMock()
     svc._model_gateway = None
     svc._kb_store = None
-    svc._tool_registry = {}
-    svc._agent_registry = {}
+    svc._callable_registry = CallableRegistry()
     svc._enforcer = _MockEnforcer()
     svc._tracer = _MockTracer()
     svc._app_home = None

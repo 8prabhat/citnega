@@ -82,6 +82,7 @@ class KnowledgeStore(IKnowledgeStore):
         self,
         tags: list[str] | None = None,
         source_type: KBSourceType | None = None,
+        session_id: str | None = None,
         limit: int = 100,
     ) -> list[KBItem]:
         sql = "SELECT * FROM kb_items WHERE 1=1"
@@ -90,6 +91,10 @@ class KnowledgeStore(IKnowledgeStore):
         if source_type is not None:
             sql += " AND source_type = ?"
             params.append(source_type.value)
+
+        if session_id is not None:
+            sql += " AND source_session_id = ?"
+            params.append(session_id)
 
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
@@ -103,11 +108,27 @@ class KnowledgeStore(IKnowledgeStore):
 
         return items
 
-    async def export_all(self) -> Path:
-        """Export all items to a JSONL file in kb_exports_dir."""
-        items = await self.list_items(limit=100_000)
+    async def export_all(
+        self,
+        fmt: str = "jsonl",
+        output_path: Path | None = None,
+        session_id: str | None = None,
+    ) -> Path:
+        """Export KB items to JSONL or Markdown.
+
+        Args:
+            fmt: ``"jsonl"`` (default) or ``"markdown"``.
+            output_path: explicit destination; auto-generated timestamped file if None.
+            session_id: if set, only export items from this session.
+        """
+        from citnega.packages.kb.export import export_markdown
+
+        items = await self.list_items(limit=100_000, session_id=session_id)
         exports_dir = self._pr.kb_exports_dir
-        dest = default_export_path(exports_dir, fmt="jsonl")
+        dest = output_path or default_export_path(exports_dir, fmt=fmt)
+
+        if fmt == "markdown":
+            return export_markdown(items, dest)
         return export_jsonl(items, dest)
 
     # ── Internal ───────────────────────────────────────────────────────────────

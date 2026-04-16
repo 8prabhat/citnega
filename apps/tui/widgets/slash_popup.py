@@ -66,12 +66,16 @@ class SlashCommandPopup(Widget):
 
         self.remove()
         try:
-            self.app._controller._popup = None  # type: ignore[attr-defined]
+            controller = getattr(self.app, "_controller", None)
+            if controller is not None:
+                controller._popup = None
         except Exception:
             pass
 
     def action_dismiss(self) -> None:
         try:
-            self.app._controller.dismiss_popup()  # type: ignore[attr-defined]
+            controller = getattr(self.app, "_controller", None)
+            if controller is not None:
+                controller.dismiss_popup()
         except Exception:
             self.remove()
