@@ -11,6 +11,8 @@ build/
 .ruff_cache/
 coverage.xml
 .coverage
+.citnega_cache/
+.github/workflows/
 
 # Specifications / docs that don't belong in version control
 citnega_technical_specification.txt

@@ -1,11 +1,14 @@
 # Citnega
 
-**Citnega** is a local-first agentic assistant — a full-featured terminal UI backed by a production-grade agent runtime. It runs conversations, calls tools in parallel, compiles plans, and routes tasks to specialists, all from a single `citnega` command.
+**Citnega** is a local-first terminal AI runtime with a full TUI, plan compiler, parallel tool execution, and workspace-extensible agents/tools/skills.  
+It is designed for real repository work from a single `citnega` command.
 
 ```
 pip install citnega
 citnega
 ```
+
+Current package line: `0.6.x`
 
 ---
 
@@ -88,7 +91,8 @@ citnega-cli session list
 | `/setworkfolder <path>` | Point to a workfolder |
 | `/createtool` | Scaffold a new custom tool |
 | `/createagent` | Scaffold a new custom agent |
-| `/createworkflow` | Scaffold a new workflow |
+| `/createworkflow` | Scaffold a new YAML workflow template |
+| `/createskill` | Scaffold a new `SKILL.md` bundle |
 | `/help` | List all commands |
 
 ---
@@ -246,14 +250,13 @@ uv run lint-imports --config import-linter.ini
 
 ### Release
 
-Tag a version to trigger automated PyPI publishing via GitHub Actions:
+Build and publish manually:
 
 ```bash
-git tag v0.6.0
-git push origin v0.6.0
+python -m build
+twine check dist/*
+TWINE_USERNAME=__token__ TWINE_PASSWORD='pypi-<api-token>' twine upload dist/*
 ```
-
-The `release.yml` workflow builds the wheel, runs tests, and publishes to PyPI using trusted publishing (OIDC — no API token required).
 
 ---
 
