@@ -24,12 +24,6 @@ classifiers = [
     "Topic :: Terminals",
     "Typing :: Typed",
 ]
-
-[project.urls]
-Homepage   = "https://github.com/8prabhat/citnega"
-Repository = "https://github.com/8prabhat/citnega"
-Issues     = "https://github.com/8prabhat/citnega/issues"
-
 dependencies = [
     "textual>=8.2",
     "typer>=0.15",
@@ -44,6 +38,11 @@ dependencies = [
     "httpx>=0.27",
     "tiktoken>=0.8",
 ]
+
+[project.urls]
+Homepage   = "https://github.com/8prabhat/citnega"
+Repository = "https://github.com/8prabhat/citnega"
+Issues     = "https://github.com/8prabhat/citnega/issues"
 
 [project.optional-dependencies]
 adk       = ["google-adk>=0.1"]
