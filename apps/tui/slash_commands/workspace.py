@@ -1,26 +1,31 @@
 """
-Workspace slash commands — /setworkfolder, /refresh, /createtool, /createagent, /createworkflow, /createskill.
+Workspace slash commands — /setworkfolder, /refresh, /createtool, /createagent,
+/createworkflow, /createskill, /creatementalmodel.
 
-These commands let users:
-  - Set the workfolder where user-created artifacts live (/setworkfolder).
-  - Hot-reload any new/changed files without restarting (/refresh).
-  - Interactively generate a tool, agent, or workflow via a multi-step wizard
-    (/createtool, /createagent, /createworkflow).
+Each create command supports TWO entry modes:
 
-The wizards use ChatController._pending_wizard to intercept the next plain-text
-user input instead of sending it to the LLM.  Each step sets a new WizardState
-so the flow continues until all information is collected.
+  Wizard mode  — /createtool               (no args)
+    Multi-step guided interview; user fills in each field interactively.
 
-WizardState is intentionally minimal:
-  - ``step_name``  — human-readable label for the current question
-  - ``on_input``   — async callable(text, controller) called with user's answer
-  - ``prompt``     — question text already shown to the user (informational only)
+  Prompt mode  — /createtool "a tool that scrapes a URL and returns clean text"
+    User provides a natural-language description as args.  The LLM extracts
+    a structured spec (name, parameters, system prompt, etc.) from that one
+    line, displays a preview, then immediately kicks off code generation.
+    No wizard steps; zero friction.
+
+Both modes converge on the same code-generation → test → register pipeline.
+
+Mental models (/creatementalmodel) are strategy constraints — not executable
+code.  They compile into MentalModelSpec clauses that influence the planning
+layer (ordering, risk posture, approval requirements, parallelism budget).
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -68,7 +73,6 @@ class SetWorkfolderCommand(ISlashCommand):
 
     async def execute(self, args: list[str], app_context: Any) -> None:
         if not args:
-            # Show current workfolder
             from citnega.packages.config.loaders import load_settings
 
             current = load_settings().workspace.workfolder_path or os.getcwd()
@@ -77,7 +81,7 @@ class SetWorkfolderCommand(ISlashCommand):
             )
             return
 
-        path_str = " ".join(args).strip().strip("'\"")  # strip surrounding quotes
+        path_str = " ".join(args).strip().strip("'\"")
         path = Path(path_str).expanduser().resolve()
 
         if not path.exists():
@@ -94,7 +98,6 @@ class SetWorkfolderCommand(ISlashCommand):
             await app_context._append_message("system", f"'{path}' is not a directory.")
             return
 
-        # Persist the path and create workspace subdirectories
         try:
             self._service.save_workspace_path(str(path))
         except Exception as exc:
@@ -111,9 +114,9 @@ class SetWorkfolderCommand(ISlashCommand):
         await app_context._append_message(
             "system",
             f"Workfolder set to: {path}\n"
-            f"Subdirectories created: agents/, tools/, workflows/, skills/\n"
-            f"Use /createtool, /createagent, /createworkflow, /createskill to add artifacts,\n"
-            f"then /refresh to reload them.",
+            f"Subdirectories created: agents/, tools/, workflows/, skills/, mental_models/\n"
+            f"Use /createtool, /createagent, /createworkflow, /createskill, /creatementalmodel\n"
+            f"to add artifacts, then /refresh to reload them.",
         )
 
 
@@ -173,16 +176,26 @@ class RefreshCommand(ISlashCommand):
 
 class CreateToolCommand(ISlashCommand):
     name = "createtool"
-    help_text = "Interactively create a new tool in the workfolder."
+    help_text = (
+        "Create a new tool. "
+        "Usage: /createtool [\"natural language description\"] "
+        "— omit args for step-by-step wizard."
+    )
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
+        if args:
+            prompt = " ".join(args).strip().strip("\"'")
+            await _prompt_driven_create(app_context, self._service, "tool", prompt)
+            return
+
         app_context._wizard_data = {"kind": "tool", "params": []}
         await app_context._append_message(
             "system",
             "Creating a new tool.\n"
+            "Tip: you can also run  /createtool \"describe your tool here\"  to skip the wizard.\n\n"
             "Step 1/3 — Enter a snake_case name for your tool (e.g. web_scraper):",
         )
         app_context._pending_wizard = WizardState(
@@ -243,16 +256,26 @@ class CreateToolCommand(ISlashCommand):
 
 class CreateAgentCommand(ISlashCommand):
     name = "createagent"
-    help_text = "Interactively create a new specialist agent in the workfolder."
+    help_text = (
+        "Create a new specialist agent. "
+        "Usage: /createagent [\"natural language description\"] "
+        "— omit args for step-by-step wizard."
+    )
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
+        if args:
+            prompt = " ".join(args).strip().strip("\"'")
+            await _prompt_driven_create(app_context, self._service, "agent", prompt)
+            return
+
         app_context._wizard_data = {"kind": "agent", "tool_whitelist": []}
         await app_context._append_message(
             "system",
             "Creating a new specialist agent.\n"
+            "Tip: you can also run  /createagent \"describe your agent here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. research_agent):",
         )
         app_context._pending_wizard = WizardState("agent_name", self._on_name)
@@ -291,12 +314,21 @@ class CreateAgentCommand(ISlashCommand):
 
 class CreateWorkflowCommand(ISlashCommand):
     name = "createworkflow"
-    help_text = "Interactively create a YAML workflow template for plan execution."
+    help_text = (
+        "Create a YAML workflow template for plan execution. "
+        "Usage: /createworkflow [\"natural language description\"] "
+        "— omit args for step-by-step wizard."
+    )
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
+        if args:
+            prompt = " ".join(args).strip().strip("\"'")
+            await _prompt_driven_workflow(app_context, self._service, prompt)
+            return
+
         app_context._wizard_data = {
             "kind": "workflow",
             "tool_whitelist": [],
@@ -305,6 +337,7 @@ class CreateWorkflowCommand(ISlashCommand):
         await app_context._append_message(
             "system",
             "Creating a new workflow.\n"
+            "Tip: you can also run  /createworkflow \"describe your workflow here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. data_pipeline_workflow):",
         )
         app_context._pending_wizard = WizardState("wf_name", self._on_name)
@@ -325,21 +358,34 @@ class CreateWorkflowCommand(ISlashCommand):
         await _ask_tool_whitelist(ctrl, self._service, self._on_tools_done)
 
     async def _on_tools_done(self, ctrl: Any) -> None:
-        # After tools, ask for sub-agents
         await _ask_sub_agents(ctrl, self._service, self._finalize)
 
     async def _finalize(self, ctrl: Any) -> None:
         await _write_workflow_template(ctrl, self._service)
 
 
+# ---------------------------------------------------------------------------
+# /createskill
+# ---------------------------------------------------------------------------
+
+
 class CreateSkillCommand(ISlashCommand):
     name = "createskill"
-    help_text = "Interactively create a SKILL.md bundle for planning guidance."
+    help_text = (
+        "Create a SKILL.md planning guidance bundle. "
+        "Usage: /createskill [\"natural language description\"] "
+        "— omit args for step-by-step wizard."
+    )
 
     def __init__(self, service: Any) -> None:
         self._service = service
 
     async def execute(self, args: list[str], app_context: Any) -> None:
+        if args:
+            prompt = " ".join(args).strip().strip("\"'")
+            await _prompt_driven_skill(app_context, self._service, prompt)
+            return
+
         app_context._wizard_data = {
             "kind": "skill",
             "tool_whitelist": [],
@@ -348,6 +394,7 @@ class CreateSkillCommand(ISlashCommand):
         await app_context._append_message(
             "system",
             "Creating a new skill bundle.\n"
+            "Tip: you can also run  /createskill \"describe your skill here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. release_readiness):",
         )
         app_context._pending_wizard = WizardState("skill_name", self._on_name)
@@ -380,6 +427,78 @@ class CreateSkillCommand(ISlashCommand):
 
     async def _finalize(self, ctrl: Any) -> None:
         await _write_skill_bundle(ctrl, self._service)
+
+
+# ---------------------------------------------------------------------------
+# /creatementalmodel
+# ---------------------------------------------------------------------------
+
+
+class CreateMentalModelCommand(ISlashCommand):
+    """
+    Create a mental-model constraint file in the workfolder.
+
+    Mental models are NOT executable — they are strategy inputs that compile
+    into structured MentalModelSpec clauses (ordering, risk, validation,
+    approval, parallelism) and influence the planning layer for the session.
+
+    Prompt mode (recommended):
+        /creatementalmodel "always validate inputs; never run destructive ops
+         without explicit approval; prefer sequential over parallel by default"
+
+    Wizard mode (no args):
+        Multi-step: name → constraint text → confirm
+    """
+
+    name = "creatementalmodel"
+    help_text = (
+        "Create a mental-model planning constraint file. "
+        "Usage: /creatementalmodel [\"constraint text\"] "
+        "— omit args for step-by-step wizard."
+    )
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], app_context: Any) -> None:
+        if args:
+            text = " ".join(args).strip().strip("\"'")
+            await _prompt_driven_mental_model(app_context, self._service, text)
+            return
+
+        app_context._wizard_data = {"kind": "mental_model"}
+        await app_context._append_message(
+            "system",
+            "Creating a mental-model constraint file.\n"
+            "Mental models influence the planning layer — they are NOT executable code.\n"
+            "Examples: ordering rules, risk posture, approval requirements, parallelism limits.\n\n"
+            "Tip: you can also run  /creatementalmodel \"your constraints here\"  to skip the wizard.\n\n"
+            "Step 1/2 — Enter a snake_case name (e.g. safe_execution_model):",
+        )
+        app_context._pending_wizard = WizardState("mm_name", self._on_name)
+
+    async def _on_name(self, text: str, ctrl: Any) -> None:
+        name = text.strip().lower().replace(" ", "_")
+        if not name.isidentifier():
+            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
+            ctrl._pending_wizard = WizardState("mm_name", self._on_name)
+            return
+        ctrl._wizard_data["name"] = name
+        await ctrl._append_message(
+            "system",
+            "Step 2/2 — Enter your planning constraints as plain English sentences.\n"
+            "Each sentence on its own line (or separated by semicolons).\n"
+            "Examples:\n"
+            "  Always validate inputs before executing any operation.\n"
+            "  Never run file-deletion steps in parallel.\n"
+            "  Require explicit approval before writing to production paths.\n"
+            "  Prefer conservative risk posture for operations with side effects.",
+        )
+        ctrl._pending_wizard = WizardState("mm_text", self._on_text)
+
+    async def _on_text(self, text: str, ctrl: Any) -> None:
+        ctrl._wizard_data["constraint_text"] = text.strip()
+        await _write_mental_model(ctrl, self._service)
 
 
 # ---------------------------------------------------------------------------
@@ -475,14 +594,390 @@ async def _ask_sub_agents(ctrl: Any, service: Any, on_done) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Prompt-driven paths — extract spec from natural language then run pipeline
+# ---------------------------------------------------------------------------
+
+
+async def _prompt_driven_create(
+    app_context: Any, service: Any, kind: str, prompt: str
+) -> None:
+    """
+    Prompt mode entry for tool and agent creation.
+
+    Calls the LLM to extract a structured ScaffoldSpec from the user's one-line
+    description, shows a preview, then runs the full generate → test → register
+    pipeline without any wizard steps.
+    """
+    await app_context._append_message(
+        "system",
+        f"Analyzing prompt for {kind} creation…\n  \"{prompt}\"",
+    )
+
+    try:
+        spec_dict = await _extract_spec_from_prompt(kind, prompt, service)
+    except Exception as exc:
+        await app_context._append_message(
+            "system",
+            f"Could not extract spec from prompt: {exc}\n"
+            f"Try  /{kind[0:6]}  (no args) to use the wizard instead.",
+        )
+        return
+
+    name = spec_dict.get("name", "")
+    if not name or not name.isidentifier():
+        await app_context._append_message(
+            "system",
+            f"Extracted name '{name}' is not a valid identifier.\n"
+            f"Try  /create{kind}  (no args) to use the wizard instead.",
+        )
+        return
+
+    # Build wizard_data so _generate_and_register can consume it
+    app_context._wizard_data = {
+        "kind": kind,
+        "name": spec_dict["name"],
+        "class_name": spec_dict.get("class_name") or _to_pascal(spec_dict["name"]),
+        "description": spec_dict.get("description", prompt),
+        "params": spec_dict.get("parameters", []),
+        "system_prompt": spec_dict.get("system_prompt", ""),
+        "tool_whitelist": spec_dict.get("tool_whitelist", []),
+        "sub_agents": spec_dict.get("sub_agents", []),
+    }
+
+    # Show extracted spec preview
+    preview_lines = [
+        f"Extracted spec:",
+        f"  name        : {app_context._wizard_data['name']}",
+        f"  class       : {app_context._wizard_data['class_name']}",
+        f"  description : {app_context._wizard_data['description']}",
+    ]
+    if app_context._wizard_data["params"]:
+        param_strs = [
+            f"    {p['name']} ({p.get('type', 'str')}): {p.get('description', '')}"
+            for p in app_context._wizard_data["params"]
+        ]
+        preview_lines.append("  parameters  :")
+        preview_lines.extend(param_strs)
+    if app_context._wizard_data["system_prompt"]:
+        preview_lines.append(
+            f"  system_prompt: {app_context._wizard_data['system_prompt'][:80]}…"
+        )
+    if app_context._wizard_data["tool_whitelist"]:
+        preview_lines.append(f"  tools       : {app_context._wizard_data['tool_whitelist']}")
+    preview_lines.append("\nGenerating code…")
+    await app_context._append_message("system", "\n".join(preview_lines))
+
+    await _generate_and_register(app_context, service)
+
+
+async def _prompt_driven_workflow(
+    app_context: Any, service: Any, prompt: str
+) -> None:
+    """Prompt mode entry for workflow YAML template creation."""
+    await app_context._append_message(
+        "system",
+        f"Analyzing prompt for workflow creation…\n  \"{prompt}\"",
+    )
+
+    try:
+        spec_dict = await _extract_spec_from_prompt("workflow", prompt, service)
+    except Exception as exc:
+        await app_context._append_message(
+            "system",
+            f"Could not extract workflow spec: {exc}\n"
+            f"Try  /createworkflow  (no args) to use the wizard instead.",
+        )
+        return
+
+    name = spec_dict.get("name", "")
+    if not name or not name.isidentifier():
+        await app_context._append_message(
+            "system",
+            f"Extracted name '{name}' is not a valid identifier.\n"
+            f"Try  /createworkflow  (no args) to use the wizard instead.",
+        )
+        return
+
+    app_context._wizard_data = {
+        "kind": "workflow",
+        "name": spec_dict["name"],
+        "class_name": spec_dict.get("class_name") or _to_pascal(spec_dict["name"]),
+        "description": spec_dict.get("description", prompt),
+        "tool_whitelist": spec_dict.get("tool_whitelist", []),
+        "sub_agents": spec_dict.get("sub_agents", []),
+    }
+
+    await app_context._append_message(
+        "system",
+        f"Extracted workflow spec:\n"
+        f"  name       : {app_context._wizard_data['name']}\n"
+        f"  description: {app_context._wizard_data['description']}\n"
+        f"  tools      : {app_context._wizard_data['tool_whitelist']}\n"
+        f"  agents     : {app_context._wizard_data['sub_agents']}\n"
+        f"Writing YAML template…",
+    )
+
+    await _write_workflow_template(app_context, service)
+
+
+async def _prompt_driven_skill(
+    app_context: Any, service: Any, prompt: str
+) -> None:
+    """Prompt mode entry for skill bundle creation."""
+    await app_context._append_message(
+        "system",
+        f"Analyzing prompt for skill creation…\n  \"{prompt}\"",
+    )
+
+    try:
+        spec_dict = await _extract_spec_from_prompt("skill", prompt, service)
+    except Exception as exc:
+        await app_context._append_message(
+            "system",
+            f"Could not extract skill spec: {exc}\n"
+            f"Try  /createskill  (no args) to use the wizard instead.",
+        )
+        return
+
+    name = spec_dict.get("name", "")
+    if not name or not name.isidentifier():
+        await app_context._append_message(
+            "system",
+            f"Extracted name '{name}' is not a valid identifier.\n"
+            f"Try  /createskill  (no args) to use the wizard instead.",
+        )
+        return
+
+    app_context._wizard_data = {
+        "kind": "skill",
+        "name": spec_dict["name"],
+        "description": spec_dict.get("description", prompt),
+        "triggers": spec_dict.get("triggers", []),
+        "tool_whitelist": spec_dict.get("preferred_tools", []),
+        "sub_agents": spec_dict.get("preferred_agents", []),
+        "guidance": spec_dict.get("guidance", []),
+    }
+
+    await app_context._append_message(
+        "system",
+        f"Extracted skill spec:\n"
+        f"  name       : {app_context._wizard_data['name']}\n"
+        f"  description: {app_context._wizard_data['description']}\n"
+        f"  triggers   : {app_context._wizard_data['triggers']}\n"
+        f"Writing SKILL.md bundle…",
+    )
+
+    await _write_skill_bundle(app_context, service)
+
+
+async def _prompt_driven_mental_model(
+    app_context: Any, service: Any, text: str
+) -> None:
+    """Prompt mode entry for mental model creation — derive name from content."""
+    await app_context._append_message(
+        "system",
+        f"Compiling mental model from prompt…\n  \"{text[:120]}{'…' if len(text) > 120 else ''}\"",
+    )
+
+    # Derive a name from the first clause / first few words
+    name = _derive_name_from_text(text)
+    app_context._wizard_data = {
+        "kind": "mental_model",
+        "name": name,
+        "constraint_text": text,
+    }
+
+    await app_context._append_message(
+        "system",
+        f"Derived name: {name}\nWriting mental model file…",
+    )
+
+    await _write_mental_model(app_context, service)
+
+
+# ---------------------------------------------------------------------------
+# LLM spec extractor — converts natural language → structured ScaffoldSpec dict
+# ---------------------------------------------------------------------------
+
+_SPEC_SYSTEM_PROMPT = """\
+You are a spec extractor for the citnega AI-agent framework.
+Given a natural-language description of an artifact, return ONLY a valid JSON object
+with no markdown fences, no prose, no explanation — just the raw JSON.
+"""
+
+_SPEC_PROMPTS: dict[str, str] = {
+    "tool": """\
+Extract a tool spec from this description and return JSON with exactly these fields:
+{
+  "name": "snake_case_python_identifier",
+  "class_name": "PascalCaseName",
+  "description": "one clear sentence describing what the tool does",
+  "parameters": [
+    {"name": "param_name", "type": "str|int|float|bool", "description": "what it is"}
+  ]
+}
+Rules:
+- name must be a valid Python identifier in snake_case
+- parameters should reflect the inputs the tool needs; if none are obvious use [{{"name":"query","type":"str","description":"Input to the tool."}}]
+- description must be one sentence, actionable (starts with a verb)
+Description: {prompt}""",
+
+    "agent": """\
+Extract an agent spec from this description and return JSON with exactly these fields:
+{
+  "name": "snake_case_python_identifier",
+  "class_name": "PascalCaseName",
+  "description": "one clear sentence describing what the agent does",
+  "system_prompt": "detailed system prompt that instructs the agent how to behave",
+  "tool_whitelist": ["tool_name_1", "tool_name_2"]
+}
+Rules:
+- name must be a valid Python identifier in snake_case, ending in _agent
+- system_prompt should be 2–4 sentences of clear behavioral instructions
+- tool_whitelist should list tools from: {available_tools} (empty list if none relevant)
+Description: {prompt}""",
+
+    "workflow": """\
+Extract a workflow spec from this description and return JSON with exactly these fields:
+{
+  "name": "snake_case_python_identifier",
+  "class_name": "PascalCaseName",
+  "description": "one clear sentence describing the workflow's goal",
+  "tool_whitelist": ["tool_name_1"],
+  "sub_agents": ["agent_name_1"]
+}
+Rules:
+- name must be a valid Python identifier in snake_case, ending in _workflow
+- Choose tools from: {available_tools}
+- Choose agents from: {available_agents}
+- If nothing matches leave the lists empty
+Description: {prompt}""",
+
+    "skill": """\
+Extract a skill spec from this description and return JSON with exactly these fields:
+{
+  "name": "snake_case_python_identifier",
+  "description": "one clear sentence describing what planning behavior this skill optimizes",
+  "triggers": ["phrase that activates this skill", "another trigger phrase"],
+  "preferred_tools": ["tool_name"],
+  "preferred_agents": ["agent_name"],
+  "guidance": [
+    "- Concrete guidance bullet 1",
+    "- Concrete guidance bullet 2",
+    "- Concrete guidance bullet 3"
+  ]
+}
+Rules:
+- name must be a valid Python identifier in snake_case
+- triggers are 1–4 short phrases (3–6 words each) that the planner matches against user intent
+- guidance should be 3–6 actionable planning bullets (start with "- ")
+Description: {prompt}""",
+}
+
+
+async def _extract_spec_from_prompt(
+    kind: str, prompt: str, service: Any
+) -> dict:
+    """
+    Call the model gateway to extract a structured spec dict from a natural-language prompt.
+    Falls back to heuristic extraction if the gateway is unavailable.
+    """
+    gateway = getattr(service, "_model_gateway", None)
+
+    # Build the extraction prompt
+    available_tools = [t.name for t in service.list_tools()] if hasattr(service, "list_tools") else []
+    available_agents = [a.name for a in service.list_agents()] if hasattr(service, "list_agents") else []
+
+    template = _SPEC_PROMPTS.get(kind, _SPEC_PROMPTS["tool"])
+    user_prompt = template.format(
+        prompt=prompt,
+        available_tools=available_tools,
+        available_agents=available_agents,
+    )
+
+    if gateway is not None:
+        try:
+            from citnega.packages.protocol.models.model_gateway import ModelMessage, ModelRequest
+
+            response = await gateway.generate(
+                ModelRequest(
+                    messages=[
+                        ModelMessage(role="system", content=_SPEC_SYSTEM_PROMPT),
+                        ModelMessage(role="user", content=user_prompt),
+                    ],
+                    stream=False,
+                    temperature=0.1,
+                )
+            )
+            raw = response.content.strip()
+            # Strip any accidental markdown fences
+            raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
+            raw = re.sub(r"\n?```\s*$", "", raw)
+            return json.loads(raw)
+        except Exception:
+            pass  # fall through to heuristic
+
+    return _heuristic_spec(kind, prompt)
+
+
+def _heuristic_spec(kind: str, prompt: str) -> dict:
+    """
+    Derive a minimal spec dict from the prompt without an LLM.
+    Used as fallback when the model gateway is unavailable.
+    """
+    # Derive name: take first 4 words, snake_case, strip non-alpha
+    words = re.sub(r"[^a-z0-9 ]", "", prompt.lower()).split()[:4]
+    name = "_".join(w for w in words if w)[:40] or "generated_artifact"
+    # Ensure it ends with an appropriate suffix
+    if kind == "agent" and not name.endswith("_agent"):
+        name = name.rstrip("_") + "_agent"
+    if kind == "workflow" and not name.endswith("_workflow"):
+        name = name.rstrip("_") + "_workflow"
+    name = name if name.isidentifier() else re.sub(r"[^a-z0-9_]", "_", name)
+
+    base: dict = {
+        "name": name,
+        "class_name": _to_pascal(name),
+        "description": prompt[:200],
+    }
+    if kind == "tool":
+        base["parameters"] = [{"name": "query", "type": "str", "description": "Input to the tool."}]
+    elif kind == "agent":
+        base["system_prompt"] = f"You are a specialist agent. {prompt}"
+        base["tool_whitelist"] = []
+    elif kind == "workflow":
+        base["tool_whitelist"] = []
+        base["sub_agents"] = []
+    elif kind == "skill":
+        base["triggers"] = []
+        base["preferred_tools"] = []
+        base["preferred_agents"] = []
+        base["guidance"] = [f"- {prompt[:120]}"]
+    return base
+
+
+def _derive_name_from_text(text: str) -> str:
+    """Derive a snake_case name from free-form constraint text."""
+    words = re.sub(r"[^a-z0-9 ]", "", text.lower()).split()[:5]
+    name = "_".join(w for w in words if len(w) > 2)[:40] or "custom_model"
+    name = re.sub(r"_+", "_", name).strip("_")
+    return name if name.isidentifier() else "custom_mental_model"
+
+
+# ---------------------------------------------------------------------------
+# Core generation pipeline (tool + agent)
+# ---------------------------------------------------------------------------
+
+
 async def _generate_and_register(ctrl: Any, service: Any) -> None:
     """
-    Final wizard step — full pipeline:
+    Final pipeline — shared by wizard mode and prompt mode:
 
-      1. Switch TUI to "coding" mode (StatusBar + CodingBlock).
+      1. Switch TUI to "coding" state (ContextBar + CodingBlock).
       2. Generate code with the LLM (streaming tokens to CodingBlock).
       3. Test the generated code (run _execute with mock inputs).
-      4. If tests fail: retry up to 2 times, feeding the error back to the LLM.
+      4. If tests fail: retry up to 2 times, feeding the error back.
       5. Write the file, load it, register the callable.
       6. Reset TUI to "idle".
     """
@@ -511,17 +1006,15 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         sub_agents=data.get("sub_agents", []),
     )
 
-    # ── Set TUI to "coding" mode ───────────────────────────────────────────────
     _set_run_state(ctrl, "coding")
 
-    # Mount the CodingBlock into the chat scroll
     coding_block = CodingBlock(title=name, kind=kind)
     try:
         scroll = ctrl._app.screen.query_one("#chat-scroll", VerticalScroll)
         await scroll.mount(coding_block)
         ctrl._app.call_after_refresh(scroll.scroll_end)
     except Exception:
-        coding_block = None  # TUI not available (tests / CLI) — degrade gracefully
+        coding_block = None
 
     async def _on_chunk(token: str) -> None:
         if coding_block is not None:
@@ -533,15 +1026,12 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         if coding_block is not None:
             coding_block.set_status(msg)
             coding_block.clear_code()
-        # Also echo status as a system message for accessibility
         await ctrl._append_message("system", msg)
 
-    # ── Shared deps ────────────────────────────────────────────────────────────
     loader = service.create_dynamic_loader()
     generator = ScaffoldGenerator(model_gateway=getattr(service, "_model_gateway", None))
     tester = CallableTester()
 
-    # ── Generate → test → retry ────────────────────────────────────────────────
     try:
         source, _instance, test_result = await generator.generate_with_retry(
             spec=spec,
@@ -558,7 +1048,6 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         _set_run_state(ctrl, "idle")
         return
 
-    # ── Check final test result ────────────────────────────────────────────────
     if test_result is not None and not test_result.passed:
         msg = (
             f"Code was generated but tests did not pass after all retries.\n"
@@ -569,15 +1058,12 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         if coding_block is not None:
             coding_block.set_result_fail("Tests failed — file written for manual edit")
         await ctrl._append_message("system", msg)
-        # Fall through: write the best attempt to disk anyway
 
-    # ── Resolve workfolder ─────────────────────────────────────────────────────
     settings = load_settings()
     workfolder = Path(settings.workspace.workfolder_path or os.getcwd())
     writer = WorkspaceWriter(workfolder)
     writer.ensure_dirs()
 
-    # ── Write file ─────────────────────────────────────────────────────────────
     try:
         if kind == "tool":
             written_path = writer.write_tool(class_name, source)
@@ -592,7 +1078,6 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         _set_run_state(ctrl, "idle")
         return
 
-    # ── Load & register ────────────────────────────────────────────────────────
     try:
         loaded = loader.load_directory(written_path.parent)
         if name in loaded:
@@ -618,7 +1103,6 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         _set_run_state(ctrl, "idle")
         return
 
-    # ── Success ────────────────────────────────────────────────────────────────
     test_note = ""
     if test_result is not None and test_result.passed:
         test_note = f"\nTests passed in {test_result.duration_ms} ms."
@@ -636,8 +1120,13 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
     _set_run_state(ctrl, "idle")
 
 
+# ---------------------------------------------------------------------------
+# Workflow YAML template writer
+# ---------------------------------------------------------------------------
+
+
 async def _write_workflow_template(ctrl: Any, service: Any) -> None:
-    """Write a workflow YAML template instead of a Python workflow callable."""
+    """Write a workflow YAML template — produces plan-execution template, not Python."""
     from citnega.packages.config.loaders import load_settings
     from citnega.packages.workspace.writer import WorkspaceWriter
 
@@ -693,12 +1182,18 @@ async def _write_workflow_template(ctrl: Any, service: Any) -> None:
 
     await ctrl._append_message(
         "system",
-        f"Workflow template '{name}' created successfully.\nFile: {written_path}",
+        f"Workflow template '{name}' created successfully.\nFile: {written_path}\n"
+        f"Steps: {len(steps)} (capabilities: {', '.join(capabilities)})",
     )
 
 
+# ---------------------------------------------------------------------------
+# Skill bundle writer
+# ---------------------------------------------------------------------------
+
+
 async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
-    """Write a SKILL.md bundle with structured front matter."""
+    """Write a SKILL.md bundle with structured front matter and guidance body."""
     from citnega.packages.config.loaders import load_settings
     from citnega.packages.workspace.writer import WorkspaceWriter
 
@@ -708,6 +1203,7 @@ async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
     triggers = data.get("triggers", [])
     preferred_tools = data.get("tool_whitelist", [])
     preferred_agents = data.get("sub_agents", [])
+    extra_guidance = data.get("guidance", [])
 
     front_matter = [
         "---",
@@ -727,9 +1223,16 @@ async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
         description,
         "",
         "## Guidance",
-        "- Use this skill to influence planning strategy and callable choice.",
-        "- Prefer deterministic tools before broad reasoning steps when feasible.",
     ]
+    if extra_guidance:
+        body.extend(extra_guidance)
+    else:
+        body.extend([
+            "- Use this skill to influence planning strategy and callable choice.",
+            "- Prefer deterministic tools before broad reasoning steps when feasible.",
+            "- Apply conservative risk posture unless explicitly directed otherwise.",
+        ])
+
     source = "\n".join(front_matter + body).strip() + "\n"
 
     settings = load_settings()
@@ -743,23 +1246,126 @@ async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
 
     await ctrl._append_message(
         "system",
-        f"Skill bundle '{name}' created successfully.\nFile: {written_path}",
+        f"Skill bundle '{name}' created successfully.\nFile: {written_path}\n"
+        f"Triggers: {triggers if triggers else '(none — matched by planner heuristic)'}",
     )
 
 
-def _set_run_state(ctrl: Any, state: str) -> None:
-    """Update the StatusBar run_state safely (no-op if TUI unavailable)."""
-    try:
-        from citnega.apps.tui.widgets.status_bar import StatusBar
+# ---------------------------------------------------------------------------
+# Mental model writer
+# ---------------------------------------------------------------------------
 
-        ctrl._app.screen.query_one(StatusBar).run_state = state
+
+async def _write_mental_model(ctrl: Any, service: Any) -> None:
+    """
+    Compile and write a mental-model constraint file.
+
+    Runs compile_mental_model() to parse the text into structured clauses,
+    writes a Markdown file to workfolder/mental_models/<name>.md, and
+    applies the compiled spec to the current session's strategy layer.
+    """
+    from citnega.packages.config.loaders import load_settings
+    from citnega.packages.strategy.mental_models import compile_mental_model
+    from citnega.packages.workspace.writer import WorkspaceWriter
+
+    data = ctrl._wizard_data
+    name = data["name"]
+    raw_text = data.get("constraint_text", "").strip()
+
+    if not raw_text:
+        await ctrl._append_message("system", "No constraint text provided. Mental model not created.")
+        return
+
+    # Compile to structured spec for preview
+    try:
+        spec = compile_mental_model(raw_text)
+    except Exception as exc:
+        await ctrl._append_message("system", f"Failed to compile mental model: {exc}")
+        return
+
+    # Build the .md file
+    clause_lines = [f"  - [{c.clause_type}] {c.text}" for c in spec.clauses]
+    md_content = "\n".join([
+        "---",
+        f"name: {name}",
+        f"risk_posture: {spec.risk_posture}",
+        f"recommended_parallelism: {spec.recommended_parallelism}",
+        "---",
+        "",
+        f"# Mental Model: {name}",
+        "",
+        "## Constraints",
+        "",
+        raw_text,
+        "",
+        "## Compiled Clauses",
+        f"Risk posture: {spec.risk_posture}",
+        f"Recommended parallelism: {spec.recommended_parallelism}",
+        "",
+        *clause_lines,
+    ]) + "\n"
+
+    settings = load_settings()
+    workfolder = Path(settings.workspace.workfolder_path or os.getcwd())
+    writer = WorkspaceWriter(workfolder)
+    writer.ensure_dirs()
+
+    # Write to mental_models/ subdir (create it if needed)
+    mm_dir = Path(workfolder) / "mental_models"
+    mm_dir.mkdir(parents=True, exist_ok=True)
+    mm_path = mm_dir / f"{name}.md"
+    mm_path.write_text(md_content, encoding="utf-8")
+
+    # Apply to current session if possible
+    _apply_mental_model_to_session(ctrl, service, spec)
+
+    clause_summary = "\n".join(f"  {i+1}. [{c.clause_type}] {c.text}" for i, c in enumerate(spec.clauses))
+    await ctrl._append_message(
+        "system",
+        f"Mental model '{name}' created and applied to current session.\n"
+        f"File: {mm_path}\n\n"
+        f"Compiled clauses ({len(spec.clauses)}):\n{clause_summary}\n\n"
+        f"Risk posture: {spec.risk_posture}  |  "
+        f"Recommended parallelism: {spec.recommended_parallelism}",
+    )
+
+
+def _apply_mental_model_to_session(ctrl: Any, service: Any, spec: Any) -> None:
+    """
+    Apply compiled MentalModelSpec clauses to the active session's strategy spec.
+    Silently no-ops if the session or strategy layer is unavailable.
+    """
+    try:
+        session = getattr(ctrl, "_session", None) or getattr(service, "active_session", None)
+        if session is None:
+            return
+        strategy = getattr(session, "strategy_spec", None)
+        if strategy is None:
+            return
+        existing = list(getattr(strategy, "mental_model_clauses", []) or [])
+        existing.extend(spec.clauses)
+        strategy.mental_model_clauses = existing
+        if spec.risk_posture != "balanced":
+            strategy.risk_posture = spec.risk_posture
+        if spec.recommended_parallelism > 1:
+            strategy.parallelism_budget = spec.recommended_parallelism
+    except Exception:
+        pass  # strategy layer not yet wired — file was still written
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+
+def _set_run_state(ctrl: Any, state: str) -> None:
+    """Update the ContextBar run_state safely (no-op if TUI unavailable)."""
+    try:
+        from citnega.apps.tui.widgets.context_bar import ContextBar
+
+        ctrl._app.screen.query_one(ContextBar).state = state
     except Exception:
         pass
-
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
 
 
 def _to_pascal(snake: str) -> str:

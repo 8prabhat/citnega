@@ -4,31 +4,24 @@
 # models:    maps model IDs to providers and parameters
 #
 # Environment variable syntax: ${VAR_NAME} or ${VAR_NAME:-default}
-# Provider types: ollama | openai_compatible
+#
+# Provider types:
+#   ollama            — local Ollama server
+#   openai_compatible — any OpenAI-compatible HTTP API (LM Studio, vLLM, etc.)
+#   litellm           — universal cloud adapter (OpenAI, Anthropic, Azure, Gemini,
+#                       Groq, Bedrock, Cohere, Mistral, and 100+ others via litellm)
+#
+# Auth modes (litellm providers only):
+#   api_key               — plain API key (default)
+#   google_service_account — Google SA JSON → OAuth2 access token
+#   azure_certificate      — PEM cert + Azure AD client_credentials flow
+#   jwt_bearer             — self-signed JWT used directly as Bearer token
 
 providers:
   # ── Local Ollama ──────────────────────────────────────────────────────────
   ollama_local:
     type: ollama
     base_url: "${OLLAMA_BASE_URL:-http://localhost:11434}"
-
-  # ── OpenAI ────────────────────────────────────────────────────────────────
-  openai:
-    type: openai_compatible
-    base_url: "https://api.openai.com/v1"
-    api_key: "${OPENAI_API_KEY:-}"
-
-  # ── Anthropic (via openai-compatible proxy or direct) ─────────────────────
-  anthropic:
-    type: openai_compatible
-    base_url: "https://api.anthropic.com/v1"
-    api_key: "${ANTHROPIC_API_KEY:-}"
-
-  # ── Groq (ultra-fast inference) ───────────────────────────────────────────
-  groq:
-    type: openai_compatible
-    base_url: "https://api.groq.com/openai/v1"
-    api_key: "${GROQ_API_KEY:-}"
 
   # ── LM Studio (local OpenAI-compatible) ──────────────────────────────────
   lm_studio:
@@ -41,6 +34,68 @@ providers:
     type: openai_compatible
     base_url: "${CUSTOM_REMOTE_URL:-http://localhost:8000/v1}"
     api_key: "${CUSTOM_REMOTE_API_KEY:-}"
+
+  # ── OpenAI (via litellm) ──────────────────────────────────────────────────
+  openai_cloud:
+    type: litellm
+    api_key: "${OPENAI_API_KEY:-}"
+
+  # ── Anthropic (via litellm) ───────────────────────────────────────────────
+  anthropic_cloud:
+    type: litellm
+    api_key: "${ANTHROPIC_API_KEY:-}"
+
+  # ── Google Gemini — API key auth (via litellm) ────────────────────────────
+  gemini_cloud:
+    type: litellm
+    api_key: "${GEMINI_API_KEY:-}"
+
+  # ── Google Gemini — service account auth (no API key needed) ─────────────
+  # Uncomment and set GOOGLE_APPLICATION_CREDENTIALS to your SA JSON path.
+  # gemini_sa:
+  #   type: litellm
+  #   auth_mode: google_service_account
+  #   pem_file: "${GOOGLE_APPLICATION_CREDENTIALS:-}"
+
+  # ── Azure OpenAI — API key auth ───────────────────────────────────────────
+  azure_openai:
+    type: litellm
+    api_key: "${AZURE_OPENAI_API_KEY:-}"
+    extra:
+      api_version: "${AZURE_OPENAI_API_VERSION:-2024-02-01}"
+
+  # ── Azure OpenAI — certificate auth (no API key needed) ──────────────────
+  # Uncomment and fill in your tenant/client/cert details.
+  # azure_cert:
+  #   type: litellm
+  #   auth_mode: azure_certificate
+  #   pem_file: "${AZURE_PEM_FILE:-}"
+  #   extra:
+  #     tenant_id: "${AZURE_TENANT_ID:-}"
+  #     client_id: "${AZURE_CLIENT_ID:-}"
+  #     scope: "https://cognitiveservices.azure.com/.default"
+  #     api_version: "2024-02-01"
+
+  # ── Groq (ultra-fast inference, via litellm) ──────────────────────────────
+  groq_cloud:
+    type: litellm
+    api_key: "${GROQ_API_KEY:-}"
+
+  # ── Mistral (via litellm) ─────────────────────────────────────────────────
+  mistral_cloud:
+    type: litellm
+    api_key: "${MISTRAL_API_KEY:-}"
+
+  # ── Cohere (via litellm) ──────────────────────────────────────────────────
+  cohere_cloud:
+    type: litellm
+    api_key: "${COHERE_API_KEY:-}"
+
+  # ── AWS Bedrock (via litellm — uses boto3 / env credentials) ─────────────
+  # bedrock:
+  #   type: litellm
+  #   extra:
+  #     aws_region_name: "${AWS_DEFAULT_REGION:-us-east-1}"
 
 
 models:
@@ -112,43 +167,6 @@ models:
     max_context_tokens: 32768
     description: "Mistral — local Ollama"
 
-  # ── OpenAI models ─────────────────────────────────────────────────────────
-  - id: gpt-4o
-    provider: openai
-    model_name: "gpt-4o"
-    priority: 95
-    max_context_tokens: 128000
-    description: "GPT-4o — OpenAI"
-
-  - id: gpt-4o-mini
-    provider: openai
-    model_name: "gpt-4o-mini"
-    priority: 60
-    max_context_tokens: 128000
-    description: "GPT-4o Mini — OpenAI"
-
-  - id: gpt-4-turbo
-    provider: openai
-    model_name: "gpt-4-turbo"
-    priority: 85
-    max_context_tokens: 128000
-    description: "GPT-4 Turbo — OpenAI"
-
-  # ── Groq models (fast inference) ─────────────────────────────────────────
-  - id: llama3-70b-groq
-    provider: groq
-    model_name: "llama3-70b-8192"
-    priority: 72
-    max_context_tokens: 8192
-    description: "Llama 3 70B — Groq"
-
-  - id: mixtral-groq
-    provider: groq
-    model_name: "mixtral-8x7b-32768"
-    priority: 68
-    max_context_tokens: 32768
-    description: "Mixtral 8x7B — Groq"
-
   # ── LM Studio (local) ─────────────────────────────────────────────────────
   - id: lm-studio-local
     provider: lm_studio
@@ -156,6 +174,99 @@ models:
     priority: 55
     max_context_tokens: 32768
     description: "LM Studio local model"
+
+  # ── OpenAI (via litellm) ──────────────────────────────────────────────────
+  - id: gpt-4o
+    provider: openai_cloud
+    model_name: "openai/gpt-4o"
+    priority: 95
+    max_context_tokens: 128000
+    description: "GPT-4o — OpenAI"
+
+  - id: gpt-4o-mini
+    provider: openai_cloud
+    model_name: "openai/gpt-4o-mini"
+    priority: 60
+    max_context_tokens: 128000
+    description: "GPT-4o Mini — OpenAI"
+
+  - id: o3
+    provider: openai_cloud
+    model_name: "openai/o3"
+    priority: 98
+    max_context_tokens: 200000
+    description: "o3 — OpenAI"
+    thinking: true
+
+  # ── Anthropic (via litellm) ───────────────────────────────────────────────
+  - id: claude-opus-4
+    provider: anthropic_cloud
+    model_name: "anthropic/claude-opus-4-5"
+    priority: 97
+    max_context_tokens: 200000
+    description: "Claude Opus 4.5 — Anthropic"
+
+  - id: claude-sonnet-4
+    provider: anthropic_cloud
+    model_name: "anthropic/claude-sonnet-4-6"
+    priority: 93
+    max_context_tokens: 200000
+    description: "Claude Sonnet 4.6 — Anthropic"
+
+  - id: claude-haiku-4
+    provider: anthropic_cloud
+    model_name: "anthropic/claude-haiku-4-5-20251001"
+    priority: 65
+    max_context_tokens: 200000
+    description: "Claude Haiku 4.5 — Anthropic"
+
+  # ── Google Gemini (via litellm) ───────────────────────────────────────────
+  - id: gemini-2-5-pro
+    provider: gemini_cloud
+    model_name: "gemini/gemini-2.5-pro"
+    priority: 96
+    max_context_tokens: 1048576
+    description: "Gemini 2.5 Pro — Google"
+    thinking: true
+
+  - id: gemini-2-5-flash
+    provider: gemini_cloud
+    model_name: "gemini/gemini-2.5-flash"
+    priority: 82
+    max_context_tokens: 1048576
+    description: "Gemini 2.5 Flash — Google"
+
+  # ── Azure OpenAI (via litellm) ────────────────────────────────────────────
+  # Set AZURE_OPENAI_API_KEY + deployment name below, or use azure_cert provider.
+  # - id: azure-gpt-4o
+  #   provider: azure_openai
+  #   model_name: "azure/my-gpt-4o-deployment"
+  #   priority: 94
+  #   max_context_tokens: 128000
+  #   description: "GPT-4o — Azure OpenAI"
+
+  # ── Groq (via litellm) ────────────────────────────────────────────────────
+  - id: llama3-70b-groq
+    provider: groq_cloud
+    model_name: "groq/llama3-70b-8192"
+    priority: 72
+    max_context_tokens: 8192
+    description: "Llama 3 70B — Groq"
+
+  - id: mixtral-groq
+    provider: groq_cloud
+    model_name: "groq/mixtral-8x7b-32768"
+    priority: 68
+    max_context_tokens: 32768
+    description: "Mixtral 8x7B — Groq"
+
+  # ── Mistral (via litellm) ─────────────────────────────────────────────────
+  - id: mistral-large
+    provider: mistral_cloud
+    model_name: "mistral/mistral-large-latest"
+    priority: 74
+    max_context_tokens: 131072
+    description: "Mistral Large — Mistral AI"
 
   # Default model: used when no model is explicitly selected.
   # Must match one of the model ids above.

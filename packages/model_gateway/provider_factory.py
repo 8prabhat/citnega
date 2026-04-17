@@ -134,9 +134,32 @@ class ProviderFactory:
                 http_client=self._http_client,
             )
 
+        if ptype == "litellm":
+            from citnega.packages.model_gateway.providers.litellm_provider import (
+                LiteLLMProvider,
+            )
+
+            credential = None
+            if provider_cfg.pem_file and provider_cfg.auth_mode != "api_key":
+                from citnega.packages.model_gateway.auth.pem_auth import build_pem_credential
+
+                credential = build_pem_credential(
+                    pem_file=provider_cfg.pem_file,
+                    auth_mode=provider_cfg.auth_mode,
+                    extra=provider_cfg.extra,
+                )
+
+            return LiteLLMProvider(
+                model_info=model_info,
+                api_key=provider_cfg.api_key,
+                base_url=provider_cfg.base_url,
+                credential=credential,
+                extra_kwargs=provider_cfg.extra,
+            )
+
         raise ValueError(
             f"Unsupported provider type '{ptype}' for model '{entry.id}'. "
-            f"Supported: ollama, openai_compatible, vllm, custom_remote"
+            f"Supported: ollama, openai_compatible, vllm, custom_remote, litellm"
         )
 
 

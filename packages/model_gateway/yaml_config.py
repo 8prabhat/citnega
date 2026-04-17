@@ -47,15 +47,19 @@ def _substitute(value: Any) -> Any:
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
-ProviderType = Literal["ollama", "openai_compatible", "vllm", "custom_remote"]
+ProviderType = Literal["ollama", "openai_compatible", "vllm", "custom_remote", "litellm"]
 
 
 class ProviderConfig(BaseModel):
     """Connection details for one backend."""
 
     type: ProviderType
-    base_url: str
+    base_url: str = ""
     api_key: str = ""
+    # PEM / service-account based auth (non-local providers only)
+    auth_mode: str = "api_key"  # api_key | google_service_account | azure_certificate | jwt_bearer
+    pem_file: str = ""          # path to PEM key, combined cert+key, or Google SA JSON
+    extra: dict[str, Any] = {}  # tenant_id, client_id, scope, api_version, region, …
 
     model_config = {"extra": "allow"}
 
