@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Citnega contributors" },
+    { name = "Prabhat Kumar" },
 ]
 keywords = ["ai", "agent", "tui", "llm", "terminal", "assistant", "agentic"]
 classifiers = [

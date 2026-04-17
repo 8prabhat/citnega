@@ -262,4 +262,4 @@ TWINE_USERNAME=__token__ TWINE_PASSWORD='pypi-<api-token>' twine upload dist/*
 
 ## License
 
-MIT © 2025 Citnega contributors
+MIT © 2025 Prabhat Kumar
