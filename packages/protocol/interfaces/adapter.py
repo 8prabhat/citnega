@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.callables.interfaces import IInvocable, IStreamable
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.interfaces.model_gateway import IModelGateway
-    from citnega.packages.protocol.models import Session, StateSnapshot
+    from citnega.packages.protocol.models import ModelInfo, Session, StateSnapshot
     from citnega.packages.protocol.models.checkpoints import CheckpointMeta
     from citnega.packages.protocol.models.context import ContextObject
     from citnega.packages.protocol.models.runner import ConversationStats
@@ -61,6 +61,22 @@ class IFrameworkAdapter(ABC):
     async def set_session_model(self, session_id: str, model_id: str) -> None:
         """Switch the active model for an existing session. No-op by default."""
         return None
+
+    def list_models(self) -> list[ModelInfo]:
+        """
+        Return adapter-owned model metadata when available.
+
+        Adapters that do not own a model catalog can return an empty list.
+        """
+        return []
+
+    def read_session_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
+        """
+        Return a persisted conversation field for a session when no live runner exists.
+
+        Default implementation returns an empty list.
+        """
+        return []
 
 
 class IFrameworkRunner(ABC):

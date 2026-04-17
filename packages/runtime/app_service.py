@@ -263,7 +263,74 @@ class ApplicationService(IApplicationService):
         return await self._kb_store.export_all(fmt=fmt, output_path=output_path, session_id=scoped_id)
 
     async def import_session(self, path: Path) -> Session:
-        raise NotImplementedError("Session import is not yet available.")
+        """
+        Import a conversation from a JSONL or JSON file and create a new session.
+
+        Each line in JSONL must be a JSON object with 'role' and 'content' keys.
+        JSON files must have a top-level 'messages' list with the same structure.
+        Returns the newly created Session.
+        """
+        import json as _json
+
+        from citnega.packages.protocol.models.sessions import SessionConfig
+
+        raw = path.read_text(encoding="utf-8").strip()
+        messages: list[dict[str, str]] = []
+
+        if path.suffix.lower() in (".jsonl",) or (raw and not raw.startswith(("{", "["))):
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and "role" in obj and "content" in obj:
+                    messages.append({"role": str(obj["role"]), "content": str(obj["content"])})
+        elif raw:
+            try:
+                payload = _json.loads(raw)
+            except _json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, list):
+                raw_msgs = payload
+            elif isinstance(payload, dict):
+                raw_msgs = payload.get("messages", [])
+            else:
+                raw_msgs = []
+            for obj in raw_msgs:
+                if isinstance(obj, dict) and "role" in obj and "content" in obj:
+                    messages.append({"role": str(obj["role"]), "content": str(obj["content"])})
+
+        session_name = path.stem
+        config = SessionConfig(
+            session_id=str(__import__("uuid").uuid4()),
+            name=session_name,
+            framework=self._runtime.adapter.framework_name,
+            default_model_id="",
+        )
+        session = await self.create_session(config)
+
+        # Replay messages into the conversation store
+        for msg in messages:
+            await self._append_message_to_session(session.config.session_id, msg["role"], msg["content"])
+
+        return session
+
+    async def _append_message_to_session(self, session_id: str, role: str, content: str) -> None:
+        """Write a message directly into the session's conversation store."""
+        import inspect
+
+        runner = self._get_runner(session_id)
+        if runner is not None and hasattr(runner, "_store"):
+            await runner._store.add_message(role, content)
+        else:
+            adapter = self._runtime.adapter
+            if hasattr(adapter, "append_message_to_session"):
+                result = adapter.append_message_to_session(session_id, role, content)
+                if inspect.isawaitable(result):
+                    await result
 
     # ── Model management ──────────────────────────────────────────────────────
 
@@ -383,24 +450,7 @@ class ApplicationService(IApplicationService):
         )
 
         model_id = runner.get_active_model_id()
-        if not model_id:
-            return self._fallback_compact_summary(runner)
-
-        # Use the adapter to resolve the provider for model-based compaction
-        adapter = self._runtime.adapter
-        # If the adapter's runner has _resolve_provider, use it; otherwise fallback
-        if getattr(adapter, "_yaml_config", None) is None:
-            return self._fallback_compact_summary(runner)
-
-        try:
-            from citnega.packages.model_gateway.provider_factory import ProviderFactory
-
-            yaml_config = getattr(adapter, "_yaml_config", None)
-            if yaml_config is None:
-                return self._fallback_compact_summary(runner)
-            factory = ProviderFactory(yaml_config)
-            provider = factory.build(model_id)
-        except Exception:
+        if not model_id or self._model_gateway is None:
             return self._fallback_compact_summary(runner)
 
         req = ModelRequest(
@@ -412,14 +462,14 @@ class ApplicationService(IApplicationService):
                     content=f"Conversation transcript:\n\n{transcript}\n\n{summarise_msg}",
                 ),
             ],
-            stream=False,
             temperature=0.3,
+            stream=False,
         )
-        full_text: list[str] = []
-        async for chunk in provider.stream_generate(req):
-            if chunk.content:
-                full_text.append(chunk.content)
-        return "".join(full_text).strip() or self._fallback_compact_summary(runner)
+        try:
+            response = await self._model_gateway.generate(req)
+        except Exception:
+            return self._fallback_compact_summary(runner)
+        return response.content.strip() or self._fallback_compact_summary(runner)
 
     @staticmethod
     def _fallback_compact_summary(runner: IFrameworkRunner) -> str:
@@ -527,6 +577,19 @@ class ApplicationService(IApplicationService):
         from citnega.packages.capabilities import CapabilityKind
 
         return self._build_capability_registry().list_by_kind(CapabilityKind.SKILL)
+
+    def invalidate_capability_cache(self) -> None:
+        self._capability_registry_cache = None
+
+    def create_dynamic_loader(self) -> Any:
+        from citnega.packages.workspace.loader import DynamicLoader
+
+        return DynamicLoader(
+            enforcer=self._enforcer,
+            emitter=self._emitter,
+            tracer=self._tracer,
+            tool_registry=self._callable_registry.get_tools(),
+        )
 
     def compile_plan(
         self,
@@ -637,18 +700,7 @@ class ApplicationService(IApplicationService):
     def _read_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
         """Read a field from the on-disk conversation.json for *session_id*."""
         adapter = self._runtime.adapter
-        sessions_dir = getattr(adapter, "_sessions_dir", None)
-        if sessions_dir is not None:
-            import json as _json
-
-            conv_file = Path(sessions_dir) / session_id / "conversation.json"
-            if conv_file.exists():
-                try:
-                    data = _json.loads(conv_file.read_text(encoding="utf-8"))
-                    return data.get(field, [])
-                except Exception:
-                    pass
-        return []
+        return adapter.read_session_conversation_field(session_id, field)
 
     async def ensure_runner(self, session_id: str) -> None:
         """
@@ -693,7 +745,7 @@ class ApplicationService(IApplicationService):
     async def hot_reload_workfolder(
         self,
         workfolder: Path,
-        loader: object,
+        loader: Any,
     ) -> dict[str, list[str]]:
         """
         Scan *workfolder* for new/changed callables and register them all.
@@ -708,7 +760,23 @@ class ApplicationService(IApplicationService):
         settings = load_settings(app_home=self._app_home)
         writer = WorkspaceWriter(workfolder)
         enforce_workspace_onboarding(writer.root, settings.workspace)
-        loaded_workspace = loader.load_workspace(writer)
+        workflow_migration: dict[str, list[str]] | None = None
+        if settings.nextgen.workflows_enabled:
+            from citnega.packages.workspace.workflow_migration import (
+                migrate_python_workflows_to_templates,
+            )
+
+            workflow_migration = migrate_python_workflows_to_templates(
+                writer.workflows_dir
+            ).as_dict()
+        try:
+            loaded_workspace = loader.load_workspace_with_options(
+                writer,
+                include_python_workflows=not settings.nextgen.workflows_enabled,
+            )
+        except TypeError:
+            loaded_workspace = loader.load_workspace(writer)
+        self._capability_registry_cache = None
 
         registered: list[str] = []
         errors: list[str] = []
@@ -728,12 +796,15 @@ class ApplicationService(IApplicationService):
         except Exception:
             pass
 
-        return {
+        result: dict[str, Any] = {
             "registered": registered,
             "errors": errors,
             "refreshed_sessions": refreshed,
             "skipped_sessions": skipped,
         }
+        if workflow_migration is not None:
+            result["workflow_migration"] = workflow_migration
+        return result
 
     def save_workspace_path(self, path: str) -> None:
         """Persist *path* as the workfolder in ``<app_home>/config/workspace.toml``."""
@@ -755,26 +826,20 @@ class ApplicationService(IApplicationService):
         return [self._runtime.adapter.framework_name]
 
     def list_models(self) -> list[ModelInfo]:
-        # 1. Prefer YAML-driven config from DirectModelAdapter
+        # 1. Prefer adapter-owned model catalog when available
         adapter = self._runtime.adapter
-        yaml_config = getattr(adapter, "_yaml_config", None)
-        if yaml_config is not None:
-            try:
-                from citnega.packages.model_gateway.provider_factory import (
-                    _make_model_info,
-                )
-
-                return [
-                    _make_model_info(entry)
-                    for entry in sorted(yaml_config.models, key=lambda m: -m.priority)
-                ]
-            except Exception:
-                pass
+        with contextlib.suppress(Exception):
+            adapter_models = adapter.list_models()
+            if adapter_models:
+                return adapter_models
 
         # 2. Injected model gateway
         if self._model_gateway is not None:
             try:
-                return list(self._model_gateway.list_models())
+                models = self._model_gateway.list_models()
+                if asyncio.iscoroutine(models):
+                    return []
+                return list(models)
             except Exception:
                 pass
 
@@ -801,28 +866,35 @@ class ApplicationService(IApplicationService):
         if self._capability_registry_cache is not None:
             return self._capability_registry_cache
 
-        registry = CapabilityRegistry()
-        callables = {item.name: item for item in self._callable_registry.list_all()}
-        builtin_records, builtin_diagnostics = BuiltinCapabilityProvider().load(callables)
-        for failure in builtin_diagnostics.failures:
-            self._emitter.emit(
-                CapabilityLoadFailedEvent(
-                    session_id="system",
-                    run_id="capability-bootstrap",
-                    capability_id=failure.capability_id,
-                    source=failure.source,
-                    path=failure.path,
-                    error=failure.error,
-                    required=failure.required,
+        # Seed from the runtime's pre-built capability registry when available
+        # (avoids redundant BuiltinCapabilityProvider scan at runtime).
+        _runtime_attr = getattr(self._runtime, "capability_registry", None)
+        runtime_cap_reg = _runtime_attr if isinstance(_runtime_attr, CapabilityRegistry) else None
+        registry = runtime_cap_reg if runtime_cap_reg is not None else CapabilityRegistry()
+
+        if runtime_cap_reg is None:
+            # Runtime registry was not pre-built — build builtins now.
+            callables = {item.name: item for item in self._callable_registry.list_all()}
+            builtin_records, builtin_diagnostics = BuiltinCapabilityProvider().load(callables)
+            for failure in builtin_diagnostics.failures:
+                self._emitter.emit(
+                    CapabilityLoadFailedEvent(
+                        session_id="system",
+                        run_id="capability-bootstrap",
+                        capability_id=failure.capability_id,
+                        source=failure.source,
+                        path=failure.path,
+                        error=failure.error,
+                        required=failure.required,
+                    )
                 )
-            )
-        if builtin_diagnostics.has_required_failures:
-            details = "; ".join(
-                f"{failure.capability_id}: {failure.error}"
-                for failure in builtin_diagnostics.failures
-            )
-            raise RuntimeError(f"Capability bootstrap failed: {details}")
-        registry.register_many(builtin_records, overwrite=True)
+            if builtin_diagnostics.has_required_failures:
+                details = "; ".join(
+                    f"{failure.capability_id}: {failure.error}"
+                    for failure in builtin_diagnostics.failures
+                )
+                raise RuntimeError(f"Capability bootstrap failed: {details}")
+            registry.register_many(builtin_records, overwrite=True)
 
         settings = load_settings(app_home=self._app_home)
         workspace_root = (

@@ -3,28 +3,47 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 import yaml  # type: ignore[import-untyped]
 
 from citnega.packages.strategy.models import SkillDescriptor
 
 
-def _split_front_matter(text: str) -> tuple[dict[str, Any], str]:
+class SkillFrontMatter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = ""
+    description: str = ""
+    triggers: list[str] = Field(default_factory=list)
+    preferred_tools: list[str] = Field(default_factory=list)
+    preferred_agents: list[str] = Field(default_factory=list)
+    supported_modes: list[str] = Field(
+        default_factory=lambda: ["chat", "plan", "explore", "research", "code", "review", "operate"]
+    )
+    tags: list[str] = Field(default_factory=list)
+
+
+def _split_front_matter(text: str) -> tuple[dict[str, Any], str, bool]:
     stripped = text.lstrip()
     if not stripped.startswith("---\n"):
-        return {}, text
+        return {}, text, False
     _, _, rest = stripped.partition("---\n")
     front_matter, sep, body = rest.partition("\n---\n")
     if not sep:
-        return {}, text
+        return {}, text, False
     data = yaml.safe_load(front_matter) or {}
-    return data, body.strip()
+    return data, body.strip(), True
 
 
 def load_skill(skill_file: Path) -> SkillDescriptor:
     content = skill_file.read_text(encoding="utf-8")
-    front_matter, body = _split_front_matter(content)
-    name = str(front_matter.get("name") or skill_file.parent.name).strip()
-    description = str(front_matter.get("description") or "").strip()
+    raw_front_matter, body, has_front_matter = _split_front_matter(content)
+    if not has_front_matter:
+        raise ValueError(f"{skill_file} must include YAML front matter delimited by --- blocks.")
+
+    front_matter = SkillFrontMatter.model_validate(raw_front_matter)
+    name = (front_matter.name or skill_file.parent.name).strip()
+    description = front_matter.description.strip()
     if not description:
         for line in body.splitlines():
             candidate = line.strip()
@@ -35,11 +54,11 @@ def load_skill(skill_file: Path) -> SkillDescriptor:
         name=name,
         description=description or name,
         content_path=str(skill_file),
-        triggers=[str(item).strip() for item in front_matter.get("triggers", []) if str(item).strip()],
-        preferred_tools=[str(item).strip() for item in front_matter.get("preferred_tools", []) if str(item).strip()],
-        preferred_agents=[str(item).strip() for item in front_matter.get("preferred_agents", []) if str(item).strip()],
-        supported_modes=[str(item).strip() for item in front_matter.get("supported_modes", []) if str(item).strip()] or ["chat", "plan", "explore", "research", "code", "review", "operate"],
-        tags=[str(item).strip() for item in front_matter.get("tags", []) if str(item).strip()],
+        triggers=[item.strip() for item in front_matter.triggers if item.strip()],
+        preferred_tools=[item.strip() for item in front_matter.preferred_tools if item.strip()],
+        preferred_agents=[item.strip() for item in front_matter.preferred_agents if item.strip()],
+        supported_modes=[item.strip() for item in front_matter.supported_modes if item.strip()] or ["chat", "plan", "explore", "research", "code", "review", "operate"],
+        tags=[item.strip() for item in front_matter.tags if item.strip()],
         body=body,
     )
 

@@ -39,6 +39,68 @@ _STATE_LABELS: dict[str, str] = {
 _ACTIVE_STATES = {"pending", "context_assembling", "executing", "running"}
 
 
+def _build_bar_content(
+    *,
+    model: str,
+    mode: str,
+    think: str,
+    folder: str,
+    state: str,
+    session_name: str,
+    tokens_used: int,
+    tokens_max: int,
+    spin_char: str,
+    session_id: str = "",
+    framework: str = "",
+) -> str:
+    model_str = model or "no model"
+    mode_str  = mode or "direct"
+
+    folder_str = folder or os.getcwd()
+    home = os.path.expanduser("~")
+    if folder_str.startswith(home):
+        folder_str = "~" + folder_str[len(home):]
+    if len(folder_str) > 28:
+        folder_str = "…" + folder_str[-25:]
+
+    if state in _ACTIVE_STATES:
+        state_label = f"{spin_char} {state.replace('_', ' ')}"
+    else:
+        state_label = _STATE_LABELS.get(state, state)
+
+    if tokens_max > 0:
+        ratio = tokens_used / tokens_max
+        tok_indicator = "▓" if ratio >= 0.8 else ("▒" if ratio >= 0.5 else "░")
+        token_str = f"{tok_indicator} {tokens_used}/{tokens_max}"
+    else:
+        token_str = ""
+
+    sep = "  │  "
+    parts: list[str] = []
+
+    # Session badge: prefer name, fall back to short ID
+    badge = session_name[:18] if session_name else (f"#{session_id[:8]}" if session_id else "")
+    if badge:
+        parts.append(badge)
+
+    # Model + framework
+    fw_suffix = f"/{framework}" if framework and framework != "direct" else ""
+    parts.append(f"◈ {model_str}{fw_suffix}")
+
+    parts.append(f"mode:{mode_str}")
+
+    if think and think != "off":
+        parts.append(f"think:{think}")
+
+    parts.append(folder_str)
+
+    if token_str:
+        parts.append(token_str)
+
+    parts.append(state_label)
+    return sep.join(parts)
+
+
 class ContextBar(Widget):
     """
     Single-line context strip rendered just above the SmartInput.
@@ -61,6 +123,11 @@ class ContextBar(Widget):
     think: reactive[str] = reactive("off")
     folder: reactive[str] = reactive("")
     state: reactive[str] = reactive("idle")
+    session_name: reactive[str] = reactive("")
+    tokens_used: reactive[int] = reactive(0)
+    tokens_max: reactive[int] = reactive(0)
+    session_id: reactive[str] = reactive("")
+    framework: reactive[str] = reactive("")
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -80,36 +147,19 @@ class ContextBar(Widget):
         self._redraw()
 
     def _redraw(self) -> None:
-        model_str = self.model or "no model"
-        mode_str  = self.mode or "direct"
-        think_str = self.think or "off"
-
-        folder_str = self.folder or os.getcwd()
-        home = os.path.expanduser("~")
-        if folder_str.startswith(home):
-            folder_str = "~" + folder_str[len(home):]
-        # Truncate long paths from the left
-        if len(folder_str) > 30:
-            folder_str = "…" + folder_str[-27:]
-
-        # State segment — animated when active
-        state_key = self.state
-        if state_key in _ACTIVE_STATES:
-            spin = _SPINNER[self._spin_idx]
-            state_label = f"{spin}  {state_key.replace('_', ' ')}"
-        else:
-            state_label = _STATE_LABELS.get(state_key, state_key)
-
-        sep = "  │  "
-        parts = [
-            f"◈ {model_str}",
-            f"mode: {mode_str}",
-            f"think: {think_str}",
-            folder_str,
-            state_label,
-        ]
-        content = sep.join(parts)
-
+        content = _build_bar_content(
+            model=self.model,
+            mode=self.mode,
+            think=self.think,
+            folder=self.folder,
+            state=self.state,
+            session_name=self.session_name,
+            tokens_used=self.tokens_used,
+            tokens_max=self.tokens_max,
+            spin_char=_SPINNER[self._spin_idx],
+            session_id=self.session_id,
+            framework=self.framework,
+        )
         with contextlib.suppress(Exception):
             self.query_one("#cb-content", Label).update(content)
 
@@ -129,4 +179,19 @@ class ContextBar(Widget):
 
     def watch_state(self, _: str) -> None:
         self._spin_idx = 0
+        self._redraw()
+
+    def watch_session_name(self, _: str) -> None:
+        self._redraw()
+
+    def watch_tokens_used(self, _: int) -> None:
+        self._redraw()
+
+    def watch_tokens_max(self, _: int) -> None:
+        self._redraw()
+
+    def watch_session_id(self, _: str) -> None:
+        self._redraw()
+
+    def watch_framework(self, _: str) -> None:
         self._redraw()

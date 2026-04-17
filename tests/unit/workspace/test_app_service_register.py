@@ -207,6 +207,50 @@ class TestHotReloadWorkfolder:
         with pytest.raises(ValueError, match="manifest is required but missing"):
             asyncio.run(svc.hot_reload_workfolder(workfolder, loader))
 
+    def test_nextgen_workflows_migrate_python_and_skip_registration(self, tmp_path: Path) -> None:
+        app_home = tmp_path / "app_home"
+        config_dir = app_home / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.toml").write_text(
+            "[nextgen]\nworkflows_enabled = true\n",
+            encoding="utf-8",
+        )
+
+        workfolder = tmp_path / "workfolder"
+        writer = WorkspaceWriter(workfolder)
+        writer.ensure_dirs()
+        workflow_source = (
+            "from pydantic import BaseModel, Field\n"
+            "from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput\n"
+            "from citnega.packages.protocol.callables.types import CallableType, CallablePolicy\n"
+            "from citnega.packages.protocol.callables.context import CallContext\n\n"
+            "class ReleaseWorkflowInput(BaseModel):\n"
+            "    objective: str = Field(description='objective')\n\n"
+            "class ReleaseWorkflow(SpecialistBase):\n"
+            "    name = 'release_workflow'\n"
+            "    description = 'Legacy release workflow.'\n"
+            "    callable_type = CallableType.SPECIALIST\n"
+            "    input_schema = ReleaseWorkflowInput\n"
+            "    output_schema = SpecialistOutput\n"
+            "    policy = CallablePolicy(timeout_seconds=60.0)\n"
+            "    TOOL_WHITELIST = ['repo_map', 'quality_gate']\n\n"
+            "    async def _execute(self, input: ReleaseWorkflowInput, context: CallContext) -> SpecialistOutput:\n"
+            "        return SpecialistOutput(response='ok')\n"
+        )
+        (writer.workflows_dir / "release_workflow.py").write_text(
+            workflow_source,
+            encoding="utf-8",
+        )
+
+        svc = _make_service(tmp_path=app_home)
+        loader = DynamicLoader(_MockEnforcer(), _MockEmitter(), MagicMock())
+        result = asyncio.run(svc.hot_reload_workfolder(workfolder, loader))
+
+        assert "release_workflow" not in svc._callable_registry.get_agents()
+        migration = result.get("workflow_migration", {})
+        assert str(writer.workflows_dir / "release_workflow.py") in migration.get("converted", [])
+        assert (writer.workflows_dir / "release_workflow.yaml").exists()
+
 
 class TestSaveWorkspacePath:
     def test_creates_workspace_toml(self, tmp_path: Path) -> None:

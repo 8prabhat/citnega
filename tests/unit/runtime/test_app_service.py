@@ -16,6 +16,7 @@ import pytest
 
 from citnega.packages.protocol.callables.types import CallableMetadata, CallablePolicy, CallableType
 from citnega.packages.protocol.models.approvals import ApprovalStatus
+from citnega.packages.protocol.models.model_gateway import ModelCapabilityFlags, ModelInfo
 from citnega.packages.protocol.models.runner import ConversationStats
 from citnega.packages.protocol.models.runs import RunState, RunSummary, StateSnapshot
 from citnega.packages.protocol.models.sessions import Session, SessionConfig
@@ -118,6 +119,8 @@ def _make_service(
     runtime.adapter.get_runner = MagicMock(return_value=None)
     runtime.adapter.framework_name = "stub"
     runtime.adapter.set_session_model = AsyncMock()
+    runtime.adapter.read_session_conversation_field = MagicMock(return_value=[])
+    runtime.adapter.list_models = MagicMock(return_value=[])
 
     # Session management
     runtime.create_session = AsyncMock(return_value=session or _make_session())
@@ -397,8 +400,15 @@ def test_get_conversation_messages_with_runner():
 
 def test_get_conversation_messages_no_runner():
     svc = _make_service(runner=None)
+    svc._runtime.adapter.read_session_conversation_field.return_value = [
+        {"role": "assistant", "content": "persisted"}
+    ]
     msgs = svc.get_conversation_messages("sess-1")
-    assert msgs == []
+    assert msgs == [{"role": "assistant", "content": "persisted"}]
+    svc._runtime.adapter.read_session_conversation_field.assert_called_once_with(
+        "sess-1",
+        "messages",
+    )
 
 
 @pytest.mark.asyncio
@@ -415,6 +425,23 @@ def test_get_session_tool_history_with_runner():
     history = svc.get_session_tool_history("sess-1")
     assert len(history) == 1
     assert history[0]["name"] == "read_file"
+
+
+def test_list_models_prefers_adapter_catalog():
+    svc = _make_service(runner=None)
+    adapter_models = [
+        ModelInfo(
+            model_id="adapter-model",
+            provider_type="ollama",
+            model_name="adapter-model",
+            local=True,
+            capabilities=ModelCapabilityFlags(),
+            priority=100,
+        )
+    ]
+    svc._runtime.adapter.list_models.return_value = adapter_models
+    models = svc.list_models()
+    assert models == adapter_models
 
 
 @pytest.mark.asyncio
@@ -587,10 +614,10 @@ async def test_export_session_no_store():
 
 
 @pytest.mark.asyncio
-async def test_import_session_not_implemented():
+async def test_import_session_missing_file_raises():
     svc = _make_service()
-    with pytest.raises(NotImplementedError):
-        await svc.import_session(Path("/tmp/test.jsonl"))
+    with pytest.raises(FileNotFoundError):
+        await svc.import_session(Path("/tmp/nonexistent_citnega_test.jsonl"))
 
 
 # ── No private access verification ──────────────────────────────────────────

@@ -3,7 +3,7 @@ Integration test: validates that tools and agents are wired end-to-end.
 
 What is tested
 --------------
-1. bootstrap → ApplicationService has populated tool_registry and agent_registry
+1. bootstrap → ApplicationService has populated callable_registry (tools + agents)
 2. list_tools() / list_agents() return non-empty results
 3. A tool can be called directly via invoke() and emits CallableStartEvent +
    CallableEndEvent so the TUI ToolCallBlock pipeline is exercised
@@ -75,7 +75,7 @@ def _make_context(session_id: str = "test-session"):
     )
 
 
-# ── 1. Bootstrap wires tool_registry and agent_registry ───────────────────────
+# ── 1. Bootstrap wires callable_registry (tools + agents) ────────────────────
 
 
 def test_bootstrap_populates_tool_and_agent_registries(tmp_path):
@@ -94,12 +94,11 @@ def test_bootstrap_populates_tool_and_agent_registries(tmp_path):
             return tools, agents
 
     tools, _agents = asyncio.run(_run())
-    assert len(tools) > 0, "list_tools() returned nothing — tool_registry not wired"
-    # Agents may be empty if none are registered — check tools at minimum
+    assert len(tools) > 0, "list_tools() returned nothing — callable_registry not wired"
     tool_names = {t.name for t in tools}
-    assert "read_file" in tool_names, "read_file not in tool_registry"
-    assert "search_web" in tool_names, "search_web not in tool_registry"
-    assert "list_dir" in tool_names, "list_dir not in tool_registry"
+    assert "read_file" in tool_names, "read_file not in callable_registry"
+    assert "search_web" in tool_names, "search_web not in callable_registry"
+    assert "list_dir" in tool_names, "list_dir not in callable_registry"
 
 
 # ── 2. CallableStartEvent + CallableEndEvent emitted during invoke() ──────────
@@ -209,21 +208,24 @@ def test_get_conversation_messages_reads_disk(tmp_path):
     ]
     (conv_dir / "conversation.json").write_text(json.dumps({"messages": msgs}), encoding="utf-8")
 
-    # Build a minimal stub service where adapter._sessions_dir = tmp_path
+    # Build a minimal stub service whose adapter reads from disk
     adapter = MagicMock()
-    adapter._sessions_dir = tmp_path
     adapter.get_runner = MagicMock(return_value=None)
+    # read_session_conversation_field delegates to the adapter; simulate disk read
+    adapter.read_session_conversation_field = MagicMock(return_value=msgs)
     runtime = MagicMock()
     runtime.adapter = adapter
     runtime.get_runner = MagicMock(return_value=None)
 
+    from citnega.packages.shared.registry import CallableRegistry
+
     svc = ApplicationService.__new__(ApplicationService)
     svc._runtime = runtime
-    svc._tool_registry = {}
-    svc._agent_registry = {}
+    svc._callable_registry = CallableRegistry()
 
     result = svc.get_conversation_messages(sid)
     assert result == msgs, f"Expected {msgs}, got {result}"
+    adapter.read_session_conversation_field.assert_called_once_with(sid, "messages")
 
 
 # ── 5. search_web returns ToolOutput without crashing ─────────────────────────

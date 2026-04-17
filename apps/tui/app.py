@@ -188,22 +188,13 @@ class CitnegaApp(App):
             self.notify(f"Session setup failed: {exc}", severity="error", timeout=10)
             return
 
-        # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar
+        # Seed ContextBar with session identity fields
+        from citnega.apps.tui.widgets.context_bar import ContextBar
 
         try:
-            status = self.screen.query_one(StatusBar)
-            status.session_id = self._session_id
-            status.framework = self._service.list_frameworks()[0] if self._service else "direct"
-            active_model = (
-                self._service.get_session_model(self._session_id) if self._service else ""
-            )
-            if active_model:
-                status.model = active_model
-            elif self._service:
-                models = self._service.list_models()
-                if models:
-                    status.model = models[0].model_id
+            ctx = self.screen.query_one(ContextBar)
+            ctx.session_id = self._session_id
+            ctx.framework = self._service.list_frameworks()[0] if self._service else "direct"
         except Exception:
             pass
 
@@ -237,11 +228,13 @@ class CitnegaApp(App):
                 workfolder = ws.workfolder_path
         except Exception:
             pass
+        session_name = getattr(getattr(session, "config", None), "name", "") or ""
         self._controller.seed_context_bar(
             model=active_model,
             mode=active_mode,
             think=think_label,
             folder=workfolder,
+            session_name=session_name,
         )
 
         # Render persisted message history when resuming an existing session

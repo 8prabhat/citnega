@@ -249,9 +249,9 @@ class TestCreateApplication:
                 run_migrations=False,
                 skip_provider_health_check=True,
             ) as svc:
-                assert svc._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
-                assert svc._agent_registry["planner_agent"].__class__.__name__ == "WorkspacePlannerAgent"
-                planner = svc._agent_registry["planner_agent"]
+                assert svc._callable_registry.get_tools()["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
+                assert svc._callable_registry.get_agents()["planner_agent"].__class__.__name__ == "WorkspacePlannerAgent"
+                planner = svc._callable_registry.get_agents()["planner_agent"]
                 assert planner._tool_registry["search_web"].__class__.__name__ == "WorkspaceSearchWebTool"
 
         _run(_do())
@@ -307,7 +307,7 @@ class TestCreateApplication:
                 run_migrations=False,
                 skip_provider_health_check=True,
             ) as svc:
-                orchestrator = svc._agent_registry["orchestrator_agent"]
+                orchestrator = svc._callable_registry.get_agents()["orchestrator_agent"]
                 assert getattr(orchestrator, "_remote_enabled_default", False) is True
                 assert getattr(orchestrator, "_remote_workers", 0) == 3
                 assert getattr(orchestrator, "_remote_worker_mode", "") == "inprocess"

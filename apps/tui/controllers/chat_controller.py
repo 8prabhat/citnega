@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from textual.containers import VerticalScroll
 
+from citnega.packages.observability.logging_setup import runtime_logger as _logger
+
 from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
 from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 from citnega.apps.tui.widgets.message_block import MessageBlock
@@ -141,7 +143,9 @@ class ChatController:
         try:
             run_id = await self._service.run_turn(self._session_id, text)
         except Exception as exc:
-            await self._append_message("system", f"Error starting turn: {exc}")
+            from citnega.packages.shared.errors import CitnegaError
+            msg = getattr(exc, "user_message", "") or str(exc)
+            await self._append_message("system", f"Error: {msg}")
             return
 
         try:
@@ -216,11 +220,6 @@ class ChatController:
             await self._streaming_block.finalize()
             self._streaming_block = None
 
-        # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar
-
-        status = self._app.screen.query_one(StatusBar)
-        status.run_state = "idle"
         self._update_context_bar(state="idle")
 
         # Restore panel header
@@ -312,8 +311,8 @@ class ChatController:
                 message.success,
                 callable_type=message.callable_type,
             )
-        except Exception:
-            pass
+        except Exception as _exc:
+            _logger.debug("tui_record_tool_call_failed", error=str(_exc))
 
     async def on_approval_requested(self, message: ApprovalRequested) -> None:
         block = ApprovalBlock(
@@ -335,13 +334,6 @@ class ChatController:
             await self._append_message("system", f"Approval error: {exc}")
 
     def on_run_started(self, message: RunStarted) -> None:
-        from citnega.apps.tui.widgets.status_bar import StatusBar
-
-        try:
-            status = self._app.screen.query_one(StatusBar)
-            status.run_state = "running"
-        except Exception:
-            pass
         self._update_context_bar(state="running")
 
     def on_run_phase_changed(self, message: RunPhaseChanged) -> None:
@@ -381,7 +373,10 @@ class ChatController:
     def _show_slash_popup(self) -> None:
         from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup
 
-        cmds = list(self._slash_commands.keys())
+        cmds = [
+            (name, getattr(cmd, "help_text", ""))
+            for name, cmd in self._slash_commands.items()
+        ]
         popup = SlashCommandPopup(commands=cmds)
         self._popup = popup
         self._app.mount(popup)
@@ -480,9 +475,17 @@ class ChatController:
         mode: str = "direct",
         think: str = "off",
         folder: str = "",
+        session_name: str = "",
     ) -> None:
         """Called by the App after controller creation to pre-populate the bar."""
-        self._update_context_bar(model=model, mode=mode, think=think, folder=folder, state="idle")
+        self._update_context_bar(
+            model=model,
+            mode=mode,
+            think=think,
+            folder=folder,
+            state="idle",
+            session_name=session_name,
+        )
 
     async def shutdown(self) -> None:
         """Cancel background consumer if running."""
@@ -512,6 +515,7 @@ def _build_slash_registry(app, service, session_id, controller):
     )
     from citnega.apps.tui.slash_commands.workspace import (
         CreateAgentCommand,
+        CreateSkillCommand,
         CreateToolCommand,
         CreateWorkflowCommand,
         RefreshCommand,
@@ -539,5 +543,6 @@ def _build_slash_registry(app, service, session_id, controller):
         CreateToolCommand(service=service),
         CreateAgentCommand(service=service),
         CreateWorkflowCommand(service=service),
+        CreateSkillCommand(service=service),
     ]
     return {cmd.name: cmd for cmd in cmds}

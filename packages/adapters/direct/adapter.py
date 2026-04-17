@@ -7,10 +7,12 @@ ProviderFactory.  No external framework dependency.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.direct.runner import DirectModelRunner
 from citnega.packages.model_gateway.yaml_config import ModelYAMLConfig, load_yaml_config
+from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.adapter import (
     AdapterConfig,
     ICallableFactory,
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.models import ModelInfo
     from citnega.packages.protocol.models.sessions import Session
 
 
@@ -150,3 +153,25 @@ class DirectModelAdapter(IFrameworkAdapter):
             }
             for e in sorted(self._yaml_config.models, key=lambda m: -m.priority)
         ]
+
+    def list_models(self) -> list[ModelInfo]:
+        """Return typed model metadata for ApplicationService surfaces."""
+        from citnega.packages.model_gateway.provider_factory import _make_model_info
+
+        return [
+            _make_model_info(entry)
+            for entry in sorted(self._yaml_config.models, key=lambda item: -item.priority)
+        ]
+
+    def read_session_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
+        """Read ``conversation.json`` field from disk for cold sessions."""
+        conversation_file = self._sessions_dir / session_id / "conversation.json"
+        if not conversation_file.exists():
+            return []
+        try:
+            payload = json.loads(conversation_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            runtime_logger.debug("conversation_file_parse_error", error=str(exc))
+            return []
+        raw = payload.get(field, [])
+        return raw if isinstance(raw, list) else []

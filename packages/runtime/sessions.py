@@ -112,6 +112,9 @@ class SessionManager:
         updated = session.model_copy(update={"state": SessionState.ERROR})
         await self._repo.save(updated)
 
+    async def save(self, session: Session) -> None:
+        await self._repo.save(session)
+
     async def delete(self, session_id: str) -> None:
         await self._repo.delete(session_id)
         runtime_logger.info("session_deleted", session_id=session_id)

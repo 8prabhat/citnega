@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -401,6 +402,72 @@ class TestConversationAgent:
         assert result.success
         assert "unavailable" in result.output.response
 
+    @pytest.mark.asyncio
+    async def test_nextgen_complex_route_prefers_planner_agent(self) -> None:
+        import json
+
+        from citnega.packages.agents.core.conversation_agent import (
+            ConversationAgent,
+            ConversationInput,
+        )
+        from citnega.packages.agents.core.router import RouterAgent
+
+        async def _generate(_request):
+            return ModelResponse(
+                model_id="x",
+                content=json.dumps(
+                    {"agent": "research_agent", "reason": "multi-step", "is_complete": False}
+                ),
+                finish_reason="stop",
+                usage={},
+            )
+
+        gw = MagicMock()
+        gw.generate = _generate
+
+        planner = MagicMock()
+        planner.name = "planner_agent"
+        planner.invoke = AsyncMock(
+            return_value=SimpleNamespace(
+                success=True,
+                output=SimpleNamespace(
+                    response="Planned response",
+                    plan_steps=["step1: research_agent"],
+                ),
+            )
+        )
+
+        agent = _make_core_agent(ConversationAgent)
+        router = _make_core_agent(RouterAgent)
+        research = MagicMock()
+        research.name = "research_agent"
+        research.description = "Research specialist"
+        router.register_sub_callable(research)
+        agent.register_sub_callable(router)
+        agent.register_sub_callable(planner)
+
+        ctx = CallContext(
+            session_id="s",
+            run_id="r",
+            turn_id="t",
+            session_config=_session_config(),
+            model_gateway=gw,
+        )
+        with patch("citnega.packages.config.loaders.load_settings") as mock_settings:
+            mock_settings.return_value = SimpleNamespace(
+                nextgen=SimpleNamespace(planning_enabled=True)
+            )
+            result = await agent.invoke(
+                ConversationInput(user_input="Research X and then summarize Y"),
+                ctx,
+            )
+
+        assert result.success
+        assert result.output.routed_to == "planner_agent"
+        assert result.output.response == "Planned response"
+        assert result.output.tool_calls == ["step1: research_agent"]
+        planner.invoke.assert_awaited_once()
+
 
 # ---------------------------------------------------------------------------
 # PlannerAgent
@@ -457,6 +524,31 @@ class TestPlannerAgent:
         )
         assert result.success
         assert "unavailable" in result.output.response
+
+    @pytest.mark.asyncio
+    async def test_planner_dispatches_to_nextgen_path_when_enabled(self) -> None:
+        from citnega.packages.agents.core.planner_agent import (
+            PlannerAgent,
+            PlannerInput,
+            PlannerOutput,
+        )
+
+        agent = _make_core_agent(PlannerAgent)
+        nextgen = AsyncMock(return_value=PlannerOutput(response="nextgen"))
+        legacy = AsyncMock(return_value=PlannerOutput(response="legacy"))
+        agent._execute_nextgen = nextgen  # type: ignore[method-assign]
+        agent._execute_legacy = legacy  # type: ignore[method-assign]
+
+        with patch("citnega.packages.config.loaders.load_settings") as mock_settings:
+            mock_settings.return_value = SimpleNamespace(
+                nextgen=SimpleNamespace(planning_enabled=True)
+            )
+            result = await agent.invoke(PlannerInput(goal="Do X"), _context())
+
+        assert result.success
+        assert result.output.response == "nextgen"
+        nextgen.assert_awaited_once()
+        legacy.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

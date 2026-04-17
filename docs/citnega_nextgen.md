@@ -1,7 +1,7 @@
 # Citnega Nextgen Technical Specification
 
 ## Status
-Draft v1
+In progress (phase rollout)
 
 ## Date
 2026-04-16
@@ -24,6 +24,19 @@ Included:
 Explicitly excluded from this spec:
 - multimodal support
 - authentication and identity strategy
+
+## Implementation Snapshot (2026-04-16)
+- [x] `conversation_agent` has a nextgen-gated coordinator path (single route decision, planner handoff for complex tasks).
+- [x] `planner_agent` supports nextgen-gated compiled-plan execution (`PlanCompiler` + `PlanValidator` + `ExecutionEngine`) with planning events.
+- [x] TUI `/createworkflow` now emits YAML workflow templates instead of Python workflow callables.
+- [x] TUI `/createskill` now scaffolds `SKILL.md` bundles under `workfolder/skills/`.
+- [x] Legacy Python workflows can now be auto-migrated to YAML templates (`packages/workspace/workflow_migration.py`) and are skipped when nextgen workflow mode is enabled.
+- [x] Workspace capability diagnostics are now file-level for both skills and workflow templates (no all-or-nothing failure collapse).
+- [x] `ApplicationService` removed key adapter private-attribute reach-throughs for model listing, compaction summarization, and cold conversation reads.
+- [x] `SKILL.md` front matter now uses a strict schema validator (unknown keys fail closed with explicit diagnostics).
+- [ ] Replace remaining legacy planner/conversation execution semantics with unified compiled-plan routing.
+- [ ] Complete capability registry convergence across all nextgen executors (`planner_agent`, `orchestrator_agent`, and service path) to one shared builder path.
+- [ ] Implement horizontal detector/profile refactors for `repo_map`, `quality_gate`, and `test_matrix`.
 
 ## 1. Executive Summary
 Citnega already has a stronger architectural substrate than many terminal agents: adapter isolation, local-first runtime, event replay, policy enforcement, workspace extensibility, and a deterministic orchestrator. The main blockers to a true 9+/10 system are not missing primitives. They are fragmentation, inconsistency, and incomplete productization.

@@ -155,7 +155,7 @@ async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter
             continue
         try:
             provider = provider_cls(model_info)
-            gateway.register_provider(model_info.model_id, provider)
+            gateway.register_provider(provider)
         except Exception as exc:
             runtime_logger.warning(
                 "bootstrap_provider_init_failed",
@@ -165,7 +165,7 @@ async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter
 
     # Health-check providers
     healthy_count = 0
-    for _model_id, provider in gateway.providers.items():
+    for _model_id, provider in gateway._providers.items():
         try:
             healthy = await provider.health_check()
             if healthy:
@@ -178,7 +178,7 @@ async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter
         runtime_logger.error(
             "bootstrap_no_healthy_provider",
             local_only=local_only,
-            registered=len(list(gateway.providers.keys())),
+            registered=len(list(gateway._providers.keys())),
         )
         sys.exit(EXIT_NO_PROVIDER)
 
@@ -475,6 +475,7 @@ async def create_application(
             tracer=tracer,
             tool_registry=built_in_tools,
             workspace_settings=settings.workspace,
+            nextgen_workflows_enabled=settings.nextgen.workflows_enabled,
         )
         tools = {**built_in_tools, **workspace_overlay.tools}
         apply_policy_template_to_tools(
@@ -537,6 +538,25 @@ async def create_application(
             total=len(tools) + len(agents),
         )
 
+        # ── Step 17b: CapabilityRegistry + ExecutionEngine ───────────────────
+        from citnega.packages.capabilities.providers import BuiltinCapabilityProvider
+        from citnega.packages.capabilities.registry import CapabilityRegistry as _CapReg
+        from citnega.packages.execution.engine import ExecutionEngine
+
+        cap_registry = _CapReg()
+        _cap_records, _cap_diagnostics = BuiltinCapabilityProvider().load({**tools, **agents})
+        cap_registry.register_many(_cap_records, overwrite=True)
+        if _cap_diagnostics.has_required_failures:
+            runtime_logger.warning(
+                "bootstrap_capability_registry_failures",
+                failures=len(_cap_diagnostics.failures),
+            )
+        runtime_logger.info(
+            "bootstrap_capability_registry_loaded",
+            capabilities=len(cap_registry),
+        )
+        execution_engine = ExecutionEngine(event_emitter=emitter)
+
         # ── Step 18: CoreRuntime ──────────────────────────────────────────────
         from citnega.packages.runtime.core_runtime import CoreRuntime
 
@@ -548,6 +568,8 @@ async def create_application(
             event_emitter=emitter,
             callable_registry=registry,
             model_gateway=model_gateway,
+            capability_registry=cap_registry,
+            execution_engine=execution_engine,
         )
 
         # ── Step 19: ApplicationService ───────────────────────────────────────

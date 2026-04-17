@@ -20,11 +20,22 @@ class CitnegaError(Exception):
     """Root of all Citnega application errors."""
 
     error_code: str = "CITNEGA_ERROR"
+    # Human-readable guidance shown in the TUI instead of the raw exception.
+    # Subclasses set a class-level default; callers may override per-instance.
+    user_message: str = ""
 
-    def __init__(self, message: str, *, original: Exception | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        original: Exception | None = None,
+        user_message: str = "",
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.original = original
+        if user_message:
+            self.user_message = user_message
 
     def to_dict(self) -> dict[str, object]:
         """Serialise for event emission and logging."""
@@ -123,6 +134,7 @@ class CallableTimeoutError(CallablePolicyError):
     """Callable exceeded its allowed execution time."""
 
     error_code = "POLICY_TIMEOUT"
+    user_message = "The operation timed out. Try a simpler request or increase timeout_seconds in the callable policy."
 
 
 class CallableDepthError(CallablePolicyError):
@@ -172,18 +184,21 @@ class NoHealthyProviderError(ModelGatewayError):
     """No model provider is healthy and able to serve the request."""
 
     error_code = "GATEWAY_NO_PROVIDER"
+    user_message = "No model is available. Check that Ollama is running or a valid model is configured in settings.toml."
 
 
 class RateLimitExceededError(ModelGatewayError):
     """Rate limit wait would exceed the request timeout."""
 
     error_code = "GATEWAY_RATE_LIMIT"
+    user_message = "Rate limit reached. Try a smaller model or wait a moment before retrying."
 
 
 class ProviderHTTPError(ModelGatewayError):
     """HTTP-level error from a model provider endpoint."""
 
     error_code = "GATEWAY_HTTP"
+    user_message = "The model provider returned an error. Check that the model server is running and the API key is valid."
 
 
 class ModelCapabilityError(ModelGatewayError):

@@ -35,6 +35,7 @@ def load_workspace_overlay(
     tracer,
     tool_registry: dict[str, IInvocable],
     workspace_settings: WorkspaceSettings,
+    nextgen_workflows_enabled: bool = False,
 ) -> WorkspaceLoadResult:
     """
     Load custom tools, agents, and workflows from ``workfolder``.
@@ -58,4 +59,23 @@ def load_workspace_overlay(
         tracer=tracer,
         tool_registry=tool_registry,
     )
-    return loader.load_workspace(writer)
+    if nextgen_workflows_enabled:
+        from citnega.packages.workspace.workflow_migration import (
+            migrate_python_workflows_to_templates,
+        )
+
+        migration = migrate_python_workflows_to_templates(writer.workflows_dir)
+        if migration.converted:
+            logger.info(
+                "workspace_workflows_migrated converted=%s skipped_existing=%s errors=%s",
+                len(migration.converted),
+                len(migration.skipped_existing_template),
+                len(migration.errors),
+            )
+        for item in migration.errors:
+            logger.warning("workspace_workflow_migration_error: %s", item)
+
+    return loader.load_workspace_with_options(
+        writer,
+        include_python_workflows=not nextgen_workflows_enabled,
+    )

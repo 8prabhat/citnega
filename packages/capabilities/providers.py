@@ -15,10 +15,10 @@ from citnega.packages.capabilities.models import (
     SideEffectLevel,
 )
 from citnega.packages.planning.models import WorkflowTemplate
-from citnega.packages.planning.workflows import load_workflow_templates
+from citnega.packages.planning.workflows import load_workflow_template
 from citnega.packages.protocol.callables.types import CallableMetadata
 from citnega.packages.strategy.models import SkillDescriptor
-from citnega.packages.strategy.skills import load_skills
+from citnega.packages.strategy.skills import load_skill
 
 
 class _MetadataCallable(Protocol):
@@ -110,37 +110,40 @@ class WorkspaceCapabilityProvider:
         skills_root = self._workspace_root / "skills"
         workflows_root = self._workspace_root / "workflows"
 
-        try:
-            for skill in load_skills(skills_root).values():
+        for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+            try:
+                skill = load_skill(skill_file)
                 records.append(
                     CapabilityRecord(
                         descriptor=self._skill_descriptor(skill),
                         runtime_object=skill,
                     )
                 )
-        except Exception as exc:
-            diagnostics.add_failure(
-                "workspace_skills",
-                source="workspace",
-                path=str(skills_root),
-                error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
-            )
+            except Exception as exc:
+                diagnostics.add_failure(
+                    skill_file.parent.name,
+                    source="workspace",
+                    path=str(skill_file),
+                    error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                )
 
-        try:
-            for template in load_workflow_templates(workflows_root).values():
+        workflow_files = sorted(list(workflows_root.glob("*.yaml")) + list(workflows_root.glob("*.yml")))
+        for workflow_file in workflow_files:
+            try:
+                template = load_workflow_template(workflow_file)
                 records.append(
                     CapabilityRecord(
                         descriptor=self._workflow_descriptor(template),
                         runtime_object=template,
                     )
                 )
-        except Exception as exc:
-            diagnostics.add_failure(
-                "workspace_workflows",
-                source="workspace",
-                path=str(workflows_root),
-                error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
-            )
+            except Exception as exc:
+                diagnostics.add_failure(
+                    workflow_file.stem,
+                    source="workspace",
+                    path=str(workflow_file),
+                    error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                )
 
         return records, diagnostics
 

@@ -85,7 +85,7 @@ test files and test functions that cover it.
 |-------|-------------|--------------|-------------|
 | FR-UX-001 | Session lifecycle parity — create/list/delete/rename in both CLI and TUI | `tests/integration/cli/test_cli.py`, `tests/unit/tui/test_slash_session.py` | `test_session_create`, `test_session_list`, `test_rename_with_name`, `test_delete_with_yes` |
 | FR-UX-002 | Run controls parity — cancel, approve, compact in both | `tests/integration/cli/test_cli.py`, `tests/unit/cli/test_run_commands.py` | `test_cancel_run`, `test_approve_run` |
-| FR-UX-003 | Slash command integrity — all commands registered, help accurate | `tests/unit/tui/test_slash_session.py`, `tests/unit/workspace/test_wizard_intercept.py` | `test_normal_slash_when_no_wizard`, `test_wizard_consumes_next_input` |
+| FR-UX-003 | Slash command integrity — all commands registered, help accurate | `tests/unit/tui/test_slash_session.py`, `tests/unit/workspace/test_wizard_intercept.py` | `test_normal_slash_when_no_wizard`, `test_wizard_consumes_next_input`, `test_slash_registry_includes_workspace_skill_command` |
 
 ---
 
@@ -147,7 +147,27 @@ test files and test functions that cover it.
 
 | Gate | Command | Status |
 |------|---------|--------|
-| All tests pass | `pytest` | 914 passed, 2 skipped |
+| All tests pass | `pytest` | 960 passed, 0 failed (2026-04-16) |
 | No lint errors (project code) | `ruff check citnega/ apps/ tests/` | 0 errors introduced |
 | No type errors | `mypy citnega apps --ignore-missing-imports` | 0 errors |
 | Import contracts | `lint-imports` | 5/5 pass |
+
+---
+
+## Nextgen Implementation Coverage (Phases 4–13)
+
+| Phase | Scope | New Tests |
+|-------|-------|-----------|
+| 4 F5 | CrewAI sync bridge — asyncio.run() | `tests/unit/adapters/test_crewai_runner.py` |
+| 4 F6 | Streaming retry — ConnectError/TimeoutException | `tests/unit/model_gateway/test_provider_retry.py` |
+| 5 | Private access elimination; stale exception logging | existing tests extended |
+| 6 | CapabilityRegistry bootstrap; TaskClassifier; conversation_agent routing | `tests/unit/planning/test_classifier.py` |
+| 7 | Parallel context assembly; direct runner parallel tool fanout | `tests/unit/runtime/test_context_parallel.py`, `tests/unit/adapters/test_direct_runner_parallel.py` |
+| 8 | Mode registry (7 modes); SkillActivatedEvent; MentalModelCompiledEvent | `tests/unit/runtime/test_mode_registry.py`, `tests/unit/strategy/test_skills.py`, `tests/unit/strategy/test_mental_models.py` |
+| 11.1 | import_session() | `tests/unit/runtime/test_session_import_export.py` |
+| 11.4 | Circuit breaker — all state transitions | `tests/unit/model_gateway/test_circuit_breaker.py` |
+| 11.5 | Symlink escape prevention | `tests/unit/runtime/test_policy.py::TestPathCheck` |
+| 11.7 | stream_generate in _RunnerModelGateway | `tests/unit/adapters/test_direct_runner_parallel.py` |
+| 12 | TUI: timestamps, keyboard shortcuts, token bar, user_message errors | `tests/unit/tui/test_streaming_block.py`, `test_approval_block.py`, `test_context_bar.py` |
+| 13.1 | Bootstrap unit tests | `tests/unit/bootstrap/test_bootstrap_unit.py` |
+| 13.4 | ContextTruncatedEvent emission | `tests/unit/runtime/test_context.py::test_token_budget_emits_context_truncated_event` |

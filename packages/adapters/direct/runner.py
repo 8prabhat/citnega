@@ -76,8 +76,19 @@ class _RunnerModelGateway:
         return await provider.generate(req)
 
     async def stream_generate(self, request):
-        # Specialists called by the runner use generate(); streaming not needed here.
-        raise NotImplementedError("stream_generate not supported in _RunnerModelGateway")
+        effective_id = request.model_id or self._model_id
+        try:
+            provider = self._factory.build(effective_id)
+        except KeyError:
+            entries = self._factory.list_entries()
+            if not entries:
+                return
+            provider = self._factory.build(entries[0].id)
+            effective_id = entries[0].id
+
+        req = request.model_copy(update={"model_id": effective_id, "stream": True})
+        async for chunk in provider.stream_generate(req):
+            yield chunk
 
     async def list_models(self):
         return []

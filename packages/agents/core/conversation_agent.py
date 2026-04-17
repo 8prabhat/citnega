@@ -120,6 +120,11 @@ class ConversationAgent(BaseCoreAgent):
     # ── Entry point ───────────────────────────────────────────────────────────
 
     async def _execute(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
+        if self._nextgen_planning_enabled():
+            return await self._execute_nextgen(input, context)
+        return await self._execute_legacy(input, context)
+
+    async def _execute_legacy(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
         router = self._get_peer("router_agent")
 
         if router is None or context.model_gateway is None:
@@ -152,6 +157,44 @@ class ConversationAgent(BaseCoreAgent):
 
         if accumulated:
             return await self._synthesise(input, accumulated, context)
+
+        return await self._direct_response(input, context)
+
+    async def _execute_nextgen(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
+        from citnega.packages.planning.classifier import TaskClassifier
+
+        capability_registry = getattr(context.session_config, "_capability_registry", None)
+        classification = TaskClassifier().classify(input.user_input, registry=capability_registry)
+
+        if classification.path == "direct_answer":
+            return await self._direct_response(input, context)
+
+        if classification.path == "compiled_plan":
+            planner = self._get_peer("planner_agent")
+            if planner is not None:
+                planned = await self._invoke_planner(planner, input, context, classification.capability_id or "")
+                if planned is not None:
+                    return planned
+            return await self._direct_response(input, context)
+
+        # path == "specialist"
+        if classification.capability_id:
+            specialist = self._get_peer(classification.capability_id)
+            if specialist is not None:
+                result_text = await self._invoke_specialist(specialist, input.user_input, context)
+                if result_text:
+                    return ConversationOutput(response=result_text, routed_to=classification.capability_id)
+
+        # Fallback: try router for specialist discovery
+        router = self._get_peer("router_agent")
+        if router is not None:
+            route = await self._ask_router(router, input.user_input, [], context)
+            if route is not None and not route.is_complete and route.agent not in {"none", self.name, "conversation_agent", ""}:
+                specialist = self._get_peer(route.agent)
+                if specialist is not None:
+                    result_text = await self._invoke_specialist(specialist, input.user_input, context)
+                    if result_text:
+                        return ConversationOutput(response=result_text, routed_to=route.agent)
 
         return await self._direct_response(input, context)
 
@@ -273,3 +316,38 @@ class ConversationAgent(BaseCoreAgent):
             ModelRequest(messages=messages, stream=False, temperature=0.7)
         )
         return ConversationOutput(response=response.content, routed_to=None)
+
+    async def _invoke_planner(
+        self,
+        planner: IStreamable,
+        input: ConversationInput,
+        context: CallContext,
+        preferred_capability: str,
+    ) -> ConversationOutput | None:
+        from citnega.packages.agents.core.planner_agent import PlannerInput
+
+        child_ctx = context.child(self.name, self.callable_type)
+        planner_input = PlannerInput(
+            goal=input.user_input,
+            constraints="",
+            max_steps=6,
+            preferred_capability=preferred_capability,
+        )
+        result = await planner.invoke(planner_input, child_ctx)
+        if not result.success or result.output is None:
+            return None
+        plan_steps = list(getattr(result.output, "plan_steps", []))
+        return ConversationOutput(
+            response=result.output.response,
+            routed_to="planner_agent",
+            tool_calls=plan_steps,
+        )
+
+    @staticmethod
+    def _nextgen_planning_enabled() -> bool:
+        try:
+            from citnega.packages.config.loaders import load_settings
+
+            return load_settings().nextgen.planning_enabled
+        except Exception:
+            return False

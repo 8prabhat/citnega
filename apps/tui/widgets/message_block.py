@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from textual.widget import Widget
@@ -10,7 +11,8 @@ from textual.widgets import Label, Markdown, Static
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-_ROLE_LABEL = {"user": "You", "assistant": "Citnega", "system": "System"}
+# Short role badge shown inline at the top of each block
+_ROLE_BADGE = {"user": "▸ you", "assistant": "◈ citnega", "system": "⊘ system"}
 
 
 class MessageBlock(Widget):
@@ -29,8 +31,9 @@ class MessageBlock(Widget):
     DEFAULT_CSS = """
     MessageBlock {
         height: auto;
-        margin: 0 0 1 0;
+        margin: 0 0 0 0;
         padding: 0 1 1 1;
+        border-top: solid $panel-lighten-1;
     }
 
     /* ── User bubble ──────────────────────────────────────── */
@@ -72,10 +75,19 @@ class MessageBlock(Widget):
     }
 
     /* ── Shared label / content ───────────────────────────── */
-    MessageBlock .role-label {
-        text-style: bold;
+    MessageBlock .role-header {
+        layout: horizontal;
         height: 1;
         margin-bottom: 0;
+    }
+    MessageBlock .role-label {
+        text-style: bold;
+        width: 1fr;
+    }
+    MessageBlock .timestamp {
+        color: $text-disabled;
+        text-style: dim;
+        content-align: right middle;
     }
     MessageBlock .content {
         height: auto;
@@ -94,9 +106,13 @@ class MessageBlock(Widget):
         super().__init__(classes=role, **kwargs)
         self._role = role
         self._content = content
+        self._timestamp = datetime.now().strftime("%H:%M")
 
     def compose(self) -> ComposeResult:
-        yield Label(_ROLE_LABEL.get(self._role, self._role), classes="role-label")
+        badge = _ROLE_BADGE.get(self._role, self._role)
+        with Widget(classes="role-header"):
+            yield Label(badge, classes="role-label")
+            yield Label(self._timestamp, classes="timestamp")
         if self._role == "assistant":
             yield Markdown(self._content, classes="content")
         else:

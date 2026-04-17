@@ -17,6 +17,12 @@ max_supervisor_rounds        = 3
 shutdown_drain_timeout_seconds = 5.0
 # How many times to retry a failed provider request with exponential backoff.
 provider_max_retries         = 3
+# How many times to retry a streaming request on connection/timeout errors.
+streaming_max_retries        = 2
+# Circuit breaker: open after this many consecutive failures.
+circuit_breaker_threshold    = 5
+# Circuit breaker: seconds before transitioning OPEN → HALF_OPEN.
+circuit_breaker_cooldown_seconds = 30.0
 
 [session]
 max_context_tokens       = 8192
@@ -218,4 +224,4 @@ planning_enabled = false
 execution_enabled = false
 workflows_enabled = false
 skills_enabled = false
-parallel_execution_enabled = false
+parallel_execution_enabled = true

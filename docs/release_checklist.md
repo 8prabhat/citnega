@@ -47,8 +47,8 @@ by the responsible area owner.
 
 - [ ] FR-UX-001: Session create / list / rename / delete works in both CLI and TUI
 - [ ] FR-UX-002: Run cancel and tool approval work in both CLI and TUI
-- [ ] FR-UX-003: All 19 slash commands registered; `/help` lists them all
-- [ ] Workspace commands: `/setworkfolder`, `/createtool`, `/createagent`, `/createworkflow`, `/refresh` all functional in TUI
+- [ ] FR-UX-003: All 20 slash commands registered; `/help` lists them all
+- [ ] Workspace commands: `/setworkfolder`, `/createtool`, `/createagent`, `/createworkflow`, `/createskill`, `/refresh` all functional in TUI
 - [ ] `citnega replay --run-id <id>` produces readable timeline output
 - [ ] `citnega replay --run-id <id> --json` produces valid JSONL
 
@@ -134,3 +134,24 @@ Release is **approved** when all three rows are checked and all gate items above
 - [ ] FR-EVID-006: benchmark history/trend evidence generated (`docs/evidence/benchmark_matrix_history.jsonl`)
 - [ ] FR-EVID-007: signed benchmark publication evidence generated (`docs/evidence/benchmark_publication_latest.json`)
 - [ ] `docs/spec_9plus_tracker.md` updated with current phase status
+
+---
+
+## J. Nextgen Runtime Checklist  _(Architecture owner — Phases 4–14)_
+
+- [x] Phase 4 F5: CrewAI sync bridge uses `asyncio.run()` — no deadlock on nested loops
+- [x] Phase 4 F6: `BaseProvider.stream_generate()` retries on ConnectError/TimeoutException
+- [x] Phase 5: No `except Exception: pass` in core runtime paths; no private-attr reach-through across module boundaries
+- [x] Phase 6: `CapabilityRegistry` built at bootstrap; `TaskClassifier` routes turns; `conversation_agent` uses nextgen path
+- [x] Phase 7: Context assembly runs independent handlers in parallel; tool calls fan out via `asyncio.TaskGroup`
+- [x] Phase 8: All 7 modes registered; `SkillActivatedEvent` and `MentalModelCompiledEvent` emitted
+- [x] Phase 11.1: `import_session()` implemented — handles JSONL, JSON object, JSON list
+- [x] Phase 11.4: Circuit breaker per provider (CLOSED/OPEN/HALF_OPEN); wired into `_with_retry()`
+- [x] Phase 11.5: Symlink escape prevention — `path_check` resolves symlinks before `_is_within()` check
+- [x] Phase 11.7: `_RunnerModelGateway.stream_generate()` forwards to provider
+- [x] Phase 12: Timestamps + token count in StreamingBlock; y/n/a/Esc keyboard shortcuts in ApprovalBlock; token budget bar in ContextBar; `user_message` on all error types
+- [x] Phase 13.1: Bootstrap unit tests — `_select_adapter` all keys + import/init error paths; `_build_model_gateway` local_only exit
+- [x] Phase 13.4: `ContextTruncatedEvent` emission tested with injected emitter
+- [ ] Phase 13.2: Golden scenario integration tests (GS-01 through GS-07)
+- [ ] Phase 13.3: Parallel execution race + determinism tests
+- [ ] Phase 13.5: Performance regression tests

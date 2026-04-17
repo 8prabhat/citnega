@@ -40,6 +40,8 @@ from citnega.packages.shared.errors import (
 )
 
 if TYPE_CHECKING:
+    from citnega.packages.capabilities.registry import CapabilityRegistry
+    from citnega.packages.execution.engine import ExecutionEngine
     from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
@@ -88,6 +90,8 @@ class CoreRuntime(IRuntime):
         event_emitter: EventEmitter,
         callable_registry: BaseRegistry[IInvocable],
         model_gateway: object | None = None,
+        capability_registry: CapabilityRegistry | None = None,
+        execution_engine: ExecutionEngine | None = None,
     ) -> None:
         self._sessions = session_manager
         self._runs = run_manager
@@ -96,6 +100,8 @@ class CoreRuntime(IRuntime):
         self._emitter = event_emitter
         self._registry = callable_registry
         self._model_gateway = model_gateway
+        self._capability_registry = capability_registry
+        self._execution_engine = execution_engine
         self._runners: dict[str, IFrameworkRunner] = {}
 
         # Per-session lock: only one active run at a time per session
@@ -251,8 +257,8 @@ class CoreRuntime(IRuntime):
                             reason="cancelled",
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_cancel_state_transition_failed", run_id=run_id, error=str(_inner))
             raise
 
         except CitnegaRuntimeError as exc:
@@ -277,8 +283,8 @@ class CoreRuntime(IRuntime):
                             reason=str(exc),
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_error_state_transition_failed", run_id=run_id, error=str(_inner))
 
         except Exception as exc:
             _terminal[0] = ("failed", str(exc))
@@ -301,8 +307,8 @@ class CoreRuntime(IRuntime):
                             reason=str(exc),
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_unhandled_state_transition_failed", run_id=run_id, error=str(_inner))
 
         finally:
             # Emit terminal reason regardless of outcome.
@@ -445,7 +451,7 @@ class CoreRuntime(IRuntime):
 
     async def save_session(self, session: Session) -> None:
         """Persist a modified session record."""
-        await self._sessions._repo.save(session)
+        await self._sessions.save(session)
 
     async def get_run_summary(self, run_id: str) -> RunSummary | None:
         """Return a run summary, or None if not found."""
@@ -466,6 +472,11 @@ class CoreRuntime(IRuntime):
     def callable_registry(self) -> BaseRegistry[IInvocable]:
         """The unified callable registry."""
         return self._registry
+
+    @property
+    def capability_registry(self) -> CapabilityRegistry | None:
+        """The capability registry (may be None if not built at bootstrap)."""
+        return self._capability_registry
 
     def get_runner(self, session_id: str) -> IFrameworkRunner | None:
         return self._runners.get(session_id)

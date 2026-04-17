@@ -72,3 +72,60 @@ def test_cannot_fan_out_conflicting_workspace_paths() -> None:
     ]
 
     assert runner._can_fan_out_tool_calls(pending) is False
+
+
+# ── _RunnerModelGateway.stream_generate ───────────────────────────────────────
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+@pytest.mark.asyncio
+async def test_runner_gateway_stream_generate_forwards_chunks() -> None:
+    from citnega.packages.adapters.direct.runner import _RunnerModelGateway
+    from citnega.packages.protocol.models.model_gateway import ModelChunk, ModelRequest
+
+    chunk1 = ModelChunk(content="Hello")
+    chunk2 = ModelChunk(content=" world")
+
+    async def _fake_stream(req):
+        yield chunk1
+        yield chunk2
+
+    factory = MagicMock()
+    provider = MagicMock()
+    provider.stream_generate = _fake_stream
+    factory.build.return_value = provider
+
+    gw = _RunnerModelGateway(factory, "test-model")
+    req = ModelRequest(model_id="test-model", messages=[])
+
+    results = [c async for c in gw.stream_generate(req)]
+    assert results == [chunk1, chunk2]
+
+
+@pytest.mark.asyncio
+async def test_runner_gateway_stream_generate_fallback_to_first_model() -> None:
+    from citnega.packages.adapters.direct.runner import _RunnerModelGateway
+    from citnega.packages.protocol.models.model_gateway import ModelChunk, ModelRequest
+    from citnega.packages.model_gateway.yaml_config import ModelEntry
+
+    async def _fake_stream(req):
+        yield ModelChunk(content="ok")
+
+    provider = MagicMock()
+    provider.stream_generate = _fake_stream
+
+    entry = MagicMock()
+    entry.id = "fallback-model"
+
+    factory = MagicMock()
+    factory.build.side_effect = [KeyError("unknown"), provider]
+    factory.list_entries.return_value = [entry]
+
+    gw = _RunnerModelGateway(factory, "unknown-model")
+    req = ModelRequest(model_id="unknown-model", messages=[])
+
+    results = [c async for c in gw.stream_generate(req)]
+    assert len(results) == 1
+    assert results[0].content == "ok"

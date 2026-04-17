@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime
 from typing import TYPE_CHECKING
 
+from textual.containers import Horizontal
 from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
 
@@ -30,9 +32,10 @@ class StreamingBlock(Widget):
     DEFAULT_CSS = """
     StreamingBlock {
         height: auto;
-        margin: 0 0 1 0;
+        margin: 0 0 0 0;
         padding: 0 1 1 1;
         border-left: thick $success;
+        border-top: solid $panel-lighten-1;
         background: $surface;
     }
     StreamingBlock:focus {
@@ -40,10 +43,20 @@ class StreamingBlock(Widget):
         background: $boost;
         outline: none;
     }
+    StreamingBlock .role-header {
+        layout: horizontal;
+        height: 1;
+        margin-bottom: 0;
+    }
     StreamingBlock .role-label {
         color: $success;
         text-style: bold;
-        height: 1;
+        width: 1fr;
+    }
+    StreamingBlock .timestamp {
+        color: $text-disabled;
+        text-style: dim;
+        content-align: right middle;
     }
     StreamingBlock .stream-text {
         height: auto;
@@ -67,20 +80,29 @@ class StreamingBlock(Widget):
         super().__init__(**kwargs)
         self._buffer = ""
         self._finalized = False
+        self._token_count = 0
+        self._timestamp = datetime.now().strftime("%H:%M")
 
     def on_click(self) -> None:
         """Clicking the block focuses it so Ctrl+Y can copy it."""
         self.focus()
 
     def compose(self) -> ComposeResult:
-        yield Label("Citnega", classes="role-label")
+        with Horizontal(classes="role-header"):
+            yield Label("◈ citnega", classes="role-label", id="role-label")
+            yield Label(self._timestamp, classes="timestamp", id="stream-ts")
         yield Static("", id="stream-text", classes="stream-text", markup=False)
         yield Label("▌", classes="cursor", id="stream-cursor")
 
     def append_token(self, token: str) -> None:
         self._buffer += token
+        self._token_count += len(token.split())
         with contextlib.suppress(Exception):
             self.query_one("#stream-text", Static).update(self._buffer)
+        with contextlib.suppress(Exception):
+            self.query_one("#role-label", Label).update(
+                f"◈ citnega  {self._token_count}t"
+            )
 
     async def finalize(self) -> None:
         if self._finalized:

@@ -28,7 +28,6 @@ from textual.widgets import Label
 
 from citnega.apps.tui.widgets.context_bar import ContextBar
 from citnega.apps.tui.widgets.smart_input import SmartInput
-from citnega.apps.tui.widgets.status_bar import StatusBar
 from citnega.apps.tui.widgets.welcome_banner import WelcomeBanner
 
 if TYPE_CHECKING:
@@ -94,13 +93,9 @@ class ChatScreen(Screen):
         text-style: italic;
     }
 
-    /* ── Context bar (above input) ─────────────────────────── */
-    /* height:1 is set inside the widget's own DEFAULT_CSS;    */
-    /* background: $panel-darken-1 provides visual separation. */
-
     /* ── Smart input ───────────────────────────────────────── */
     #chat-input {
-        height: 3;
+        height: 2;
         border-top: solid $panel-lighten-2;
         border-left: none;
         border-right: none;
@@ -112,6 +107,9 @@ class ChatScreen(Screen):
         border-top: solid $accent;
         background: $boost;
     }
+
+    /* ── Unified status bar (below input) ──────────────────── */
+    /* ContextBar is positioned here; height:1 from its own CSS */
 
     #empty-hint {
         color: $text-disabled;
@@ -130,12 +128,11 @@ class ChatScreen(Screen):
                 yield Label("⚙  Tools", id="tools-panel-header")
                 with VerticalScroll(id="tools-panel"):
                     yield Label("No active tools", id="tools-empty")
-        yield ContextBar(id="context-bar")
         yield SmartInput(
             placeholder="Ask anything…   ↑↓ history   / for commands",
             id="chat-input",
         )
-        yield StatusBar()
+        yield ContextBar(id="context-bar")
 
     def on_mount(self) -> None:
         self.query_one("#chat-input", SmartInput).focus()

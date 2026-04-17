@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from citnega.apps.tui.slash_commands.workspace import WizardState
 
@@ -98,3 +102,68 @@ class TestWizardIntercept:
         assert ws.step_name == "my_step"
         assert ws.on_input is _noop
         assert ws.prompt == "Enter your name:"
+
+
+class _FakeSlashController(_FakeController):
+    def __init__(self):
+        super().__init__()
+        self.pickers: list[tuple[str, list[tuple[str, str]]]] = []
+
+    async def _append_picker(self, title, options, on_select, on_dismiss):
+        self.pickers.append((title, options))
+        await on_select("done", "Done")
+
+
+class _FakeService:
+    def list_tools(self):
+        return [SimpleNamespace(name="repo_map"), SimpleNamespace(name="search_files")]
+
+    def list_agents(self):
+        return [SimpleNamespace(name="research_agent")]
+
+
+class TestCreateSkillWizard:
+    @pytest.mark.asyncio
+    async def test_createskill_initializes_shared_keys(self) -> None:
+        from citnega.apps.tui.slash_commands.workspace import CreateSkillCommand
+
+        ctrl = _FakeSlashController()
+        cmd = CreateSkillCommand(service=_FakeService())
+        await cmd.execute([], ctrl)
+
+        assert ctrl._wizard_data["tool_whitelist"] == []
+        assert ctrl._wizard_data["sub_agents"] == []
+
+    @pytest.mark.asyncio
+    async def test_createskill_flow_reaches_writer_without_keyerror(self) -> None:
+        from citnega.apps.tui.slash_commands.workspace import CreateSkillCommand
+
+        ctrl = _FakeSlashController()
+        cmd = CreateSkillCommand(service=_FakeService())
+        await cmd.execute([], ctrl)
+        await cmd._on_name("release_readiness", ctrl)
+        await cmd._on_desc("optimize release quality", ctrl)
+
+        writer_mock = AsyncMock()
+        with patch(
+            "citnega.apps.tui.slash_commands.workspace._write_skill_bundle",
+            writer_mock,
+        ):
+            await cmd._on_triggers("release, qa", ctrl)
+
+        writer_mock.assert_awaited_once()
+
+
+def test_slash_registry_includes_workspace_skill_command() -> None:
+    from citnega.apps.tui.controllers.chat_controller import _build_slash_registry
+
+    registry = _build_slash_registry(
+        app=MagicMock(),
+        service=MagicMock(),
+        session_id="s1",
+        controller=MagicMock(),
+    )
+
+    assert "createskill" in registry
+    assert "createworkflow" in registry
+    assert len(registry) == 20

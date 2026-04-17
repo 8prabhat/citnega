@@ -46,3 +46,23 @@ async def test_config_default_model_used_when_session_model_missing(tmp_path) ->
     runner = await adapter.create_runner(session, callables=[], model_gateway=None)
 
     assert runner._conv.active_model_id == "gemma4-12b-local"
+
+
+def test_list_models_returns_typed_catalog(tmp_path) -> None:
+    adapter = DirectModelAdapter(sessions_dir=tmp_path)
+    models = adapter.list_models()
+    assert models
+    assert all(item.model_id for item in models)
+
+
+def test_read_session_conversation_field_from_disk(tmp_path) -> None:
+    adapter = DirectModelAdapter(sessions_dir=tmp_path)
+    conversation_file = tmp_path / "s1" / "conversation.json"
+    conversation_file.parent.mkdir(parents=True)
+    conversation_file.write_text(
+        '{"messages": [{"role": "user", "content": "hello"}], "tool_history": []}',
+        encoding="utf-8",
+    )
+
+    messages = adapter.read_session_conversation_field("s1", "messages")
+    assert messages == [{"role": "user", "content": "hello"}]

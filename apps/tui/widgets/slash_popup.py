@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 class SlashCommandPopup(Widget):
     """
-    A floating popup listing available slash commands.
+    A floating popup listing available slash commands with descriptions.
 
     Dismissed by Escape or clicking outside.
     Selecting an item inserts the command into the chat input.
@@ -25,8 +25,8 @@ class SlashCommandPopup(Widget):
         layer: overlay;
         dock: bottom;
         height: auto;
-        max-height: 12;
-        width: 40;
+        max-height: 14;
+        width: 58;
         margin-bottom: 4;
         margin-left: 1;
         border: solid $accent;
@@ -41,20 +41,30 @@ class SlashCommandPopup(Widget):
         Binding("escape", "dismiss", "Dismiss"),
     ]
 
-    def __init__(self, commands: list[str], **kwargs) -> None:
+    def __init__(self, commands: list[tuple[str, str]], **kwargs) -> None:
+        """
+        Args:
+            commands: List of ``(name, description)`` tuples.
+        """
         super().__init__(**kwargs)
         self._commands = commands
 
     def compose(self) -> ComposeResult:
-        items = [ListItem(Label(f"/{cmd}"), id=f"slash-{cmd}") for cmd in self._commands]
+        items = []
+        for name, desc in self._commands:
+            # Build a single line: "/name  — short description"
+            desc_short = desc[:36] if desc else ""
+            line = f"/{name:<12}  {desc_short}" if desc_short else f"/{name}"
+            items.append(ListItem(Label(line), id=f"slash-{name}"))
         yield ListView(*items, id="popup-list")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """User selected a command — insert it into the chat input."""
         from textual.widgets import Input
 
-        cmd_label = event.item.query_one(Label).renderable
-        cmd_text = str(cmd_label)
+        item_id = event.item.id or ""
+        cmd_name = item_id.removeprefix("slash-")
+        cmd_text = f"/{cmd_name}"
 
         try:
             inp = self.app.query_one("#chat-input", Input)

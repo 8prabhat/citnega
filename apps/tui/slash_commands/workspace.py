@@ -1,5 +1,5 @@
 """
-Workspace slash commands — /setworkfolder, /refresh, /createtool, /createagent, /createworkflow.
+Workspace slash commands — /setworkfolder, /refresh, /createtool, /createagent, /createworkflow, /createskill.
 
 These commands let users:
   - Set the workfolder where user-created artifacts live (/setworkfolder).
@@ -111,8 +111,8 @@ class SetWorkfolderCommand(ISlashCommand):
         await app_context._append_message(
             "system",
             f"Workfolder set to: {path}\n"
-            f"Subdirectories created: agents/, tools/, workflows/\n"
-            f"Use /createtool, /createagent, /createworkflow to add new artifacts,\n"
+            f"Subdirectories created: agents/, tools/, workflows/, skills/\n"
+            f"Use /createtool, /createagent, /createworkflow, /createskill to add artifacts,\n"
             f"then /refresh to reload them.",
         )
 
@@ -131,7 +131,6 @@ class RefreshCommand(ISlashCommand):
 
     async def execute(self, args: list[str], app_context: Any) -> None:
         from citnega.packages.config.loaders import load_settings
-        from citnega.packages.workspace.loader import DynamicLoader
 
         settings = load_settings()
         workfolder_str = settings.workspace.workfolder_path or os.getcwd()
@@ -144,12 +143,7 @@ class RefreshCommand(ISlashCommand):
             )
             return
 
-        loader = DynamicLoader(
-            enforcer=getattr(self._service, "_enforcer", None),
-            emitter=getattr(self._service, "_emitter", None),
-            tracer=getattr(self._service, "_tracer", None),
-            tool_registry=getattr(self._service, "_tool_registry", {}),
-        )
+        loader = self._service.create_dynamic_loader()
 
         try:
             result = await self._service.hot_reload_workfolder(workfolder, loader)
@@ -297,7 +291,7 @@ class CreateAgentCommand(ISlashCommand):
 
 class CreateWorkflowCommand(ISlashCommand):
     name = "createworkflow"
-    help_text = "Interactively create a workflow that orchestrates agents and tools."
+    help_text = "Interactively create a YAML workflow template for plan execution."
 
     def __init__(self, service: Any) -> None:
         self._service = service
@@ -335,7 +329,57 @@ class CreateWorkflowCommand(ISlashCommand):
         await _ask_sub_agents(ctrl, self._service, self._finalize)
 
     async def _finalize(self, ctrl: Any) -> None:
-        await _generate_and_register(ctrl, self._service)
+        await _write_workflow_template(ctrl, self._service)
+
+
+class CreateSkillCommand(ISlashCommand):
+    name = "createskill"
+    help_text = "Interactively create a SKILL.md bundle for planning guidance."
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], app_context: Any) -> None:
+        app_context._wizard_data = {
+            "kind": "skill",
+            "tool_whitelist": [],
+            "sub_agents": [],
+        }
+        await app_context._append_message(
+            "system",
+            "Creating a new skill bundle.\n"
+            "Step 1/4 — Enter a snake_case name (e.g. release_readiness):",
+        )
+        app_context._pending_wizard = WizardState("skill_name", self._on_name)
+
+    async def _on_name(self, text: str, ctrl: Any) -> None:
+        name = text.strip().lower().replace(" ", "_")
+        if not name.isidentifier():
+            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
+            ctrl._pending_wizard = WizardState("skill_name", self._on_name)
+            return
+        ctrl._wizard_data["name"] = name
+        await ctrl._append_message("system", "Step 2/4 — Describe what this skill should optimize:")
+        ctrl._pending_wizard = WizardState("skill_desc", self._on_desc)
+
+    async def _on_desc(self, text: str, ctrl: Any) -> None:
+        ctrl._wizard_data["description"] = text.strip()
+        await ctrl._append_message(
+            "system",
+            "Step 3/4 — Optional comma-separated trigger phrases (or press Enter to skip):",
+        )
+        ctrl._pending_wizard = WizardState("skill_triggers", self._on_triggers)
+
+    async def _on_triggers(self, text: str, ctrl: Any) -> None:
+        raw = [item.strip() for item in text.split(",") if item.strip()]
+        ctrl._wizard_data["triggers"] = raw
+        await _ask_tool_whitelist(ctrl, self._service, self._on_tools_done)
+
+    async def _on_tools_done(self, ctrl: Any) -> None:
+        await _ask_sub_agents(ctrl, self._service, self._finalize)
+
+    async def _finalize(self, ctrl: Any) -> None:
+        await _write_skill_bundle(ctrl, self._service)
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +490,6 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
 
     from citnega.apps.tui.widgets.coding_block import CodingBlock
     from citnega.packages.config.loaders import load_settings
-    from citnega.packages.workspace.loader import DynamicLoader
     from citnega.packages.workspace.scaffold import ScaffoldGenerator
     from citnega.packages.workspace.templates import ScaffoldSpec
     from citnega.packages.workspace.tester import CallableTester
@@ -494,12 +537,7 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
         await ctrl._append_message("system", msg)
 
     # ── Shared deps ────────────────────────────────────────────────────────────
-    loader = DynamicLoader(
-        enforcer=getattr(service, "_enforcer", None),
-        emitter=getattr(service, "_emitter", None),
-        tracer=getattr(service, "_tracer", None),
-        tool_registry=getattr(service, "_tool_registry", {}),
-    )
+    loader = service.create_dynamic_loader()
     generator = ScaffoldGenerator(model_gateway=getattr(service, "_model_gateway", None))
     tester = CallableTester()
 
@@ -596,6 +634,117 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
     )
 
     _set_run_state(ctrl, "idle")
+
+
+async def _write_workflow_template(ctrl: Any, service: Any) -> None:
+    """Write a workflow YAML template instead of a Python workflow callable."""
+    from citnega.packages.config.loaders import load_settings
+    from citnega.packages.workspace.writer import WorkspaceWriter
+
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except Exception as exc:
+        await ctrl._append_message("system", f"Workflow template generation requires PyYAML: {exc}")
+        return
+
+    data = ctrl._wizard_data
+    name = data["name"]
+    description = data.get("description", "").strip() or f"{name} workflow"
+    capabilities = list(dict.fromkeys([*data.get("tool_whitelist", []), *data.get("sub_agents", [])]))
+    if not capabilities:
+        await ctrl._append_message(
+            "system",
+            "No tools or agents selected. Please include at least one capability for the workflow.",
+        )
+        return
+
+    steps = []
+    for index, capability in enumerate(capabilities, start=1):
+        step_id = f"step{index}_{capability.replace('-', '_')}"
+        steps.append(
+            {
+                "step_id": step_id,
+                "capability_id": capability,
+                "task": "Execute {objective}",
+                "depends_on": [] if index == 1 else [steps[index - 2]["step_id"]],
+                "can_run_in_parallel": False,
+                "execution_target": "local",
+            }
+        )
+
+    template = {
+        "name": name,
+        "description": description,
+        "variables": {"objective": "High-level objective provided at compile time."},
+        "supported_modes": ["plan", "code", "explore", "research", "review", "operate"],
+        "max_parallelism": 1,
+        "steps": steps,
+    }
+    source = yaml.safe_dump(template, sort_keys=False, allow_unicode=False)
+
+    settings = load_settings()
+    workfolder = Path(settings.workspace.workfolder_path or os.getcwd())
+    writer = WorkspaceWriter(workfolder)
+    writer.ensure_dirs()
+    written_path = writer.write_workflow_template(name, source)
+
+    if hasattr(service, "invalidate_capability_cache"):
+        service.invalidate_capability_cache()
+
+    await ctrl._append_message(
+        "system",
+        f"Workflow template '{name}' created successfully.\nFile: {written_path}",
+    )
+
+
+async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
+    """Write a SKILL.md bundle with structured front matter."""
+    from citnega.packages.config.loaders import load_settings
+    from citnega.packages.workspace.writer import WorkspaceWriter
+
+    data = ctrl._wizard_data
+    name = data["name"]
+    description = data.get("description", "").strip() or name
+    triggers = data.get("triggers", [])
+    preferred_tools = data.get("tool_whitelist", [])
+    preferred_agents = data.get("sub_agents", [])
+
+    front_matter = [
+        "---",
+        f"name: {name}",
+        f"description: {description}",
+        f"triggers: {triggers if triggers else []}",
+        f"preferred_tools: {preferred_tools if preferred_tools else []}",
+        f"preferred_agents: {preferred_agents if preferred_agents else []}",
+        "supported_modes: [chat, plan, explore, research, code, review, operate]",
+        "tags: []",
+        "---",
+        "",
+    ]
+    body = [
+        f"# Skill: {name}",
+        "",
+        description,
+        "",
+        "## Guidance",
+        "- Use this skill to influence planning strategy and callable choice.",
+        "- Prefer deterministic tools before broad reasoning steps when feasible.",
+    ]
+    source = "\n".join(front_matter + body).strip() + "\n"
+
+    settings = load_settings()
+    workfolder = Path(settings.workspace.workfolder_path or os.getcwd())
+    writer = WorkspaceWriter(workfolder)
+    writer.ensure_dirs()
+    written_path = writer.write_skill(name, source)
+
+    if hasattr(service, "invalidate_capability_cache"):
+        service.invalidate_capability_cache()
+
+    await ctrl._append_message(
+        "system",
+        f"Skill bundle '{name}' created successfully.\nFile: {written_path}",
+    )
 
 
 def _set_run_state(ctrl: Any, state: str) -> None:

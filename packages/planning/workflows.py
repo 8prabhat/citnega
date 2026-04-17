@@ -8,15 +8,19 @@ import yaml  # type: ignore[import-untyped]
 from citnega.packages.planning.models import WorkflowTemplate
 
 
+def load_workflow_template(path: Path) -> WorkflowTemplate:
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data.setdefault("name", path.stem)
+    data.setdefault("source_path", str(path))
+    return WorkflowTemplate.model_validate(data)
+
+
 def load_workflow_templates(workflows_root: Path) -> dict[str, WorkflowTemplate]:
     if not workflows_root.exists():
         return {}
     templates: dict[str, WorkflowTemplate] = {}
     for path in sorted(list(workflows_root.glob("*.yaml")) + list(workflows_root.glob("*.yml"))):
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        data.setdefault("name", path.stem)
-        data.setdefault("source_path", str(path))
-        template = WorkflowTemplate.model_validate(data)
+        template = load_workflow_template(path)
         templates[template.name] = template
     return templates
 

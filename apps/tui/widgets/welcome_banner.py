@@ -1,27 +1,26 @@
-"""WelcomeBanner — branded splash shown in the empty chat area on startup."""
+"""WelcomeBanner — clean splash shown in the empty chat area on startup."""
 
 from __future__ import annotations
 
 from textual.widget import Widget
 from textual.widgets import Static
 
-# ── ASCII art logo (ANSI-Shadow block font) ───────────────────────────────────
-_LOGO = """\
- ██████╗██╗████████╗███╗  ██╗███████╗ ██████╗  █████╗
-██╔════╝██║╚══██╔══╝████╗ ██║██╔════╝██╔════╝ ██╔══██╗
-██║     ██║   ██║   ██╔██╗██║█████╗  ██║  ███╗███████║
-██║     ██║   ██║   ██║╚████║██╔══╝  ██║   ██║██╔══██║
-╚██████╗██║   ██║   ██║ ╚███║███████╗╚██████╔╝██║  ██║
- ╚═════╝╚═╝   ╚═╝   ╚═╝  ╚══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝"""
-
-_TAGLINE = "AGENTIC  :  CO PARTNER"
-_RULE    = "─" * 54
-_HINT    = "Type a message  ·  / for commands  ·  ↑↓ history"
+_LOGO    = "◈  citnega"
+_TAGLINE = "agentic  ·  co-partner"
+_RULE    = "─" * 32
+_HINTS   = [
+    "↵  send message",
+    "/  slash commands",
+    "↑↓ input history",
+    "^K open command palette",
+    "^Y copy last response",
+    "^C quit",
+]
 
 
 class WelcomeBanner(Widget):
     """
-    Full-page welcome graphic shown when the chat is empty.
+    Compact welcome graphic shown when the chat is empty.
 
     Removed automatically by ``_append_message`` (which removes
     ``#empty-hint`` before mounting the first MessageBlock).
@@ -32,7 +31,7 @@ class WelcomeBanner(Widget):
         height: auto;
         width: 1fr;
         align: center middle;
-        padding: 3 2;
+        padding: 4 2;
         content-align: center middle;
     }
     WelcomeBanner #banner-logo {
@@ -40,32 +39,26 @@ class WelcomeBanner(Widget):
         text-style: bold;
         content-align: center middle;
         width: 1fr;
-        height: auto;
+        height: 1;
+        text-style: bold;
     }
-    WelcomeBanner #banner-rule-top {
-        color: $accent;
+    WelcomeBanner #banner-tagline {
+        color: $text-muted;
+        content-align: center middle;
+        width: 1fr;
+        height: 1;
+        margin-top: 0;
+    }
+    WelcomeBanner #banner-rule {
+        color: $panel-lighten-2;
         content-align: center middle;
         width: 1fr;
         height: 1;
         margin-top: 1;
+        margin-bottom: 1;
     }
-    WelcomeBanner #banner-tagline {
-        color: $secondary;
-        text-style: bold;
-        content-align: center middle;
-        width: 1fr;
-        height: 1;
-    }
-    WelcomeBanner #banner-rule-bottom {
-        color: $accent;
-        content-align: center middle;
-        width: 1fr;
-        height: 1;
-        margin-bottom: 2;
-    }
-    WelcomeBanner #banner-hint {
+    WelcomeBanner .banner-hint {
         color: $text-disabled;
-        text-style: italic;
         content-align: center middle;
         width: 1fr;
         height: 1;
@@ -73,8 +66,8 @@ class WelcomeBanner(Widget):
     """
 
     def compose(self):
-        yield Static(_LOGO,     id="banner-logo",        markup=False)
-        yield Static(_RULE,     id="banner-rule-top",    markup=False)
-        yield Static(_TAGLINE,  id="banner-tagline",     markup=False)
-        yield Static(_RULE,     id="banner-rule-bottom", markup=False)
-        yield Static(_HINT,     id="banner-hint",        markup=False)
+        yield Static(_LOGO,    id="banner-logo",    markup=False)
+        yield Static(_TAGLINE, id="banner-tagline", markup=False)
+        yield Static(_RULE,    id="banner-rule",    markup=False)
+        for hint in _HINTS:
+            yield Static(hint, classes="banner-hint", markup=False)

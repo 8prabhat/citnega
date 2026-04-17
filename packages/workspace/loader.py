@@ -119,6 +119,17 @@ class DynamicLoader:
         Custom tools are loaded first so custom agents and workflows receive
         the final tool registry with workfolder overrides already applied.
         """
+        return self._load_workspace(writer, include_python_workflows=True)
+
+    def _load_workspace(
+        self,
+        writer: WorkspaceWriter,
+        *,
+        include_python_workflows: bool,
+    ) -> WorkspaceLoadResult:
+        """
+        Internal workspace loader with explicit legacy-workflow toggle.
+        """
         from citnega.packages.workspace.writer import WorkspaceWriter
 
         assert isinstance(writer, WorkspaceWriter)
@@ -133,8 +144,24 @@ class DynamicLoader:
             tool_registry=merged_tools,
         )
         agents = downstream_loader.load_directory(writer.agents_dir)
-        workflows = downstream_loader.load_directory(writer.workflows_dir)
+        workflows = (
+            downstream_loader.load_directory(writer.workflows_dir)
+            if include_python_workflows
+            else {}
+        )
         return WorkspaceLoadResult(tools=tools, agents=agents, workflows=workflows)
+
+    def load_workspace_with_options(
+        self,
+        writer: WorkspaceWriter,
+        *,
+        include_python_workflows: bool = True,
+    ) -> WorkspaceLoadResult:
+        """Load workspace with options for legacy Python workflow compatibility."""
+        return self._load_workspace(
+            writer,
+            include_python_workflows=include_python_workflows,
+        )
 
     # ── Internals ──────────────────────────────────────────────────────────────
 

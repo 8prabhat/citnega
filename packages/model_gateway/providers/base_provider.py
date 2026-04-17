@@ -34,6 +34,9 @@ _MAX_RETRIES_DEFAULT = 3
 _RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
+_STREAMING_MAX_RETRIES_DEFAULT = 2
+
+
 def _get_max_retries() -> int:
     try:
         from citnega.packages.config.loaders import load_settings
@@ -41,6 +44,15 @@ def _get_max_retries() -> int:
         return load_settings().runtime.provider_max_retries
     except Exception:
         return _MAX_RETRIES_DEFAULT
+
+
+def _get_streaming_max_retries() -> int:
+    try:
+        from citnega.packages.config.loaders import load_settings
+
+        return load_settings().runtime.streaming_max_retries
+    except Exception:
+        return _STREAMING_MAX_RETRIES_DEFAULT
 
 
 class BaseProvider(IModelProvider):
@@ -79,9 +91,27 @@ class BaseProvider(IModelProvider):
         return await self._with_retry(self._do_generate, request)
 
     async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
-        # Streaming is not retried — let callers handle partial responses
-        async for chunk in self._do_stream_generate(request):
-            yield chunk
+        max_retries = _get_streaming_max_retries()
+        last_exc: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                async for chunk in self._do_stream_generate(request):
+                    yield chunk
+                return
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_exc = exc
+                wait = 2 ** (attempt - 1)
+                model_gateway_logger.warning(
+                    "provider_stream_retry",
+                    model_id=self._model_info.model_id,
+                    attempt=attempt,
+                    error=str(exc),
+                    wait=wait,
+                )
+                await asyncio.sleep(wait)
+        raise ProviderHTTPError(
+            f"Provider {self._model_info.model_id} stream failed after {max_retries} retries: {last_exc}"
+        ) from last_exc
 
     async def health_check(self) -> str:
         try:
@@ -99,11 +129,18 @@ class BaseProvider(IModelProvider):
     # ------------------------------------------------------------------
 
     async def _with_retry(self, fn: Callable[[ModelRequest], Awaitable[ModelResponse]], request: ModelRequest) -> ModelResponse:
+        from citnega.packages.model_gateway.circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker(self._model_info.model_id)
+        breaker.raise_if_open()
+
         last_exc: Exception | None = None
         max_retries = _get_max_retries()
         for attempt in range(1, max_retries + 1):
             try:
-                return await fn(request)
+                result = await fn(request)
+                breaker.record_success()
+                return result
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code not in _RETRY_STATUSES:
                     raise ProviderHTTPError(
@@ -111,6 +148,7 @@ class BaseProvider(IModelProvider):
                         f"{self._model_info.model_id}: {exc.response.text[:200]}"
                     ) from exc
                 last_exc = exc
+                breaker.record_failure()
                 wait = 2 ** (attempt - 1)
                 model_gateway_logger.warning(
                     "provider_retry",
@@ -122,6 +160,7 @@ class BaseProvider(IModelProvider):
                 await asyncio.sleep(wait)
             except (httpx.ConnectError, httpx.TimeoutException) as exc:
                 last_exc = exc
+                breaker.record_failure()
                 wait = 2 ** (attempt - 1)
                 model_gateway_logger.warning(
                     "provider_retry_connection",

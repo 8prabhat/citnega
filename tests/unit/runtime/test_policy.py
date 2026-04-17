@@ -212,6 +212,53 @@ class TestPathCheck:
         with pytest.raises(PathNotAllowedError):
             await enforcer.enforce(callable_, Input(), _context())
 
+    @pytest.mark.asyncio
+    async def test_symlink_escape_raises(self, tmp_path: pytest.TempDir) -> None:
+        """A symlink that resolves outside the allowed root must be rejected."""
+        import pathlib
+        from pydantic import BaseModel as BM
+
+        outside = tmp_path.parent / "outside_root"
+        outside.mkdir(exist_ok=True)
+        (outside / "secret.txt").write_text("secret")
+
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+
+        link = allowed / "link.txt"
+        link.symlink_to(outside / "secret.txt")
+
+        class Input(BM):
+            file_path: str = str(link)
+
+        emitter = EventEmitter()
+        enforcer = PolicyEnforcer(emitter, ApprovalManager())
+        callable_ = _fake_callable(_policy(allowed_paths=[str(allowed)], requires_approval=False))
+        with pytest.raises(PathNotAllowedError):
+            await enforcer.enforce(callable_, Input(), _context())
+
+    @pytest.mark.asyncio
+    async def test_symlink_within_allowed_passes(self, tmp_path: pytest.TempDir) -> None:
+        """A symlink that resolves inside the allowed root must be permitted."""
+        import pathlib
+        from pydantic import BaseModel as BM
+
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+        real_file = allowed / "real.txt"
+        real_file.write_text("data")
+
+        link = allowed / "link.txt"
+        link.symlink_to(real_file)
+
+        class Input(BM):
+            file_path: str = str(link)
+
+        emitter = EventEmitter()
+        enforcer = PolicyEnforcer(emitter, ApprovalManager())
+        callable_ = _fake_callable(_policy(allowed_paths=[str(allowed)], requires_approval=False))
+        await enforcer.enforce(callable_, Input(), _context())
+
 
 # ---------------------------------------------------------------------------
 # timeout helpers

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
+from textual.events import Key
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
@@ -77,6 +78,8 @@ class ApprovalBlock(Widget):
             self.approval_id = approval_id
             self.approved = approved
 
+    can_focus = True
+
     def __init__(
         self,
         approval_id: str,
@@ -91,19 +94,37 @@ class ApprovalBlock(Widget):
         self._resolved = False
 
     def compose(self) -> ComposeResult:
-        yield Label("⚠  Approval required", classes="ap-badge")
+        yield Label("⚠  Approval required  [y] approve  [n] deny  [Esc] dismiss", classes="ap-badge")
         yield Label(f"Tool: {self._callable_name}", classes="ap-tool")
         yield Static(self._input_summary, classes="ap-summary", markup=False)
         yield Widget(id="ap-divider")
         with Widget(id="ap-buttons"):
-            yield Button("▶  Approve", variant="success", id="btn-approve")
-            yield Button("✗  Deny", variant="error", id="btn-deny")
+            yield Button("▶  Approve [y]", variant="success", id="btn-approve")
+            yield Button("✗  Deny [n]", variant="error", id="btn-deny")
+
+    def on_mount(self) -> None:
+        self.focus()
+
+    def on_key(self, event: Key) -> None:
+        if self._resolved:
+            return
+        if event.key in ("y", "a"):
+            event.stop()
+            self._resolve(approved=True)
+        elif event.key == "n":
+            event.stop()
+            self._resolve(approved=False)
+        elif event.key == "escape":
+            event.stop()
+            self._resolve(approved=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._resolved:
             return
+        self._resolve(approved=event.button.id == "btn-approve")
+
+    def _resolve(self, *, approved: bool) -> None:
         self._resolved = True
-        approved = event.button.id == "btn-approve"
         self._collapse(approved)
         self.post_message(self.Resolved(self._approval_id, approved))
 
@@ -116,3 +137,5 @@ class ApprovalBlock(Widget):
         for sel in (".ap-tool", ".ap-summary", "#ap-divider", "#ap-buttons"):
             with contextlib.suppress(Exception):
                 self.query_one(sel).display = False
+        with contextlib.suppress(Exception):
+            self.blur()

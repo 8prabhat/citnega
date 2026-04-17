@@ -35,6 +35,12 @@ class RuntimeSettings(BaseSettings):
     shutdown_drain_timeout_seconds: float = 5.0
     # How many times to retry a failed provider request with exponential backoff.
     provider_max_retries: int = 3
+    # How many times to retry a streaming request on connection/timeout errors.
+    streaming_max_retries: int = 2
+    # Circuit breaker: open after this many consecutive failures.
+    circuit_breaker_threshold: int = 5
+    # Circuit breaker: seconds before transitioning OPEN → HALF_OPEN.
+    circuit_breaker_cooldown_seconds: float = 30.0
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_RUNTIME_")
 
@@ -307,7 +313,7 @@ class NextgenSettings(BaseSettings):
     execution_enabled: bool = False
     workflows_enabled: bool = False
     skills_enabled: bool = False
-    parallel_execution_enabled: bool = False
+    parallel_execution_enabled: bool = True
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_NEXTGEN_")
 
