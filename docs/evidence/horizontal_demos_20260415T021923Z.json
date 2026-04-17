@@ -1,0 +1,48 @@
+{
+  "generated_at": "2026-04-15T02:19:25.701496+00:00",
+  "overall_pass": true,
+  "scenarios": [
+    {
+      "id": "WF-01",
+      "title": "Code Refactor + Tests + Release Readiness",
+      "requirement": "Code workflow with orchestration and release safety checks",
+      "pytest_node": "tests/integration/test_orchestrator_golden.py::test_golden_multitool_success",
+      "result": {
+        "command": "/Users/prabhat/Library/CloudStorage/GoogleDrive-888prabhat@gmail.com/My Drive/Work/citnega/.venv/bin/python -m pytest tests/integration/test_orchestrator_golden.py::test_golden_multitool_success -q",
+        "returncode": 0,
+        "duration_ms": 643,
+        "stdout_tail": ".                                                                        [100%]\n",
+        "stderr_tail": "",
+        "passed": true
+      }
+    },
+    {
+      "id": "WF-02",
+      "title": "Research/KB Synthesis and Retrieval",
+      "requirement": "Research-style ingestion and retrieval persisted through KB",
+      "pytest_node": "tests/integration/test_golden_scenarios.py::TestGS06KBIngestionAndRetrieval::test_add_kb_item_and_retrieve",
+      "result": {
+        "command": "/Users/prabhat/Library/CloudStorage/GoogleDrive-888prabhat@gmail.com/My Drive/Work/citnega/.venv/bin/python -m pytest tests/integration/test_golden_scenarios.py::TestGS06KBIngestionAndRetrieval::test_add_kb_item_and_retrieve -q",
+        "returncode": 0,
+        "duration_ms": 795,
+        "stdout_tail": ".                                                                        [100%]\n",
+        "stderr_tail": "",
+        "passed": true
+      }
+    },
+    {
+      "id": "WF-03",
+      "title": "Ops Diagnosis + Remediation + Verification",
+      "requirement": "Security and release ops workflow with remediation guidance",
+      "pytest_node": "tests/integration/test_p2_capabilities.py::test_p2_security_and_release_workflow",
+      "result": {
+        "command": "/Users/prabhat/Library/CloudStorage/GoogleDrive-888prabhat@gmail.com/My Drive/Work/citnega/.venv/bin/python -m pytest tests/integration/test_p2_capabilities.py::test_p2_security_and_release_workflow -q",
+        "returncode": 0,
+        "duration_ms": 648,
+        "stdout_tail": ".                                                                        [100%]\n",
+        "stderr_tail": "",
+        "passed": true
+      }
+    }
+  ]
+}

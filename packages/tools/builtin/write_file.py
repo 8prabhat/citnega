@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import pathlib
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from citnega.packages.protocol.callables.base import BaseCallable
 from citnega.packages.protocol.callables.types import CallableType
-from citnega.packages.tools.builtin._tool_base import ToolOutput, tool_policy
+from citnega.packages.tools.builtin._tool_base import ToolOutput, resolve_file_path, tool_policy
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
@@ -37,7 +36,7 @@ class WriteFileTool(BaseCallable):
     )
 
     async def _execute(self, input: WriteFileInput, context: CallContext) -> ToolOutput:
-        path = pathlib.Path(input.file_path.replace("~", str(pathlib.Path.home())))
+        path = resolve_file_path(input.file_path)
         if input.make_dirs:
             path.parent.mkdir(parents=True, exist_ok=True)
         if input.mode == "append":

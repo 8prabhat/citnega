@@ -7,10 +7,12 @@ ProviderFactory.  No external framework dependency.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from citnega.packages.adapters.direct.runner import DirectModelRunner
 from citnega.packages.model_gateway.yaml_config import ModelYAMLConfig, load_yaml_config
+from citnega.packages.observability.logging_setup import runtime_logger
 from citnega.packages.protocol.interfaces.adapter import (
     AdapterConfig,
     ICallableFactory,
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.models import ModelInfo
     from citnega.packages.protocol.models.sessions import Session
 
 
@@ -61,6 +64,7 @@ class DirectModelAdapter(IFrameworkAdapter):
         self._sessions_dir = sessions_dir
         self._yaml_config: ModelYAMLConfig = load_yaml_config(yaml_config_path)
         self._factory = _NoOpCallableFactory()
+        self._configured_default_model_id: str = ""
         # session_id → runner (for set_model routing)
         self._runners: dict[str, DirectModelRunner] = {}
 
@@ -69,7 +73,8 @@ class DirectModelAdapter(IFrameworkAdapter):
         return "direct"
 
     async def initialize(self, config: AdapterConfig) -> None:
-        pass  # no external SDK to initialise
+        # Keep the configured default model so runners can honour session/bootstrap defaults.
+        self._configured_default_model_id = config.default_model_id
 
     async def create_runner(
         self,
@@ -81,17 +86,30 @@ class DirectModelAdapter(IFrameworkAdapter):
         session_dir = self._sessions_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
 
+        default_model_id = (
+            session.config.default_model_id
+            or self._configured_default_model_id
+            or self._yaml_config.default_model
+        )
+
         conv_store = ConversationStore(
             session_dir=session_dir,
-            default_model_id=self._yaml_config.default_model,
+            default_model_id=default_model_id,
         )
         await conv_store.load()
+        # Remove any trailing user message that was saved before an aborted LLM call
+        conv_store.drop_dangling_user_turn()
 
+        from citnega.packages.config.loaders import load_settings
+
+        _settings = load_settings()
         runner = DirectModelRunner(
             session=session,
             yaml_config=self._yaml_config,
             conversation_store=conv_store,
             callables=list(callables),
+            model_gateway=model_gateway,
+            max_tool_rounds=_settings.runtime.max_tool_rounds,
         )
         self._runners[session_id] = runner
         return runner
@@ -135,3 +153,25 @@ class DirectModelAdapter(IFrameworkAdapter):
             }
             for e in sorted(self._yaml_config.models, key=lambda m: -m.priority)
         ]
+
+    def list_models(self) -> list[ModelInfo]:
+        """Return typed model metadata for ApplicationService surfaces."""
+        from citnega.packages.model_gateway.provider_factory import _make_model_info
+
+        return [
+            _make_model_info(entry)
+            for entry in sorted(self._yaml_config.models, key=lambda item: -item.priority)
+        ]
+
+    def read_session_conversation_field(self, session_id: str, field: str) -> list[dict[str, Any]]:
+        """Read ``conversation.json`` field from disk for cold sessions."""
+        conversation_file = self._sessions_dir / session_id / "conversation.json"
+        if not conversation_file.exists():
+            return []
+        try:
+            payload = json.loads(conversation_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            runtime_logger.debug("conversation_file_parse_error", error=str(exc))
+            return []
+        raw = payload.get(field, [])
+        return raw if isinstance(raw, list) else []

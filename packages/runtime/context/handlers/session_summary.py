@@ -30,6 +30,8 @@ class SessionSummaryHandler(IContextHandler):
     this with a proper rolling summary from the run_summaries table.
     """
 
+    parallel_safe = True
+
     @property
     def name(self) -> str:
         return "session_summary"

@@ -70,7 +70,9 @@ class CrewAIRunner(BaseFrameworkRunner):
                     description: str = cbl.description
 
                     def _run(self_, **kwargs: object) -> str:
-                        # CrewAI calls _run synchronously; bridge to async via asyncio
+                        # CrewAI calls _run from a thread; use asyncio.run() to
+                        # create a fresh event loop rather than re-entering the
+                        # already-running loop (which would deadlock).
                         import asyncio as _asyncio
 
                         from citnega.packages.protocol.callables.context import CallContext
@@ -81,12 +83,7 @@ class CrewAIRunner(BaseFrameworkRunner):
                             turn_id="crew-turn",
                             session_config=self._session.config,
                         )
-                        try:
-                            loop = _asyncio.get_event_loop()
-                        except RuntimeError:
-                            loop = _asyncio.new_event_loop()
-
-                        result = loop.run_until_complete(
+                        result = _asyncio.run(
                             cbl.invoke(cbl.input_schema.model_validate(kwargs), ctx)
                         )
                         if result.output:

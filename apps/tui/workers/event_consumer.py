@@ -74,12 +74,14 @@ class ToolCallStarted(Message):
         callable_name: str,
         event_id: str,
         input_summary: str = "",
+        callable_type: str = "tool",
     ) -> None:
         super().__init__()
         self.run_id = run_id
         self.callable_name = callable_name
         self.event_id = event_id
         self.input_summary = input_summary
+        self.callable_type = callable_type  # "tool" | "specialist" | "core" | …
 
 
 class ToolCallFinished(Message):
@@ -91,12 +93,14 @@ class ToolCallFinished(Message):
         callable_name: str,
         success: bool,
         output_summary: str,
+        callable_type: str = "tool",
     ) -> None:
         super().__init__()
         self.run_id = run_id
         self.callable_name = callable_name
         self.success = success
         self.output_summary = output_summary
+        self.callable_type = callable_type
 
 
 class ThinkingReceived(Message):
@@ -124,6 +128,15 @@ class ApprovalRequested(Message):
         self.approval_id = approval_id
         self.callable_name = callable_name
         self.input_summary = input_summary
+
+
+class RunPhaseChanged(Message):
+    """Emitted on every RunState transition — used to update the UI phase label."""
+
+    def __init__(self, run_id: str, phase: str) -> None:
+        super().__init__()
+        self.run_id = run_id
+        self.phase = phase  # e.g. "context_assembling", "executing", "completed"
 
 
 # ── Worker ────────────────────────────────────────────────────────────────────
@@ -192,27 +205,32 @@ class EventConsumerWorker:
         elif isinstance(event, RunStateEvent):
             if event.from_state.value == "pending":
                 app.post_message(RunStarted(self._run_id))
+            app.post_message(RunPhaseChanged(self._run_id, event.to_state.value))
 
         elif isinstance(event, RunCompleteEvent):
             app.post_message(RunFinished(self._run_id, event.final_state.value))
 
         elif isinstance(event, CallableStartEvent):
+            ct = event.callable_type.value if event.callable_type is not None else "tool"
             app.post_message(
                 ToolCallStarted(
                     self._run_id,
                     event.callable_name or "",
                     event.event_id,
                     event.input_summary,
+                    callable_type=ct,
                 )
             )
 
         elif isinstance(event, CallableEndEvent):
+            ct = event.callable_type.value if event.callable_type is not None else "tool"
             app.post_message(
                 ToolCallFinished(
                     self._run_id,
                     event.callable_name or "",
                     success=event.error_code is None,
                     output_summary=event.output_summary or "",
+                    callable_type=ct,
                 )
             )
 

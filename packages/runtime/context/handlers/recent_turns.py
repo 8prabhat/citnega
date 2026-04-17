@@ -24,6 +24,8 @@ class RecentTurnsHandler(IContextHandler):
     as a "recent_turns" ContextSource.
     """
 
+    parallel_safe = True
+
     @property
     def name(self) -> str:
         return "recent_turns"

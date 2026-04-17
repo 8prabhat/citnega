@@ -25,6 +25,24 @@ class_name = "DataAgent"
 enabled    = true
 
 [[specialists]]
+name       = "qa_agent"
+module     = "citnega.packages.agents.specialists.qa_agent"
+class_name = "QAAgent"
+enabled    = true
+
+[[specialists]]
+name       = "security_agent"
+module     = "citnega.packages.agents.specialists.security_agent"
+class_name = "SecurityAgent"
+enabled    = true
+
+[[specialists]]
+name       = "release_agent"
+module     = "citnega.packages.agents.specialists.release_agent"
+class_name = "ReleaseAgent"
+enabled    = true
+
+[[specialists]]
 name       = "writing_agent"
 module     = "citnega.packages.agents.specialists.writing_agent"
 class_name = "WritingAgent"

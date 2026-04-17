@@ -25,11 +25,19 @@ class CallableStartEvent(BaseEvent):
         cls,
         callable_: IInvocable,
         context: CallContext,
+        input_obj: object = None,
     ) -> CallableStartEvent:
         try:
-            summary = "<input>"
+            from pydantic import BaseModel as _BM
+
+            if isinstance(input_obj, _BM):
+                raw = input_obj.model_dump_json()
+                # Trim pure-JSON noise: strip outer braces for very short payloads
+                summary = raw[:120] + ("…" if len(raw) > 120 else "")
+            else:
+                summary = "<no input>"
         except Exception:
-            summary = "<unable to summarise>"
+            summary = "<input>"
         return cls(
             session_id=context.session_id,
             run_id=context.run_id,
@@ -64,13 +72,27 @@ class CallableEndEvent(BaseEvent):
             policy_result = "passed"
             error_code = None
 
+        # Extract meaningful output text for the TUI sidebar
+        output_summary = "<none>"
+        if result.output is not None:
+            try:
+                # ToolOutput → .result, SpecialistOutput → .response, etc.
+                text = (
+                    getattr(result.output, "result", None)
+                    or getattr(result.output, "response", None)
+                    or str(result.output)
+                )
+                output_summary = str(text).strip()[:300] or "<empty>"
+            except Exception:
+                output_summary = "<output>"
+
         return cls(
             session_id=context.session_id,
             run_id=context.run_id,
             turn_id=context.turn_id,
             callable_name=result.callable_name,
             callable_type=result.callable_type,
-            output_summary="<output>" if result.output else "<none>",
+            output_summary=output_summary,
             duration_ms=result.duration_ms,
             policy_result=policy_result,
             error_code=error_code,

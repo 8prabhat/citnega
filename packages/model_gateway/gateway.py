@@ -177,9 +177,9 @@ class ModelGateway(IModelGateway):
             *[_check(mid, p) for mid, p in self._providers.items()],
             return_exceptions=True,
         )
-        return {
-            mid: status
-            for r in results
-            if not isinstance(r, Exception)
-            for mid, status in [r]  # type: ignore[misc]
-        }
+        out: dict[str, str] = {}
+        for r in results:
+            if isinstance(r, tuple):
+                mid, status = r
+                out[mid] = status
+        return out

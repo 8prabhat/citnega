@@ -212,6 +212,53 @@ class TestPathCheck:
         with pytest.raises(PathNotAllowedError):
             await enforcer.enforce(callable_, Input(), _context())
 
+    @pytest.mark.asyncio
+    async def test_symlink_escape_raises(self, tmp_path: pytest.TempDir) -> None:
+        """A symlink that resolves outside the allowed root must be rejected."""
+        import pathlib
+        from pydantic import BaseModel as BM
+
+        outside = tmp_path.parent / "outside_root"
+        outside.mkdir(exist_ok=True)
+        (outside / "secret.txt").write_text("secret")
+
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+
+        link = allowed / "link.txt"
+        link.symlink_to(outside / "secret.txt")
+
+        class Input(BM):
+            file_path: str = str(link)
+
+        emitter = EventEmitter()
+        enforcer = PolicyEnforcer(emitter, ApprovalManager())
+        callable_ = _fake_callable(_policy(allowed_paths=[str(allowed)], requires_approval=False))
+        with pytest.raises(PathNotAllowedError):
+            await enforcer.enforce(callable_, Input(), _context())
+
+    @pytest.mark.asyncio
+    async def test_symlink_within_allowed_passes(self, tmp_path: pytest.TempDir) -> None:
+        """A symlink that resolves inside the allowed root must be permitted."""
+        import pathlib
+        from pydantic import BaseModel as BM
+
+        allowed = tmp_path / "workspace"
+        allowed.mkdir()
+        real_file = allowed / "real.txt"
+        real_file.write_text("data")
+
+        link = allowed / "link.txt"
+        link.symlink_to(real_file)
+
+        class Input(BM):
+            file_path: str = str(link)
+
+        emitter = EventEmitter()
+        enforcer = PolicyEnforcer(emitter, ApprovalManager())
+        callable_ = _fake_callable(_policy(allowed_paths=[str(allowed)], requires_approval=False))
+        await enforcer.enforce(callable_, Input(), _context())
+
 
 # ---------------------------------------------------------------------------
 # timeout helpers
@@ -348,3 +395,126 @@ class TestApprovalCheck:
 
         with pytest.raises(ApprovalTimeoutError):
             await enforcer.enforce(callable_, MM(), ctx)
+
+
+# ---------------------------------------------------------------------------
+# resolve_file_path — parity between tool and policy checker (FR-TOOL-002)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveFilePath:
+    def test_tilde_expansion(self) -> None:
+        from pathlib import Path
+
+        from citnega.packages.tools.builtin._tool_base import resolve_file_path
+
+        result = resolve_file_path("~/foo/bar.txt")
+        assert not str(result).startswith("~")
+        assert str(result).startswith(str(Path.home()))
+
+    def test_returns_absolute_path(self, tmp_path) -> None:
+        from citnega.packages.tools.builtin._tool_base import resolve_file_path
+
+        f = tmp_path / "test.txt"
+        result = resolve_file_path(str(f))
+        assert result.is_absolute()
+
+    def test_collapses_dotdot(self, tmp_path) -> None:
+        from citnega.packages.tools.builtin._tool_base import resolve_file_path
+
+        # /tmp/x/../y should resolve to /tmp/y (under tmp_path)
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        tricky = str(sub / ".." / "sub")
+        result = resolve_file_path(tricky)
+        assert str(result) == str(sub.resolve())
+
+    def test_same_result_as_policy_checker(self, tmp_path) -> None:
+        """Tool and policy checker must produce identical resolved paths."""
+        import pathlib
+
+        from citnega.packages.tools.builtin._tool_base import resolve_file_path
+
+        path_str = str(tmp_path / "file.txt")
+
+        # What the tool does
+        tool_resolved = resolve_file_path(path_str)
+
+        # What policy/checks.py does (uses _resolve_file_path which is the same func)
+        policy_resolved = pathlib.Path(path_str).resolve()
+
+        assert tool_resolved == policy_resolved
+
+
+class TestPathPolicyParity:
+    """End-to-end: tool path resolution and policy check use the same canonical path."""
+
+    def _make_enforcer(self, allowed_root: str):
+        from citnega.packages.runtime.events.emitter import EventEmitter
+        from citnega.packages.runtime.policy.approval_manager import ApprovalManager
+        from citnega.packages.runtime.policy.enforcer import PolicyEnforcer
+
+        emitter = EventEmitter()
+        mgr = ApprovalManager()
+        return PolicyEnforcer(emitter, mgr)
+
+    @pytest.mark.asyncio
+    async def test_write_inside_allowed_root_passes(self, tmp_path) -> None:
+        from citnega.packages.protocol.callables.types import CallablePolicy
+        from citnega.packages.tools.builtin.write_file import WriteFileInput, WriteFileTool
+        from tests.unit.tools.test_tools import _context, _make_tool
+
+        tool = _make_tool(
+            WriteFileTool,
+            CallablePolicy(requires_approval=False, allowed_paths=[str(tmp_path)]),
+        )
+        dest = tmp_path / "allowed.txt"
+        result = await tool.invoke(
+            WriteFileInput(file_path=str(dest), content="ok"), _context()
+        )
+        assert result.success
+
+    @pytest.mark.asyncio
+    async def test_write_outside_allowed_root_blocked(self, tmp_path) -> None:
+        from citnega.packages.protocol.callables.types import CallablePolicy
+        from citnega.packages.tools.builtin.write_file import WriteFileInput, WriteFileTool
+        from tests.unit.tools.test_tools import _context, _make_tool
+
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        denied = tmp_path / "denied"
+        denied.mkdir()
+
+        tool = _make_tool(
+            WriteFileTool,
+            CallablePolicy(requires_approval=False, allowed_paths=[str(allowed)]),
+        )
+        result = await tool.invoke(
+            WriteFileInput(file_path=str(denied / "out.txt"), content="x"), _context()
+        )
+        assert not result.success
+        assert "PathNotAllowed" in type(result.error).__name__ or "path" in str(result.error).lower()
+
+    @pytest.mark.asyncio
+    async def test_dotdot_traversal_blocked(self, tmp_path) -> None:
+        """Path traversal via ../ must be blocked by policy."""
+        from citnega.packages.protocol.callables.types import CallablePolicy
+        from citnega.packages.tools.builtin.read_file import ReadFileInput, ReadFileTool
+        from tests.unit.tools.test_tools import _context, _make_tool
+
+        allowed = tmp_path / "safe"
+        allowed.mkdir()
+        # Create a file outside allowed dir
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+
+        tool = _make_tool(
+            ReadFileTool,
+            CallablePolicy(requires_approval=False, allowed_paths=[str(allowed)]),
+        )
+        # Traversal attempt: safe/../secret.txt → resolves to tmp_path/secret.txt
+        traversal_path = str(allowed / ".." / "secret.txt")
+        result = await tool.invoke(
+            ReadFileInput(file_path=traversal_path), _context()
+        )
+        assert not result.success

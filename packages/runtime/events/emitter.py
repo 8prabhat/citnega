@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     from citnega.packages.protocol.events import CanonicalEvent
 
-_QUEUE_MAXSIZE = 256
+_QUEUE_MAXSIZE_DEFAULT = 256
 
 
 class EventEmitter(IEventEmitter):
@@ -41,10 +41,15 @@ class EventEmitter(IEventEmitter):
     Events are also written to JSONL event logs if an event_log_dir is set.
     """
 
-    def __init__(self, event_log_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        event_log_dir: Path | None = None,
+        max_queue_size: int = _QUEUE_MAXSIZE_DEFAULT,
+    ) -> None:
         self._queues: dict[str, asyncio.Queue[CanonicalEvent]] = {}
         self._lock = threading.Lock()
         self._event_log_dir = event_log_dir
+        self._max_queue_size = max_queue_size
 
     # ── IEventEmitter ──────────────────────────────────────────────────────────
 
@@ -86,13 +91,14 @@ class EventEmitter(IEventEmitter):
     def _get_or_create_queue(self, run_id: str) -> asyncio.Queue[CanonicalEvent]:
         with self._lock:
             if run_id not in self._queues:
-                self._queues[run_id] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
+                self._queues[run_id] = asyncio.Queue(maxsize=self._max_queue_size)
             return self._queues[run_id]
 
     def _write_event_jsonl(self, event: CanonicalEvent) -> None:
         """Write event to JSONL log file (best-effort, no exception propagation)."""
+        assert self._event_log_dir is not None  # caller guards this
         try:
-            log_path = self._event_log_dir / f"{event.run_id}.jsonl"  # type: ignore[operator]
+            log_path = self._event_log_dir / f"{event.run_id}.jsonl"
             raw = event.model_dump()
             scrubbed = scrub_dict(raw)
             line = json.dumps(scrubbed, default=str) + "\n"

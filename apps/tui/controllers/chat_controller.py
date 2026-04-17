@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING
 
 from textual.containers import VerticalScroll
 
+from citnega.packages.observability.logging_setup import runtime_logger as _logger
+
+from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
 from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 from citnega.apps.tui.widgets.message_block import MessageBlock
 from citnega.apps.tui.widgets.option_picker_block import OptionPickerBlock
@@ -26,6 +29,7 @@ from citnega.apps.tui.workers.event_consumer import (
     ApprovalRequested,
     EventConsumerWorker,
     RunFinished,
+    RunPhaseChanged,
     RunStarted,
     ThinkingReceived,
     TokenReceived,
@@ -36,7 +40,9 @@ from citnega.apps.tui.workers.event_consumer import (
 if TYPE_CHECKING:
     from textual.app import App
 
-    from citnega.packages.runtime.app_service import ApplicationService
+    from citnega.packages.protocol.interfaces.application_service import (
+        IApplicationService as ApplicationService,
+    )
 
 
 class ChatController:
@@ -62,6 +68,8 @@ class ChatController:
         self._thinking_block: ThinkingBlock | None = None
         # Mapping callable_name → open ToolCallBlock
         self._open_tool_blocks: dict[str, ToolCallBlock] = {}
+        # Mapping callable_name → input_summary (captured on start, used on finish for persistence)
+        self._tool_input_summaries: dict[str, str] = {}
         # Active event consumer worker
         self._consumer: EventConsumerWorker | None = None
         # Slash command registry
@@ -118,7 +126,7 @@ class ChatController:
 
     async def _start_plan_draft(self, text: str) -> None:
         """Phase 1 of plan mode: generate plan only, then ask for approval."""
-        from citnega.packages.runtime.session_modes import PlanMode
+        from citnega.packages.protocol.modes import PlanMode
 
         self._plan_state = "awaiting_approval"
         self._service.set_session_plan_phase(self._session_id, PlanMode.PHASE_DRAFT)
@@ -135,7 +143,9 @@ class ChatController:
         try:
             run_id = await self._service.run_turn(self._session_id, text)
         except Exception as exc:
-            await self._append_message("system", f"Error starting turn: {exc}")
+            from citnega.packages.shared.errors import CitnegaError
+            msg = getattr(exc, "user_message", "") or str(exc)
+            await self._append_message("system", f"Error: {msg}")
             return
 
         try:
@@ -154,7 +164,7 @@ class ChatController:
 
     async def on_plan_approval_block_resolved(self, message: PlanApprovalBlock.Resolved) -> None:
         """Called when the user clicks Proceed or Cancel on the plan block."""
-        from citnega.packages.runtime.session_modes import PlanMode
+        from citnega.packages.protocol.modes import PlanMode
 
         if message.approved:
             self._plan_state = "executing"
@@ -210,11 +220,14 @@ class ChatController:
             await self._streaming_block.finalize()
             self._streaming_block = None
 
-        # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar
+        self._update_context_bar(state="idle")
 
-        status = self._app.screen.query_one(StatusBar)
-        status.run_state = "idle"
+        # Restore panel header
+        try:
+            from textual.widgets import Label as _Label
+            self._app.screen.query_one("#tools-panel-header", _Label).update("⚙  Tools")
+        except Exception:
+            pass
 
         if message.final_state not in ("completed", "cancelled"):
             await self._append_message(
@@ -234,15 +247,49 @@ class ChatController:
         elif self._plan_state == "executing":
             self._plan_state = None
 
+        # If no tool calls remain open, restore the sidebar placeholder
+        if not self._open_tool_blocks:
+            try:
+                from textual.widgets import Label as _Label
+                tools_panel = self._app.screen.query_one("#tools-panel", VerticalScroll)
+                # Only mount if the placeholder doesn't already exist
+                if not tools_panel.query("#tools-empty"):
+                    await tools_panel.mount(_Label("No active tools", id="tools-empty"))
+            except Exception:
+                pass
+
     async def on_tool_call_started(self, message: ToolCallStarted) -> None:
-        block = ToolCallBlock(
-            tool_name=message.callable_name,
-            input_summary=message.input_summary or f"run:{message.run_id[:8]}",
-        )
+        input_summary = message.input_summary or f"run:{message.run_id[:8]}"
+        self._tool_input_summaries[message.callable_name] = input_summary
+
+        is_agent = message.callable_type in ("specialist", "core")
+        if is_agent:
+            block: ToolCallBlock | AgentCallBlock = AgentCallBlock(
+                agent_name=message.callable_name,
+                input_summary=input_summary,
+            )
+        else:
+            block = ToolCallBlock(
+                tool_name=message.callable_name,
+                input_summary=input_summary,
+            )
         self._open_tool_blocks[message.callable_name] = block
-        scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
-        await scroll.mount(block)
-        self._app.call_after_refresh(scroll.scroll_end)
+
+        # Route to the tools sidebar panel (not the main chat scroll)
+        try:
+            tools_panel = self._app.screen.query_one("#tools-panel", VerticalScroll)
+            # Remove the "No active tools" placeholder on first tool
+            try:
+                await tools_panel.query_one("#tools-empty").remove()
+            except Exception:
+                pass
+            await tools_panel.mount(block)
+            self._app.call_after_refresh(tools_panel.scroll_end)
+        except Exception:
+            # Fallback: chat scroll
+            scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
+            await scroll.mount(block)
+            self._app.call_after_refresh(scroll.scroll_end)
 
     async def on_tool_call_finished(self, message: ToolCallFinished) -> None:
         block = self._open_tool_blocks.pop(message.callable_name, None)
@@ -252,6 +299,20 @@ class ChatController:
             block.set_result(message.output_summary)
         else:
             block.set_error(message.output_summary)
+
+        # Persist to tool history for session resume
+        input_summary = self._tool_input_summaries.pop(message.callable_name, "")
+        try:
+            await self._service.record_tool_call(
+                self._session_id,
+                message.callable_name,
+                input_summary,
+                message.output_summary or "",
+                message.success,
+                callable_type=message.callable_type,
+            )
+        except Exception as _exc:
+            _logger.debug("tui_record_tool_call_failed", error=str(_exc))
 
     async def on_approval_requested(self, message: ApprovalRequested) -> None:
         block = ApprovalBlock(
@@ -273,11 +334,25 @@ class ChatController:
             await self._append_message("system", f"Approval error: {exc}")
 
     def on_run_started(self, message: RunStarted) -> None:
-        from citnega.apps.tui.widgets.status_bar import StatusBar
+        self._update_context_bar(state="running")
 
+    def on_run_phase_changed(self, message: RunPhaseChanged) -> None:
+        """Update ContextBar + panel header on every run-state transition."""
+        self._update_context_bar(state=message.phase)
+        # Update tools panel header to show what the system is doing
+        _PHASE_HEADERS: dict[str, str] = {
+            "context_assembling": "⚙  assembling context…",
+            "executing":          "⚙  executing…",
+            "waiting_approval":   "⚙  ⚠  waiting approval",
+            "paused":             "⚙  paused",
+            "completed":          "⚙  Tools",
+            "failed":             "⚙  Tools",
+            "cancelled":          "⚙  Tools",
+        }
+        label_text = _PHASE_HEADERS.get(message.phase, "⚙  Tools")
         try:
-            status = self._app.screen.query_one(StatusBar)
-            status.run_state = "running"
+            from textual.widgets import Label as _Label
+            self._app.screen.query_one("#tools-panel-header", _Label).update(label_text)
         except Exception:
             pass
 
@@ -298,7 +373,10 @@ class ChatController:
     def _show_slash_popup(self) -> None:
         from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup
 
-        cmds = list(self._slash_commands.keys())
+        cmds = [
+            (name, getattr(cmd, "help_text", ""))
+            for name, cmd in self._slash_commands.items()
+        ]
         popup = SlashCommandPopup(commands=cmds)
         self._popup = popup
         self._app.mount(popup)
@@ -378,6 +456,37 @@ class ChatController:
             return
         await handler.execute(args, self)
 
+    # ── ContextBar helpers ─────────────────────────────────────────────────────
+
+    def _update_context_bar(self, **kwargs) -> None:
+        """Update one or more ContextBar reactive fields (model, mode, think, folder, state)."""
+        try:
+            from citnega.apps.tui.widgets.context_bar import ContextBar
+
+            bar = self._app.screen.query_one(ContextBar)
+            for field, value in kwargs.items():
+                setattr(bar, field, value)
+        except Exception:
+            pass
+
+    def seed_context_bar(
+        self,
+        model: str = "",
+        mode: str = "direct",
+        think: str = "off",
+        folder: str = "",
+        session_name: str = "",
+    ) -> None:
+        """Called by the App after controller creation to pre-populate the bar."""
+        self._update_context_bar(
+            model=model,
+            mode=mode,
+            think=think,
+            folder=folder,
+            state="idle",
+            session_name=session_name,
+        )
+
     async def shutdown(self) -> None:
         """Cancel background consumer if running."""
         if self._consumer is not None:
@@ -394,15 +503,19 @@ def _build_slash_registry(app, service, session_id, controller):
         CancelCommand,
         ClearCommand,
         CompactCommand,
+        DeleteSessionCommand,
         HelpCommand,
         ModeCommand,
         ModelCommand,
         NewSessionCommand,
+        RenameCommand,
         SessionsCommand,
+        ShowSessionCommand,
         ThinkCommand,
     )
     from citnega.apps.tui.slash_commands.workspace import (
         CreateAgentCommand,
+        CreateSkillCommand,
         CreateToolCommand,
         CreateWorkflowCommand,
         RefreshCommand,
@@ -419,6 +532,9 @@ def _build_slash_registry(app, service, session_id, controller):
         ModelCommand(service=service),
         ModeCommand(service=service),
         NewSessionCommand(service=service),
+        RenameCommand(service=service),
+        DeleteSessionCommand(service=service),
+        ShowSessionCommand(service=service),
         SessionsCommand(service=service),
         ThinkCommand(service=service),
         # Workspace commands
@@ -427,5 +543,6 @@ def _build_slash_registry(app, service, session_id, controller):
         CreateToolCommand(service=service),
         CreateAgentCommand(service=service),
         CreateWorkflowCommand(service=service),
+        CreateSkillCommand(service=service),
     ]
     return {cmd.name: cmd for cmd in cmds}

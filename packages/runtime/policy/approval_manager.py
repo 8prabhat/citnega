@@ -52,7 +52,7 @@ class ApprovalManager:
             self._events[approval_id] = asyncio.Event()
         return approval
 
-    async def wait_for_response(self, approval_id: str) -> Approval:
+    async def wait_for_response(self, approval_id: str) -> Approval | None:
         """
         Suspend until the approval is resolved.
 
@@ -66,7 +66,7 @@ class ApprovalManager:
         await event.wait()
         async with self._lock:
             # If cleanup() removed the approval while we waited, return None
-            return self._approvals.get(approval_id)  # type: ignore[return-value]
+            return self._approvals.get(approval_id)
 
     async def resolve(
         self,

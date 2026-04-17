@@ -119,6 +119,17 @@ class DynamicLoader:
         Custom tools are loaded first so custom agents and workflows receive
         the final tool registry with workfolder overrides already applied.
         """
+        return self._load_workspace(writer, include_python_workflows=True)
+
+    def _load_workspace(
+        self,
+        writer: WorkspaceWriter,
+        *,
+        include_python_workflows: bool,
+    ) -> WorkspaceLoadResult:
+        """
+        Internal workspace loader with explicit legacy-workflow toggle.
+        """
         from citnega.packages.workspace.writer import WorkspaceWriter
 
         assert isinstance(writer, WorkspaceWriter)
@@ -133,8 +144,24 @@ class DynamicLoader:
             tool_registry=merged_tools,
         )
         agents = downstream_loader.load_directory(writer.agents_dir)
-        workflows = downstream_loader.load_directory(writer.workflows_dir)
+        workflows = (
+            downstream_loader.load_directory(writer.workflows_dir)
+            if include_python_workflows
+            else {}
+        )
         return WorkspaceLoadResult(tools=tools, agents=agents, workflows=workflows)
+
+    def load_workspace_with_options(
+        self,
+        writer: WorkspaceWriter,
+        *,
+        include_python_workflows: bool = True,
+    ) -> WorkspaceLoadResult:
+        """Load workspace with options for legacy Python workflow compatibility."""
+        return self._load_workspace(
+            writer,
+            include_python_workflows=include_python_workflows,
+        )
 
     # ── Internals ──────────────────────────────────────────────────────────────
 
@@ -152,12 +179,14 @@ class DynamicLoader:
         if spec is None or spec.loader is None:
             raise ImportError(f"Cannot create module spec for {path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        assert spec.loader is not None  # guarded above
+        spec.loader.exec_module(module)
         return module
 
     def _extract_callables(self, module: types.ModuleType) -> dict[str, IInvocable]:
         """Scan module globals for instantiable BaseCallable subclasses."""
         from citnega.packages.protocol.callables.base import BaseCallable
+        from citnega.packages.workspace.contract_verifier import verify_callable_contract
 
         result: dict[str, IInvocable] = {}
         for _attr_name, obj in vars(module).items():
@@ -169,6 +198,7 @@ class DynamicLoader:
             ):
                 try:
                     instance = self._instantiate(obj)
+                    verify_callable_contract(instance)
                     result[instance.name] = instance
                 except Exception as exc:
                     logger.warning(
@@ -177,12 +207,11 @@ class DynamicLoader:
         return result
 
     def _instantiate(self, cls: type) -> IInvocable:
-        """Instantiate a callable class with the injected dependencies."""
-        from citnega.packages.agents.specialists._specialist_base import (
-            SpecialistBase,
-        )
-        from citnega.packages.protocol.callables.base import BaseCoreAgent
+        """Instantiate a callable class with the injected dependencies.
 
-        if issubclass(cls, (SpecialistBase, BaseCoreAgent)):
+        Uses the ``_REQUIRES_TOOL_REGISTRY`` sentinel set on SpecialistBase and
+        BaseCoreAgent so this module does not need to import those base classes.
+        """
+        if getattr(cls, "_REQUIRES_TOOL_REGISTRY", False):
             return cls(self._enforcer, self._emitter, self._tracer, self._tool_registry)
         return cls(self._enforcer, self._emitter, self._tracer)

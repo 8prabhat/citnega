@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from citnega.packages.runtime.app_service import ApplicationService
-from citnega.packages.shared.registry import BaseRegistry
+from citnega.packages.shared.registry import BaseRegistry, CallableRegistry
 from citnega.packages.workspace.loader import DynamicLoader
 from citnega.packages.workspace.templates import FallbackTemplates, ScaffoldSpec
 from citnega.packages.workspace.writer import WorkspaceWriter
@@ -23,6 +23,20 @@ if TYPE_CHECKING:
 class _MockRuntime:
     def __init__(self):
         self._registry = BaseRegistry("test")
+
+    @property
+    def callable_registry(self):
+        return self._registry
+
+    @property
+    def adapter(self):
+        return MagicMock()
+
+    def get_runner(self, session_id: str):
+        return None
+
+    async def refresh_runners(self):
+        return {"refreshed": [], "skipped": []}
 
 
 class _MockEnforcer:
@@ -61,8 +75,7 @@ def _make_service(tmp_path: Path | None = None) -> ApplicationService:
     svc._approval_manager = _MockApprovalMgr()
     svc._model_gateway = None
     svc._kb_store = None
-    svc._tool_registry = {}
-    svc._agent_registry = {}
+    svc._callable_registry = CallableRegistry()
     svc._enforcer = _MockEnforcer()
     svc._tracer = MagicMock()
     svc._app_home = tmp_path
@@ -93,13 +106,13 @@ class TestRegisterCallable:
         svc = _make_service()
         obj = _make_callable("alpha_tool", "tool", "AlphaTool", tmp_path)
         svc.register_callable(obj)
-        assert "alpha_tool" in svc._tool_registry
+        assert "alpha_tool" in svc._callable_registry.get_tools()
 
     def test_tool_appears_in_runtime_registry(self, tmp_path: Path) -> None:
         svc = _make_service()
         obj = _make_callable("beta_tool", "tool", "BetaTool", tmp_path)
         svc.register_callable(obj)
-        assert "beta_tool" in svc._runtime._registry
+        assert "beta_tool" in svc._runtime.callable_registry
 
     def test_agent_goes_to_agent_registry(self, tmp_path: Path) -> None:
         svc = _make_service()
@@ -110,7 +123,7 @@ class TestRegisterCallable:
         loaded = loader.load_directory(tmp_path)
         if "my_agent" in loaded:
             svc.register_callable(loaded["my_agent"])
-            assert "my_agent" in svc._agent_registry
+            assert "my_agent" in svc._callable_registry.get_agents()
 
     def test_overwrite_does_not_raise(self, tmp_path: Path) -> None:
         svc = _make_service()
@@ -124,6 +137,22 @@ class TestRegisterCallable:
         nameless.name = ""
         with pytest.raises(ValueError, match="'name' attribute"):
             svc.register_callable(nameless)
+
+    def test_invalid_contract_callable_raises(self) -> None:
+        from citnega.packages.protocol.callables.types import CallableType
+
+        svc = _make_service()
+        invalid = MagicMock()
+        invalid.name = "invalid_tool"
+        invalid.description = "invalid"
+        invalid.callable_type = CallableType.TOOL
+        invalid.input_schema = object  # not a BaseModel subclass
+        invalid.output_schema = object
+        invalid.policy = object()
+        invalid._execute = MagicMock()
+
+        with pytest.raises(ValueError, match="input_schema"):
+            svc.register_callable(invalid)
 
     def test_list_tools_shows_registered(self, tmp_path: Path) -> None:
         svc = _make_service()
@@ -148,7 +177,7 @@ class TestHotReloadWorkfolder:
 
         assert "hot_tool" in result["registered"]
         assert result["errors"] == []
-        assert "hot_tool" in svc._tool_registry
+        assert "hot_tool" in svc._callable_registry.get_tools()
 
     def test_empty_workfolder_returns_empty(self, tmp_path: Path) -> None:
         svc = _make_service()
@@ -158,6 +187,69 @@ class TestHotReloadWorkfolder:
         result = asyncio.run(svc.hot_reload_workfolder(tmp_path, loader))
         assert result["registered"] == []
         assert result["errors"] == []
+
+    def test_hot_reload_rejects_missing_required_manifest(self, tmp_path: Path) -> None:
+        app_home = tmp_path / "app_home"
+        config_dir = app_home / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.toml").write_text(
+            "[workspace]\nonboarding_require_manifest = true\n",
+            encoding="utf-8",
+        )
+
+        workfolder = tmp_path / "workfolder"
+        writer = WorkspaceWriter(workfolder)
+        writer.ensure_dirs()
+
+        svc = _make_service(tmp_path=app_home)
+        loader = DynamicLoader(_MockEnforcer(), _MockEmitter(), MagicMock())
+
+        with pytest.raises(ValueError, match="manifest is required but missing"):
+            asyncio.run(svc.hot_reload_workfolder(workfolder, loader))
+
+    def test_nextgen_workflows_migrate_python_and_skip_registration(self, tmp_path: Path) -> None:
+        app_home = tmp_path / "app_home"
+        config_dir = app_home / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.toml").write_text(
+            "[nextgen]\nworkflows_enabled = true\n",
+            encoding="utf-8",
+        )
+
+        workfolder = tmp_path / "workfolder"
+        writer = WorkspaceWriter(workfolder)
+        writer.ensure_dirs()
+        workflow_source = (
+            "from pydantic import BaseModel, Field\n"
+            "from citnega.packages.agents.specialists._specialist_base import SpecialistBase, SpecialistOutput\n"
+            "from citnega.packages.protocol.callables.types import CallableType, CallablePolicy\n"
+            "from citnega.packages.protocol.callables.context import CallContext\n\n"
+            "class ReleaseWorkflowInput(BaseModel):\n"
+            "    objective: str = Field(description='objective')\n\n"
+            "class ReleaseWorkflow(SpecialistBase):\n"
+            "    name = 'release_workflow'\n"
+            "    description = 'Legacy release workflow.'\n"
+            "    callable_type = CallableType.SPECIALIST\n"
+            "    input_schema = ReleaseWorkflowInput\n"
+            "    output_schema = SpecialistOutput\n"
+            "    policy = CallablePolicy(timeout_seconds=60.0)\n"
+            "    TOOL_WHITELIST = ['repo_map', 'quality_gate']\n\n"
+            "    async def _execute(self, input: ReleaseWorkflowInput, context: CallContext) -> SpecialistOutput:\n"
+            "        return SpecialistOutput(response='ok')\n"
+        )
+        (writer.workflows_dir / "release_workflow.py").write_text(
+            workflow_source,
+            encoding="utf-8",
+        )
+
+        svc = _make_service(tmp_path=app_home)
+        loader = DynamicLoader(_MockEnforcer(), _MockEmitter(), MagicMock())
+        result = asyncio.run(svc.hot_reload_workfolder(workfolder, loader))
+
+        assert "release_workflow" not in svc._callable_registry.get_agents()
+        migration = result.get("workflow_migration", {})
+        assert str(writer.workflows_dir / "release_workflow.py") in migration.get("converted", [])
+        assert (writer.workflows_dir / "release_workflow.yaml").exists()
 
 
 class TestSaveWorkspacePath:

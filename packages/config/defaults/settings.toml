@@ -1,8 +1,28 @@
 [runtime]
-framework           = "adk"
-default_model_id    = "gemma3-12b-local"
-local_only          = true
-max_callable_depth  = 2
+framework                    = "adk"
+default_model_id             = "gemma4-26b-local"
+local_only                   = true
+max_callable_depth           = 2
+# Reject session creation when the requested framework is not the active adapter.
+strict_framework_validation  = false
+# Seconds to wait for the next streaming event before disconnecting.
+stream_timeout_seconds       = 60
+# Maximum per-run event queue slots before events are dropped.
+event_queue_max_size         = 256
+# Maximum tool-call rounds per LLM turn (prevents infinite tool loops).
+max_tool_rounds              = 5
+# Maximum ConversationAgent supervisor rounds before bailing out.
+max_supervisor_rounds        = 3
+# Seconds to drain event queues during graceful shutdown.
+shutdown_drain_timeout_seconds = 5.0
+# How many times to retry a failed provider request with exponential backoff.
+provider_max_retries         = 3
+# How many times to retry a streaming request on connection/timeout errors.
+streaming_max_retries        = 2
+# Circuit breaker: open after this many consecutive failures.
+circuit_breaker_threshold    = 5
+# Circuit breaker: seconds before transitioning OPEN → HALF_OPEN.
+circuit_breaker_cooldown_seconds = 30.0
 
 [session]
 max_context_tokens       = 8192
@@ -14,9 +34,11 @@ retention_days = 30
 format         = "jsonl"
 
 [tui]
-theme         = "default"
-mouse_enabled = false
-history_size  = 1000
+theme              = "default"
+mouse_enabled      = false
+history_size       = 1000
+# Maximum entries to store in the chat input history.
+input_history_size = 200
 
 [context]
 handlers = [
@@ -26,8 +48,25 @@ handlers = [
     "runtime_state",
     "token_budget",
 ]
-recent_turns_count = 20
-kb_retrieval_limit = 5
+recent_turns_count            = 20
+kb_retrieval_limit            = 5
+# Raise a startup error if a handler name in the list cannot be resolved.
+# false = skip unknown handlers with a warning (default).
+strict_handler_loading        = false
+# Per-handler timeout in milliseconds.  0 = no timeout.
+handler_timeout_ms            = 0
+# Maximum tokens per KB document chunk during ingestion.
+kb_chunk_size_tokens          = 512
+# Priority for source types not listed in token_budget_priorities.
+token_budget_default_priority = 20
+
+# Priority scores used by the token-budget handler when trimming context.
+# Sources with higher values are kept when the budget is exceeded.
+[context.token_budget_priorities]
+recent_turns = 100
+state        = 80
+summary      = 60
+kb           = 40
 
 [security]
 log_file_permissions    = "0600"
@@ -59,6 +98,24 @@ max_sessions_shown = 20
 # Automatically rename a new session from the text of the first user message.
 auto_name_from_first_message = true
 
+# ── Policy enforcement ─────────────────────────────────────────────────────────
+[policy]
+# Environment template: dev | team | locked_down
+template = "dev"
+
+# When true, callables with network_allowed=true are blocked at invoke time.
+# Default false so existing tools work in standard installs.
+enforce_network_deny = false
+
+# Additional tool names that should require approval.
+require_approval_tools = []
+
+# When true, file tools are constrained to workspace/app-home roots.
+enforce_workspace_bounds = false
+
+# Workspace root used for path policy substitution.  Empty = resolved at runtime.
+workspace_root = ""
+
 # ── Workspace (user-created agents / tools / workflows) ────────────────────────
 [workspace]
 # Absolute path to the folder where user-created agents, tools, and workflows
@@ -67,3 +124,104 @@ workfolder_path = ""
 
 # Automatically reload workspace artifacts on startup.
 auto_refresh = false
+
+# Relative (or absolute) path to bundle manifest used by onboarding verification.
+onboarding_manifest_path = ".citnega/bundle_manifest.json"
+
+# Require a manifest for workspace onboarding.
+onboarding_require_manifest = false
+
+# Require a cryptographic signature on the onboarding manifest.
+onboarding_require_signature = false
+
+# Shared secret used for HMAC signature verification (prefer env var).
+onboarding_signature_key = ""
+
+# Optional allowlist of accepted publishers in manifest provenance.
+onboarding_trusted_publishers = []
+
+# Require every loadable workspace module to be declared in manifest files.
+onboarding_enforce_file_coverage = true
+
+# ── Remote execution + signed run envelopes ───────────────────────────────────
+[remote]
+# Enable remote worker dispatch in orchestrator flows.
+enabled = false
+
+# Remote backend mode. Supported: inprocess, http.
+worker_mode = "inprocess"
+
+# Number of remote worker slots available.
+workers = 2
+
+# Require signed run envelopes for remote dispatch.
+require_signed_envelopes = true
+
+# Shared signing key (prefer env var: CITNEGA_REMOTE_ENVELOPE_SIGNING_KEY).
+envelope_signing_key = ""
+
+# Key id embedded into newly signed envelopes.
+envelope_signing_key_id = "current"
+
+# Additional accepted verification keys, formatted as "key_id=secret".
+envelope_verification_keys = []
+
+# Optional deterministic latency for remote calls (testing/tuning).
+simulate_latency_ms = 0
+
+# Optional allowlist of callables permitted for remote dispatch.
+allowed_callables = []
+
+# Remote HTTP endpoint used when worker_mode = "http".
+http_endpoint = ""
+
+# End-to-end request timeout for remote HTTP dispatch.
+request_timeout_ms = 15000
+
+# Optional bearer token attached to remote HTTP dispatch requests.
+auth_token = ""
+
+# Toggle TLS certificate validation for HTTPS remote endpoints.
+verify_tls = true
+
+# Optional CA bundle for remote HTTPS worker verification.
+ca_cert_path = ""
+
+# Optional client certificate/key for mTLS remote worker auth.
+client_cert_path = ""
+client_key_path = ""
+
+# Bind host used by the reference remote worker service process.
+service_host = "127.0.0.1"
+
+# Bind port used by the reference remote worker service process.
+service_port = 8787
+
+# Isolation declaration for the reference remote worker service.
+service_isolation_profile = "process"
+
+# Container runtime used by the built-in container launcher.
+service_container_runtime = "docker"
+
+# Container image used by the built-in container launcher.
+service_container_image = ""
+
+# Optional explicit container name; empty = derive from worker/port.
+service_container_name = ""
+
+# Optional TLS server certificate and key for the reference remote worker.
+service_tls_cert_path = ""
+service_tls_key_path = ""
+
+# Optional CA bundle for validating client certificates when mTLS is enabled.
+service_tls_client_ca_path = ""
+
+# Require client certificates when the reference worker serves HTTPS.
+service_tls_require_client_cert = false
+
+[nextgen]
+planning_enabled = false
+execution_enabled = false
+workflows_enabled = false
+skills_enabled = false
+parallel_execution_enabled = true

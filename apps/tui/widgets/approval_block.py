@@ -1,10 +1,11 @@
-"""ApprovalBlock — interactive card for approving or denying a tool execution."""
+"""ApprovalBlock — modern interactive card for approving or denying a tool execution."""
 
 from __future__ import annotations
 
 import contextlib
 from typing import TYPE_CHECKING
 
+from textual.events import Key
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Button, Label, Static
@@ -15,56 +16,69 @@ if TYPE_CHECKING:
 
 class ApprovalBlock(Widget):
     """
-    Interactive approval card.
+    Modern approval card — mounted in the chat scroll when a tool needs
+    human confirmation before execution.
 
-    Rendered when ApprovalRequestEvent arrives.  The user clicks
-    "Approve" or "Deny" to resolve the approval.
-
-    Emits ApprovalBlock.Resolved message which the App forwards to
-    IApplicationService.respond_to_approval().
+    Emits ``ApprovalBlock.Resolved`` which the app forwards to
+    ``IApplicationService.respond_to_approval()``.
     """
 
     DEFAULT_CSS = """
     ApprovalBlock {
-        margin: 0 0 1 0;
-        padding: 1 1;
-        border: solid $warning;
+        margin: 1 0;
+        padding: 1 2;
+        border: tall $warning;
         background: $panel;
         height: auto;
     }
-    ApprovalBlock .approval-header {
+    ApprovalBlock .ap-badge {
         color: $warning;
         text-style: bold;
         height: 1;
     }
-    ApprovalBlock .approval-summary {
-        margin: 1 0;
+    ApprovalBlock .ap-tool {
         color: $text;
+        text-style: bold;
+        height: 1;
     }
-    ApprovalBlock #approval-buttons {
+    ApprovalBlock .ap-summary {
+        color: $text-muted;
+        height: auto;
+        margin: 1 0;
+    }
+    ApprovalBlock #ap-divider {
+        border-bottom: dashed $panel-lighten-2;
+        height: 1;
+        margin: 0 0 1 0;
+    }
+    ApprovalBlock #ap-buttons {
         layout: horizontal;
         height: 3;
-        margin-top: 1;
     }
     ApprovalBlock #btn-approve {
+        min-width: 12;
         margin-right: 2;
     }
-    ApprovalBlock.resolved {
-        border: solid $panel-lighten-1;
-        opacity: 0.5;
+    ApprovalBlock #btn-deny {
+        min-width: 10;
     }
-    ApprovalBlock.resolved .approval-header {
+    ApprovalBlock.resolved {
+        border: tall $panel-lighten-2;
+        background: $surface;
+        opacity: 0.7;
+    }
+    ApprovalBlock.resolved .ap-badge {
         color: $text-muted;
     }
     """
 
     class Resolved(Message):
-        """Emitted when the user clicks Approve or Deny."""
-
         def __init__(self, approval_id: str, approved: bool) -> None:
             super().__init__()
             self.approval_id = approval_id
             self.approved = approved
+
+    can_focus = True
 
     def __init__(
         self,
@@ -80,25 +94,48 @@ class ApprovalBlock(Widget):
         self._resolved = False
 
     def compose(self) -> ComposeResult:
-        yield Label(f"⚠ Approval required: {self._callable_name}", classes="approval-header")
-        yield Static(self._input_summary, classes="approval-summary", markup=False)
-        with Widget(id="approval-buttons"):
-            yield Button("Approve", variant="success", id="btn-approve")
-            yield Button("Deny", variant="error", id="btn-deny")
+        yield Label("⚠  Approval required  [y] approve  [n] deny  [Esc] dismiss", classes="ap-badge")
+        yield Label(f"Tool: {self._callable_name}", classes="ap-tool")
+        yield Static(self._input_summary, classes="ap-summary", markup=False)
+        yield Widget(id="ap-divider")
+        with Widget(id="ap-buttons"):
+            yield Button("▶  Approve [y]", variant="success", id="btn-approve")
+            yield Button("✗  Deny [n]", variant="error", id="btn-deny")
+
+    def on_mount(self) -> None:
+        self.focus()
+
+    def on_key(self, event: Key) -> None:
+        if self._resolved:
+            return
+        if event.key in ("y", "a"):
+            event.stop()
+            self._resolve(approved=True)
+        elif event.key == "n":
+            event.stop()
+            self._resolve(approved=False)
+        elif event.key == "escape":
+            event.stop()
+            self._resolve(approved=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if self._resolved:
             return
+        self._resolve(approved=event.button.id == "btn-approve")
+
+    def _resolve(self, *, approved: bool) -> None:
         self._resolved = True
-        approved = event.button.id == "btn-approve"
-        self._mark_resolved(approved)
+        self._collapse(approved)
         self.post_message(self.Resolved(self._approval_id, approved))
 
-    def _mark_resolved(self, approved: bool) -> None:
+    def _collapse(self, approved: bool) -> None:
         self.add_class("resolved")
-        header = self.query_one(".approval-header", Label)
         verb = "Approved" if approved else "Denied"
-        header.update(f"{'✓' if approved else '✗'} {verb}: {self._callable_name}")
-        # Hide buttons
+        icon = "✓" if approved else "✗"
         with contextlib.suppress(Exception):
-            self.query_one("#approval-buttons").display = False
+            self.query_one(".ap-badge", Label).update(f"{icon}  {verb}: {self._callable_name}")
+        for sel in (".ap-tool", ".ap-summary", "#ap-divider", "#ap-buttons"):
+            with contextlib.suppress(Exception):
+                self.query_one(sel).display = False
+        with contextlib.suppress(Exception):
+            self.blur()

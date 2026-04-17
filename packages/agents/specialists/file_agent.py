@@ -40,7 +40,7 @@ class FileAgent(SpecialistBase):
         "You are a filesystem specialist. You help read, write, list, and search files. "
         "Always confirm file paths before writing. Never write outside allowed paths."
     )
-    TOOL_WHITELIST = ["read_file", "write_file", "list_dir", "search_files"]
+    TOOL_WHITELIST = ["read_file", "write_file", "edit_file", "list_dir", "search_files"]
 
     async def _execute(self, input: FileAgentInput, context: CallContext) -> SpecialistOutput:
         op = input.operation
@@ -68,7 +68,7 @@ class FileAgent(SpecialistBase):
 
                 res = await tool.invoke(ReadFileInput(file_path=input.file_path), child_ctx)
                 if res.success and res.output:
-                    result_text = res.output.result  # type: ignore[attr-defined]
+                    result_text = res.get_output_field("result")
                     tool_calls_made.append("read_file")
 
         elif op == "write" and input.file_path and input.content:
@@ -81,7 +81,7 @@ class FileAgent(SpecialistBase):
                     child_ctx,
                 )
                 if res.success and res.output:
-                    result_text = res.output.result  # type: ignore[attr-defined]
+                    result_text = res.get_output_field("result")
                     tool_calls_made.append("write_file")
 
         elif op == "list" and input.file_path:
@@ -91,7 +91,7 @@ class FileAgent(SpecialistBase):
 
                 res = await tool.invoke(ListDirInput(dir_path=input.file_path), child_ctx)
                 if res.success and res.output:
-                    result_text = res.output.result  # type: ignore[attr-defined]
+                    result_text = res.get_output_field("result")
                     tool_calls_made.append("list_dir")
 
         if not result_text:

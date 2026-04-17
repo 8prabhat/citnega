@@ -45,5 +45,30 @@ class WriteKBTool(BaseCallable):
 
     async def _execute(self, input: WriteKBInput, context: CallContext) -> ToolOutput:
         if self._kb is None:
-            return ToolOutput(result="(Knowledge base not available — Phase 8)")
-        return ToolOutput(result="(Knowledge base not available — Phase 8)")
+            return ToolOutput(result="Knowledge base is not available.")
+
+        from datetime import UTC, datetime
+        import hashlib
+        import uuid
+
+        from citnega.packages.protocol.models.kb import KBItem, KBSourceType
+
+        content_hash = hashlib.sha256(input.content.encode("utf-8", errors="replace")).hexdigest()
+        now = datetime.now(tz=UTC)
+        item = KBItem(
+            item_id=str(uuid.uuid4()),
+            title=input.title,
+            content=input.content,
+            source_type=KBSourceType.NOTE,
+            source_session_id=context.session_id,
+            source_run_id=context.run_id,
+            tags=input.tags,
+            created_at=now,
+            updated_at=now,
+            content_hash=content_hash,
+            file_path=input.source or None,
+        )
+        saved = await self._kb.add_item(item)
+        return ToolOutput(
+            result=f"Saved to knowledge base: '{saved.title}' (id={saved.item_id[:8]})"
+        )

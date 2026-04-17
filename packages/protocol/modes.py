@@ -161,10 +161,118 @@ class ResearchMode(ISessionMode):
         return base_prompt + suffix
 
 
+class CodeMode(ISessionMode):
+    """
+    Code-focused mode for programming, debugging, and codebase operations.
+
+    In this mode the model is instructed to:
+      - Use filesystem tools proactively (read_file, list_dir, search_files)
+      - Make surgical edits via edit_file rather than rewriting whole files
+      - Verify changes by running tests / linting with run_shell
+      - Keep git_ops in mind for status/diff/commit
+      - Be concise — code speaks louder than explanation
+    """
+
+    @property
+    def name(self) -> str:
+        return "code"
+
+    @property
+    def display_label(self) -> str:
+        return "[CODE]"
+
+    @property
+    def description(self) -> str:
+        return "Code-focused mode: reads/writes files, runs shell commands, uses git."
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Code Mode\n"
+            "You are in **code mode** — a programming-focused environment with full "
+            "filesystem, shell, and git access.\n\n"
+            "**How to work:**\n"
+            "1. **Explore first** — use `list_dir` / `search_files` to orient yourself "
+            "before reading or writing.\n"
+            "2. **Read before editing** — call `read_file` to get exact content; "
+            "then use `edit_file` (find/replace) for surgical changes.\n"
+            "3. **Write new files** with `write_file` when creating from scratch.\n"
+            "4. **Run commands** with `run_shell` for tests, linting, builds, or any "
+            "shell operation.\n"
+            "5. **Version control** — use `git_ops` for status, diff, log, add, commit.\n"
+            "6. **Persistent memory** — save key findings to the knowledge base with "
+            "`write_kb`; retrieve them with `read_kb`.\n\n"
+            "**Rules:**\n"
+            "- Follow existing code style — no unnecessary reformatting.\n"
+            "- Prefer minimal, targeted edits over rewrites.\n"
+            "- Always show diffs or summaries of changes made.\n"
+            "- If a task seems risky (deleting files, force-push), confirm with the user first."
+        )
+        return base_prompt + suffix
+
+
+class ReviewMode(ISessionMode):
+    @property
+    def name(self) -> str:
+        return "review"
+
+    @property
+    def display_label(self) -> str:
+        return "[REVIEW]"
+
+    @property
+    def description(self) -> str:
+        return "Code review mode: prioritize bugs, regressions, and missing tests."
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Review Mode\n"
+            "Operate as a rigorous code reviewer.\n"
+            "- Prioritise bugs, risks, regressions, and missing tests.\n"
+            "- Be explicit about assumptions.\n"
+            "- Prefer findings over summaries.\n"
+            "- Cite concrete files and behaviors when available."
+        )
+        return base_prompt + suffix
+
+
+class OperateMode(ISessionMode):
+    @property
+    def name(self) -> str:
+        return "operate"
+
+    @property
+    def display_label(self) -> str:
+        return "[OPERATE]"
+
+    @property
+    def description(self) -> str:
+        return "Operational mode: execute controlled multi-step runbooks and checks."
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Operate Mode\n"
+            "Operate with runbook discipline.\n"
+            "- Prefer explicit plans and checkpoints.\n"
+            "- Record assumptions and state transitions.\n"
+            "- Favour verification after each mutating action.\n"
+            "- Treat safety and repeatability as first-class requirements."
+        )
+        return base_prompt + suffix
+
+
 # ── Registry (single source of truth — DRY) ──────────────────────────────────
 
 _REGISTRY: dict[str, ISessionMode] = {
-    m.name: m for m in (ChatMode(), PlanMode(), ExploreMode(), ResearchMode())
+    m.name: m
+    for m in (
+        ChatMode(),
+        PlanMode(),
+        ExploreMode(),
+        ResearchMode(),
+        CodeMode(),
+        ReviewMode(),
+        OperateMode(),
+    )
 }
 
 VALID_MODES: list[str] = list(_REGISTRY)

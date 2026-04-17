@@ -25,9 +25,13 @@ from typing import TYPE_CHECKING
 import uuid
 
 from citnega.packages.observability.logging_setup import runtime_logger
-from citnega.packages.protocol.events.lifecycle import RunCompleteEvent, RunStateEvent
+from citnega.packages.protocol.events.lifecycle import (
+    RunCompleteEvent,
+    RunStateEvent,
+    RunTerminalReasonEvent,
+)
 from citnega.packages.protocol.interfaces.runtime import IRuntime
-from citnega.packages.protocol.models.runs import RunState, StateSnapshot
+from citnega.packages.protocol.models.runs import RunState, RunSummary, StateSnapshot
 from citnega.packages.shared.errors import (
     RunNotFoundError,
 )
@@ -36,6 +40,8 @@ from citnega.packages.shared.errors import (
 )
 
 if TYPE_CHECKING:
+    from citnega.packages.capabilities.registry import CapabilityRegistry
+    from citnega.packages.execution.engine import ExecutionEngine
     from citnega.packages.protocol.callables.interfaces import IInvocable
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
@@ -83,6 +89,9 @@ class CoreRuntime(IRuntime):
         framework_adapter: IFrameworkAdapter,
         event_emitter: EventEmitter,
         callable_registry: BaseRegistry[IInvocable],
+        model_gateway: object | None = None,
+        capability_registry: CapabilityRegistry | None = None,
+        execution_engine: ExecutionEngine | None = None,
     ) -> None:
         self._sessions = session_manager
         self._runs = run_manager
@@ -90,6 +99,9 @@ class CoreRuntime(IRuntime):
         self._adapter = framework_adapter
         self._emitter = event_emitter
         self._registry = callable_registry
+        self._model_gateway = model_gateway
+        self._capability_registry = capability_registry
+        self._execution_engine = execution_engine
         self._runners: dict[str, IFrameworkRunner] = {}
 
         # Per-session lock: only one active run at a time per session
@@ -206,6 +218,10 @@ class CoreRuntime(IRuntime):
                 )
             )
 
+        # Mutable box so exception branches can set the terminal reason
+        # before the finally block reads it.
+        _terminal: list[tuple[str, str]] = [("completed", "")]
+
         try:
             # 1. PENDING → CONTEXT_ASSEMBLING
             await _transition(RunState.CONTEXT_ASSEMBLING)
@@ -226,6 +242,7 @@ class CoreRuntime(IRuntime):
             await self._runs.increment_turn(run_id)
 
         except asyncio.CancelledError:
+            _terminal[0] = ("cancelled", "")
             run = await self._runs.get(run_id)
             if run.state not in (RunState.COMPLETED, RunState.FAILED):
                 try:
@@ -240,11 +257,12 @@ class CoreRuntime(IRuntime):
                             reason="cancelled",
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_cancel_state_transition_failed", run_id=run_id, error=str(_inner))
             raise
 
         except CitnegaRuntimeError as exc:
+            _terminal[0] = (exc.error_code or "failed", str(exc))
             runtime_logger.error(
                 "run_failed",
                 run_id=run_id,
@@ -265,10 +283,11 @@ class CoreRuntime(IRuntime):
                             reason=str(exc),
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_error_state_transition_failed", run_id=run_id, error=str(_inner))
 
         except Exception as exc:
+            _terminal[0] = ("failed", str(exc))
             runtime_logger.exception(
                 "run_unhandled_error",
                 run_id=run_id,
@@ -288,12 +307,41 @@ class CoreRuntime(IRuntime):
                             reason=str(exc),
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as _inner:
+                    runtime_logger.debug("run_unhandled_state_transition_failed", run_id=run_id, error=str(_inner))
 
         finally:
-            # Emit terminal sentinel regardless of outcome
+            # Emit terminal reason regardless of outcome.
             run = await self._runs.get(run_id)
+            reason_code, reason_details = _terminal[0]
+            self._emitter.emit(
+                RunTerminalReasonEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    reason=reason_code,
+                    details=reason_details,
+                )
+            )
+
+            # Keep the run marked active until session state persistence is done.
+            # This prevents shutdown() from missing an in-flight cleanup task.
+            try:
+                await self._sessions.set_idle(session_id)
+            except Exception as exc:
+                runtime_logger.warning(
+                    "session_set_idle_failed",
+                    session_id=session_id,
+                    run_id=run_id,
+                    error=str(exc),
+                )
+            finally:
+                async with self._active_lock:
+                    self._active.pop(session_id, None)
+
+            # Emit completion sentinel only after cleanup is persisted and
+            # the run is removed from active bookkeeping. This guarantees
+            # callers can safely start the next run after observing RunCompleteEvent.
             self._emitter.emit(
                 RunCompleteEvent(
                     session_id=session_id,
@@ -304,10 +352,6 @@ class CoreRuntime(IRuntime):
             )
             # Note: close_queue is NOT called here — the consumer (stream_events)
             # owns cleanup once it has read RunCompleteEvent.
-
-            async with self._active_lock:
-                self._active.pop(session_id, None)
-            await self._sessions.set_idle(session_id)
 
     # ------------------------------------------------------------------
     # Control operations
@@ -389,10 +433,55 @@ class CoreRuntime(IRuntime):
     def list_callables(self) -> list[CallableMetadata]:
         return [c.get_metadata() for c in self._registry.list_all()]
 
-    def get_runner(self, session_id: str):
+    # ------------------------------------------------------------------
+    # Public accessors (used by ApplicationService to avoid private access)
+    # ------------------------------------------------------------------
+
+    async def get_session(self, session_id: str) -> Session:
+        """Return *session_id*, raising SessionNotFoundError if absent."""
+        return await self._sessions.get(session_id)
+
+    async def list_sessions(self, limit: int = 50) -> list[Session]:
+        """Return all sessions, capped to *limit*."""
+        all_sessions = await self._sessions.list_all()
+        return all_sessions[:limit]
+
+    async def delete_session(self, session_id: str) -> None:
+        await self._sessions.delete(session_id)
+
+    async def save_session(self, session: Session) -> None:
+        """Persist a modified session record."""
+        await self._sessions.save(session)
+
+    async def get_run_summary(self, run_id: str) -> RunSummary | None:
+        """Return a run summary, or None if not found."""
+        try:
+            return await self._runs.get(run_id)
+        except RunNotFoundError:
+            return None
+
+    async def list_runs_for_session(self, session_id: str, limit: int = 50) -> list[RunSummary]:
+        return await self._runs.list_for_session(session_id, limit=limit)
+
+    @property
+    def adapter(self) -> IFrameworkAdapter:
+        """The active framework adapter."""
+        return self._adapter
+
+    @property
+    def callable_registry(self) -> BaseRegistry[IInvocable]:
+        """The unified callable registry."""
+        return self._registry
+
+    @property
+    def capability_registry(self) -> CapabilityRegistry | None:
+        """The capability registry (may be None if not built at bootstrap)."""
+        return self._capability_registry
+
+    def get_runner(self, session_id: str) -> IFrameworkRunner | None:
         return self._runners.get(session_id)
 
-    async def ensure_runner(self, session_id: str):
+    async def ensure_runner(self, session_id: str) -> IFrameworkRunner | None:
         runner = self._runners.get(session_id)
         if runner is not None:
             return runner
@@ -419,7 +508,7 @@ class CoreRuntime(IRuntime):
         return await self._adapter.create_runner(
             session,
             self._registry.list_all(),
-            None,  # model_gateway — injected in Phase 4
+            self._model_gateway,
         )
 
     # ------------------------------------------------------------------

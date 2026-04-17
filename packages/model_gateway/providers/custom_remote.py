@@ -70,7 +70,7 @@ class CustomRemoteProvider(BaseProvider):
         http_client: httpx.AsyncClient | None = None,
     ) -> CustomRemoteProvider:
         """Build from the model_info.framework_specific dict."""
-        fs: dict = {}  # type: ignore[type-arg]
+        fs: dict[str, object] = {}
         base_url = fs.get("base_url", "http://localhost:8080")
         api_key_env = fs.get("api_key_env", "")
         api_key = os.environ.get(api_key_env, "") if api_key_env else ""

@@ -56,7 +56,7 @@ class SummaryAgent(SpecialistBase):
             )
             if result.success and result.output:
                 return SpecialistOutput(
-                    response=result.output.result,  # type: ignore[attr-defined]
+                    response=result.get_output_field("result"),
                     tool_calls_made=["summarize_text"],
                 )
 

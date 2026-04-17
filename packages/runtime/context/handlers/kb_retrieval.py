@@ -22,7 +22,9 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.interfaces.knowledge_store import IKnowledgeStore
     from citnega.packages.protocol.models.sessions import Session
 
-_CHARS_PER_TOKEN = 4
+from citnega.packages.model_gateway.token_counter import CharApproxCounter
+
+_token_counter = CharApproxCounter()
 
 
 class KBRetrievalHandler(IContextHandler):
@@ -33,6 +35,8 @@ class KBRetrievalHandler(IContextHandler):
         kb_store:      Injected IKnowledgeStore.  If None, handler is a no-op.
         retrieve_limit: Max KB items to include per turn.
     """
+
+    parallel_safe = True
 
     @property
     def name(self) -> str:
@@ -66,7 +70,7 @@ class KBRetrievalHandler(IContextHandler):
 
         # Build one ContextSource for all KB snippets combined
         snippets = "\n\n".join(f"[KB: {r.item.title}]\n{r.item.content}" for r in results)
-        token_count = len(snippets) // _CHARS_PER_TOKEN
+        token_count = _token_counter.count(snippets)
 
         new_source = ContextSource(
             source_type="kb",

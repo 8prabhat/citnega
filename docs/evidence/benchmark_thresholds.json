@@ -1,0 +1,120 @@
+{
+  "default": {
+    "checks": {
+      "BM-01": {
+        "baseline_ms": 650,
+        "max_regression_pct": 200
+      },
+      "BM-02": {
+        "baseline_ms": 650,
+        "max_regression_pct": 200
+      },
+      "BM-03": {
+        "baseline_ms": 800,
+        "max_regression_pct": 200
+      },
+      "BM-04": {
+        "baseline_ms": 12000,
+        "max_regression_pct": 100
+      }
+    }
+  },
+  "lanes": {
+    "ubuntu-latest-py3.11": {
+      "checks": {
+        "BM-04": {
+          "baseline_ms": 14000,
+          "max_regression_pct": 100
+        }
+      }
+    },
+    "ubuntu-latest-py3.12": {
+      "checks": {
+        "BM-04": {
+          "baseline_ms": 14000,
+          "max_regression_pct": 100
+        }
+      }
+    },
+    "macos-latest-py3.11": {
+      "checks": {
+        "BM-01": {
+          "baseline_ms": 900,
+          "max_regression_pct": 200
+        },
+        "BM-02": {
+          "baseline_ms": 900,
+          "max_regression_pct": 200
+        },
+        "BM-03": {
+          "baseline_ms": 950,
+          "max_regression_pct": 200
+        },
+        "BM-04": {
+          "baseline_ms": 15000,
+          "max_regression_pct": 100
+        }
+      }
+    },
+    "macos-latest-py3.12": {
+      "checks": {
+        "BM-01": {
+          "baseline_ms": 900,
+          "max_regression_pct": 200
+        },
+        "BM-02": {
+          "baseline_ms": 900,
+          "max_regression_pct": 200
+        },
+        "BM-03": {
+          "baseline_ms": 950,
+          "max_regression_pct": 200
+        },
+        "BM-04": {
+          "baseline_ms": 15000,
+          "max_regression_pct": 100
+        }
+      }
+    },
+    "windows-latest-py3.11": {
+      "checks": {
+        "BM-01": {
+          "baseline_ms": 1100,
+          "max_regression_pct": 200
+        },
+        "BM-02": {
+          "baseline_ms": 1100,
+          "max_regression_pct": 200
+        },
+        "BM-03": {
+          "baseline_ms": 1200,
+          "max_regression_pct": 200
+        },
+        "BM-04": {
+          "baseline_ms": 18000,
+          "max_regression_pct": 100
+        }
+      }
+    },
+    "windows-latest-py3.12": {
+      "checks": {
+        "BM-01": {
+          "baseline_ms": 1100,
+          "max_regression_pct": 200
+        },
+        "BM-02": {
+          "baseline_ms": 1100,
+          "max_regression_pct": 200
+        },
+        "BM-03": {
+          "baseline_ms": 1200,
+          "max_regression_pct": 200
+        },
+        "BM-04": {
+          "baseline_ms": 18000,
+          "max_regression_pct": 100
+        }
+      }
+    }
+  }
+}

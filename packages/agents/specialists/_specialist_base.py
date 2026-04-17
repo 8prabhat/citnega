@@ -48,6 +48,7 @@ class SpecialistBase(BaseCallable):
 
     callable_type: CallableType = CallableType.SPECIALIST
     output_schema: type[BaseModel] = SpecialistOutput
+    _REQUIRES_TOOL_REGISTRY: bool = True
 
     SYSTEM_PROMPT: str = ""
     TOOL_WHITELIST: list[str] = []

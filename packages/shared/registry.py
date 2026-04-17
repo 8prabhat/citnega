@@ -8,9 +8,13 @@ All registries share the same register/resolve/list logic (DRY).
 from __future__ import annotations
 
 import threading
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from citnega.packages.shared.errors import CallableNotFoundError
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.callables.interfaces import IInvocable
+    from citnega.packages.protocol.callables.types import CallableType
 
 T = TypeVar("T")
 
@@ -95,3 +99,47 @@ class BaseRegistry(Generic[T]):
         with self._lock:
             names = list(self._items.keys())
         return f"{type(self).__name__}(name={self._name!r}, items={names})"
+
+
+class CallableRegistry(BaseRegistry["IInvocable"]):
+    """
+    Unified registry for tools *and* agents.
+
+    Extends ``BaseRegistry`` with callable-specific query methods so callers
+    can ask for all tools, all agents, or filter by ``CallableType`` without
+    duplicating filter logic at every call site.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(name="callable_registry")
+
+    def list_by_type(self, callable_type: CallableType) -> list[IInvocable]:
+        """Return all callables whose ``callable_type`` matches *callable_type*."""
+        with self._lock:
+            return [
+                item
+                for item in self._items.values()
+                if getattr(item, "callable_type", None) == callable_type
+            ]
+
+    def get_tools(self) -> dict[str, IInvocable]:
+        """Return all TOOL-type callables as a ``name → instance`` snapshot."""
+        from citnega.packages.protocol.callables.types import CallableType as _CT
+
+        with self._lock:
+            return {
+                name: item
+                for name, item in self._items.items()
+                if getattr(item, "callable_type", None) == _CT.TOOL
+            }
+
+    def get_agents(self) -> dict[str, IInvocable]:
+        """Return all non-TOOL callables (specialists + core) as a ``name → instance`` snapshot."""
+        from citnega.packages.protocol.callables.types import CallableType as _CT
+
+        with self._lock:
+            return {
+                name: item
+                for name, item in self._items.items()
+                if getattr(item, "callable_type", None) != _CT.TOOL
+            }

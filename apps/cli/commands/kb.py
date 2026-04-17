@@ -72,13 +72,32 @@ async def kb_export(
         "", "--output", "-o", help="Output file path (default: timestamped in kb_exports_dir)."
     ),
     fmt: str = typer.Option("jsonl", "--format", "-f", help="Format: jsonl or markdown."),
+    session: str = typer.Option(
+        "", "--session", "-s",
+        help="Limit export to a specific session ID (default: all sessions).",
+    ),
 ) -> None:
-    """Export the full knowledge base to JSONL or Markdown."""
+    """Export the knowledge base to JSONL or Markdown.
+
+    Use --session <id> to export only items from a specific session.
+    Omit --session (or pass 'all') to export the full global KB.
+    """
+    from pathlib import Path
+
+    fmt_lower = fmt.lower()
+    if fmt_lower not in ("jsonl", "markdown"):
+        typer.echo(f"Unknown format {fmt!r}. Use: jsonl, markdown.", err=True)
+        raise typer.Exit(code=1)
+
+    output_path = Path(output) if output else None
+    session_id = session if session else "all"
+
     async with cli_bootstrap() as svc:
         try:
-            path = await svc.export_session("all")  # export_session exports full KB
+            path = await svc.export_session(session_id, fmt=fmt_lower, output_path=output_path)
         except NotImplementedError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=2)
 
-    typer.echo(f"Exported to: {path}")
+    scope = f"session {session_id}" if session_id != "all" else "all sessions"
+    typer.echo(f"Exported {fmt_lower.upper()} ({scope}) to: {path}")

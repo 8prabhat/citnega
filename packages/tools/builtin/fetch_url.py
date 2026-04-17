@@ -29,6 +29,7 @@ class FetchURLTool(BaseCallable):
     name = "fetch_url"
     description = "Fetch content from a URL via HTTP/HTTPS. Requires user approval."
     callable_type = CallableType.TOOL
+    llm_direct_access = False  # agent-internal; LLM uses research_agent
     input_schema = FetchURLInput
     output_schema = ToolOutput
     policy = tool_policy(

@@ -177,4 +177,5 @@ class LangGraphRunner(BaseFrameworkRunner):
         }
 
     async def _do_restore_checkpoint(self, framework_state: dict[str, object]) -> None:
-        self._graph_state = framework_state.get("graph_state", {})  # type: ignore[assignment]
+        state = framework_state.get("graph_state", {})
+        self._graph_state = dict(state) if isinstance(state, dict) else {}

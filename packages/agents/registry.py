@@ -17,6 +17,7 @@ scattered across agent modules.
 
 from __future__ import annotations
 
+import traceback
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -59,18 +60,23 @@ class AgentRegistry:
         agents: dict[str, IInvocable],
         tools: dict[str, IInvocable] | None = None,
     ) -> None:
+        from citnega.packages.protocol.callables.base import BaseCoreAgent
         from citnega.packages.protocol.callables.types import CallableType
 
-        non_core = [
-            agent for agent in agents.values() if getattr(agent, "callable_type", None) != CallableType.CORE
+        core_agents = [
+            a for a in agents.values() if getattr(a, "callable_type", None) == CallableType.CORE
         ]
-        for agent in agents.values():
-            if getattr(agent, "callable_type", None) != CallableType.CORE:
-                continue
-            if hasattr(agent, "sync_tool_registry"):
+        non_core = [
+            a for a in agents.values() if getattr(a, "callable_type", None) != CallableType.CORE
+        ]
+
+        for agent in core_agents:
+            if isinstance(agent, BaseCoreAgent):
                 agent.sync_tool_registry(tools or {})
-            if hasattr(agent, "sync_sub_callables"):
-                agent.sync_sub_callables(non_core)
+                # Give every CORE agent access to: all non-CORE agents + all other CORE agents
+                # This lets ConversationAgent call RouterAgent, and RouterAgent know the specialists.
+                peers = non_core + [a for a in core_agents if a.name != agent.name]
+                agent.sync_sub_callables(peers)
 
     # ── Private ───────────────────────────────────────────────────────────────
 
@@ -84,6 +90,7 @@ class AgentRegistry:
         from citnega.packages.agents.core.conversation_agent import (
             ConversationAgent,
         )
+        from citnega.packages.agents.core.orchestrator_agent import OrchestratorAgent
         from citnega.packages.agents.core.planner_agent import PlannerAgent
         from citnega.packages.agents.core.reasoning import ReasoningAgent
         from citnega.packages.agents.core.retriever import RetrieverAgent
@@ -110,6 +117,7 @@ class AgentRegistry:
             RetrieverAgent,
             ToolExecutorAgent,
             ConversationAgent,
+            OrchestratorAgent,
             PlannerAgent,
             # Domain
             *ALL_DOMAIN_AGENTS,
@@ -120,10 +128,17 @@ class AgentRegistry:
         ]
 
         agents = []
+        failures: list[str] = []
         for cls in all_classes:
             try:
                 agents.append(self._make(cls))
-            except Exception:
-                pass  # skip any agent that fails to instantiate
+            except Exception as exc:
+                details = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+                failures.append(f"{cls.__name__}: {details}")
+
+        if failures:
+            raise RuntimeError(
+                "Agent registry bootstrap failed: " + "; ".join(failures)
+            )
 
         return agents

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -340,3 +341,59 @@ class TestContextAssembler:
         assert "recent_turns" in source_types
         assert "summary" in source_types
         assert "state" in source_types
+
+    @pytest.mark.asyncio
+    async def test_parallel_safe_handlers_merge_in_handler_order(self) -> None:
+        class ParallelHandler:
+            parallel_safe = True
+
+            def __init__(self, name: str, delay: float) -> None:
+                self._name = name
+                self._delay = delay
+
+            @property
+            def name(self) -> str:
+                return self._name
+
+            async def enrich(self, ctx: ContextObject, session: Session) -> ContextObject:
+                await asyncio.sleep(self._delay)
+                source = ContextSource(source_type=self._name, content=self._name, token_count=1)
+                return ctx.model_copy(
+                    update={
+                        "sources": [*ctx.sources, source],
+                        "total_tokens": ctx.total_tokens + 1,
+                        "budget_remaining": ctx.budget_remaining - 1,
+                    }
+                )
+
+        settings = MagicMock()
+        settings.nextgen.parallel_execution_enabled = True
+        with patch("citnega.packages.config.loaders.load_settings", return_value=settings):
+            assembler = ContextAssembler(
+                [ParallelHandler("first", 0.03), ParallelHandler("second", 0.01)]
+            )
+            ctx = await assembler.assemble(_session(), "hello", "run-1")
+
+        assert [source.source_type for source in ctx.sources] == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_token_budget_emits_context_truncated_event(self) -> None:
+        from unittest.mock import MagicMock
+        from citnega.packages.protocol.events.context import ContextTruncatedEvent
+
+        emitter = MagicMock()
+        emitted: list[object] = []
+        emitter.emit.side_effect = emitted.append
+
+        handler = TokenBudgetHandler(max_context_tokens=50, emitter=emitter)
+        session = _session(max_context_tokens=50)
+        high = ContextSource(source_type="recent_turns", content="A" * 80, token_count=20)
+        low = ContextSource(source_type="kb", content="B" * 200, token_count=60)
+        ctx = _empty_context(session, budget=50).model_copy(
+            update={"sources": [high, low], "total_tokens": 80}
+        )
+        result = await handler.enrich(ctx, session)
+        assert result.truncated
+        truncated_events = [e for e in emitted if isinstance(e, ContextTruncatedEvent)]
+        assert len(truncated_events) == 1
+        assert "kb" in truncated_events[0].dropped_sources

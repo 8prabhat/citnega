@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
+    from citnega.packages.capabilities import CapabilityDescriptor
+    from citnega.packages.planning import CompiledPlan
     from citnega.packages.protocol.callables.types import CallableMetadata
     from citnega.packages.protocol.events import CanonicalEvent
     from citnega.packages.protocol.models import (
@@ -100,7 +102,12 @@ class IApplicationService(ABC):
     # ── Import / export ────────────────────────────────────────────────────────
 
     @abstractmethod
-    async def export_session(self, session_id: str) -> Path: ...
+    async def export_session(
+        self,
+        session_id: str,
+        fmt: str = "jsonl",
+        output_path: Path | None = None,
+    ) -> Path: ...
 
     @abstractmethod
     async def import_session(self, path: Path) -> Session: ...
@@ -111,7 +118,7 @@ class IApplicationService(ABC):
     def register_callable(self, callable_obj: object) -> None: ...
 
     @abstractmethod
-    async def hot_reload_workfolder(self, workfolder: Path, loader: object) -> dict: ...
+    async def hot_reload_workfolder(self, workfolder: Path, loader: object) -> dict[str, Any]: ...
 
     @abstractmethod
     def save_workspace_path(self, path: str) -> None: ...
@@ -129,3 +136,31 @@ class IApplicationService(ABC):
 
     @abstractmethod
     def list_models(self) -> list[ModelInfo]: ...
+
+    # ── Nextgen planning / strategy ────────────────────────────────────────────
+
+    @abstractmethod
+    def list_capabilities(self) -> list[CapabilityDescriptor]: ...
+
+    @abstractmethod
+    def list_skills(self) -> list[CapabilityDescriptor]: ...
+
+    @abstractmethod
+    def compile_mental_model(self, session_id: str, text: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    def set_session_skills(self, session_id: str, skill_names: list[str]) -> None: ...
+
+    @abstractmethod
+    def get_session_skills(self, session_id: str) -> list[str]: ...
+
+    @abstractmethod
+    def compile_plan(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        capability_id: str | None = None,
+        workflow_name: str | None = None,
+        variables: dict[str, Any] | None = None,
+    ) -> CompiledPlan: ...

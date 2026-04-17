@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from citnega.apps.tui.workers.event_consumer import (
         ApprovalRequested,
         RunFinished,
+        RunPhaseChanged,
         RunStarted,
         ThinkingReceived,
         TokenReceived,
@@ -124,19 +125,44 @@ class CitnegaApp(App):
         await self.pop_screen()
         await self._start_chat_with_session(None)
 
+    def _session_defaults(self) -> tuple[str, str]:
+        """Return (framework, model_id) defaults from the active service."""
+        framework = "direct"
+        model_id = ""
+        if self._service is None:
+            return framework, model_id
+
+        try:
+            frameworks = self._service.list_frameworks()
+            if isinstance(frameworks, list) and frameworks and isinstance(frameworks[0], str):
+                framework = frameworks[0]
+        except Exception:
+            pass
+
+        try:
+            models = self._service.list_models()
+            if isinstance(models, list) and models and isinstance(models[0].model_id, str):
+                model_id = models[0].model_id
+        except Exception:
+            pass
+
+        return framework, model_id
+
     async def _start_chat_with_session(self, session_id: str | None) -> None:
         """Push ChatScreen and wire up the controller for *session_id*."""
         await self.push_screen(ChatScreen())
 
         from citnega.packages.protocol.models.sessions import SessionConfig
 
+        framework, default_model_id = self._session_defaults()
+
         try:
             if session_id is None:
                 config = SessionConfig(
                     session_id=str(uuid.uuid4()),
                     name="new-session",
-                    framework="stub",
-                    default_model_id="",
+                    framework=framework,
+                    default_model_id=default_model_id,
                 )
                 session = await self._service.create_session(config)
                 self._session_id = session.config.session_id
@@ -146,14 +172,15 @@ class CitnegaApp(App):
                     self._session_id = session.config.session_id
                     # Warm up the runner so conversation history is in-memory
                     await self._service.ensure_runner(self._session_id)
+                    self._resume_session_id = self._session_id
                 except Exception:
                     # Session not found — create fresh
                     self.notify(f"Session {session_id!r} not found; starting fresh.")
                     config = SessionConfig(
                         session_id=str(uuid.uuid4()),
                         name="new-session",
-                        framework="stub",
-                        default_model_id="",
+                        framework=framework,
+                        default_model_id=default_model_id,
                     )
                     session = await self._service.create_session(config)
                     self._session_id = session.config.session_id
@@ -161,22 +188,13 @@ class CitnegaApp(App):
             self.notify(f"Session setup failed: {exc}", severity="error", timeout=10)
             return
 
-        # Update status bar
-        from citnega.apps.tui.widgets.status_bar import StatusBar
+        # Seed ContextBar with session identity fields
+        from citnega.apps.tui.widgets.context_bar import ContextBar
 
         try:
-            status = self.screen.query_one(StatusBar)
-            status.session_id = self._session_id
-            status.framework = self._service.list_frameworks()[0] if self._service else "direct"
-            active_model = (
-                self._service.get_session_model(self._session_id) if self._service else ""
-            )
-            if active_model:
-                status.model = active_model
-            elif self._service:
-                models = self._service.list_models()
-                if models:
-                    status.model = models[0].model_id
+            ctx = self.screen.query_one(ContextBar)
+            ctx.session_id = self._session_id
+            ctx.framework = self._service.list_frameworks()[0] if self._service else "direct"
         except Exception:
             pass
 
@@ -188,6 +206,57 @@ class CitnegaApp(App):
             service=self._service,
             session_id=self._session_id,
         )
+
+        # Seed the ContextBar with initial session values
+        active_model = self._service.get_session_model(self._session_id) if self._service else ""
+        if not active_model and self._service:
+            models = self._service.list_models()
+            active_model = models[0].model_id if models else ""
+        active_mode = (
+            self._service.get_session_mode(self._session_id) if self._service else "direct"
+        )
+        think_val = (
+            self._service.get_session_thinking(self._session_id) if self._service else None
+        )
+        think_label = {True: "on", False: "off", None: "auto"}.get(think_val, "auto")
+        import os
+        workfolder = os.getcwd()
+        try:
+            from citnega.packages.config.loaders import load_settings
+            ws = load_settings().workspace
+            if ws.workfolder_path:
+                workfolder = ws.workfolder_path
+        except Exception:
+            pass
+        session_name = getattr(getattr(session, "config", None), "name", "") or ""
+        self._controller.seed_context_bar(
+            model=active_model,
+            mode=active_mode,
+            think=think_label,
+            folder=workfolder,
+            session_name=session_name,
+        )
+
+        # Render persisted message history when resuming an existing session
+        resume_sid = getattr(self, "_resume_session_id", None)
+        if resume_sid and self._service:
+            self._resume_session_id = None
+            try:
+                raw_messages = self._service.get_conversation_messages(resume_sid)
+                # Drop a dangling user message at the end (saved before LLM died)
+                if raw_messages and raw_messages[-1].get("role") == "user":
+                    raw_messages = raw_messages[:-1]
+                for msg in raw_messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if not content:
+                        continue
+                    if role in ("user", "assistant"):
+                        await self._controller._append_message(role, content)
+                    elif role == "system" and content.startswith("[Compacted"):
+                        await self._controller._append_message("system", content)
+            except Exception:
+                pass
 
     async def on_unmount(self) -> None:
         if self._controller is not None:
@@ -229,6 +298,10 @@ class CitnegaApp(App):
     async def on_run_started(self, message: RunStarted) -> None:
         if self._controller is not None:
             self._controller.on_run_started(message)
+
+    async def on_run_phase_changed(self, message: RunPhaseChanged) -> None:
+        if self._controller is not None:
+            self._controller.on_run_phase_changed(message)
 
     async def on_run_finished(self, message: RunFinished) -> None:
         if self._controller is not None:
