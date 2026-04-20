@@ -8,7 +8,6 @@ called from within a running event loop.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -162,7 +161,6 @@ def test_crewai_tool_run_invokes_callable() -> None:
     import asyncio as _asyncio
 
     from citnega.packages.protocol.callables.context import CallContext
-
     from citnega.packages.protocol.models.sessions import SessionConfig
 
     ctx = CallContext(

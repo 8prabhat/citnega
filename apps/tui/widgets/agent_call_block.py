@@ -1,4 +1,4 @@
-"""AgentCallBlock — animated sidebar card for a single agent invocation."""
+"""AgentCallBlock — inline Claude Code-style agent invocation, mounted in the chat stream."""
 
 from __future__ import annotations
 
@@ -12,106 +12,148 @@ from textual.widgets import Label, Static
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
+    from textual.events import Click
     from textual.timer import Timer
 
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-_STAR_ON  = "✦"
-_STAR_OFF = "✧"
 _ICON_OK  = "✓"
 _ICON_ERR = "✗"
+_BULLET   = "◈"   # distinct from tool ◆
 
 
-def _parse_input(raw: str) -> str:
-    stripped = raw.strip()
+def _elapsed_str(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"[{int(seconds * 1000)}ms]"
+    return f"[{seconds:.1f}s]"
+
+
+def _args_inline(raw: str, max_len: int = 55) -> str:
+    """Compact single-line task hint for the agent header."""
     try:
-        obj = json.loads(stripped)
+        obj = json.loads(raw.strip())
+        if not isinstance(obj, dict) or not obj:
+            return ""
+        for key_pref in ("task", "input", "goal", "query", "text", "user_input"):
+            for k, v in obj.items():
+                if k == key_pref:
+                    val = str(v).replace("\n", " ")
+                    return (val[: max_len - 1] + "…") if len(val) > max_len else val
+        k, v = next(iter(obj.items()))
+        val = str(v).replace("\n", " ")
+        return (val[: max_len - 1] + "…") if len(val) > max_len else val
+    except Exception:
+        pass
+    s = raw.strip()
+    return (s[: max_len - 1] + "…") if len(s) > max_len else s
+
+
+def _args_detail(raw: str) -> str:
+    try:
+        obj = json.loads(raw.strip())
         if isinstance(obj, dict):
             lines = []
             for k, v in obj.items():
                 val = str(v)
-                if len(val) > 80:
-                    val = val[:77] + "…"
+                if "\n" in val:
+                    n = val.count("\n") + 1
+                    val = val.split("\n")[0] + f"  … ({n} lines)"
+                if len(val) > 120:
+                    val = val[:117] + "…"
                 lines.append(f"  {k}: {val}")
-            return "\n".join(lines) if lines else stripped
+            return "\n".join(lines)
     except Exception:
         pass
-    return stripped[:200] if len(stripped) > 200 else stripped
+    s = raw.strip()
+    return "  " + ((s[:300] + "…") if len(s) > 300 else s)
+
+
+def _output_detail(raw: str) -> str:
+    lines = [ln for ln in (raw or "").strip().splitlines() if ln.strip()]
+    if not lines:
+        return "  (no output)"
+    preview = "\n".join(f"  {ln}" for ln in lines[:12])
+    if len(lines) > 12:
+        preview += f"\n  … (+{len(lines) - 12} more lines)"
+    if len(preview) > 900:
+        preview = preview[:897] + "…"
+    return preview
 
 
 class AgentCallBlock(Widget):
     """
-    Animated agent-invocation card in the sidebar.
+    Inline agent invocation widget — Claude Code style.
 
-    Visually distinct from ToolCallBlock: accent colour border + "[agent]" prefix.
+    While running:
+        ◈  ⠸  [agent] qa_agent  analyze auth bug  [0.3s]
 
-    Layout:
-      ┌ header:  ✦ ⠼  [agent] agent_name         [0.0s]
-      │ task:    key: value
-      │ result:  (hidden until done)
-      └──────────────────────────────────────────────────
+    On success (click to expand):
+        ◈  ✓  [agent] qa_agent  analyze auth bug  [1.2s]
+        │   task: analyze auth bug
+        │   ─── output ──────────────
+        │   Analysis complete…
+
+    Uses $accent colour to distinguish from tool calls ($secondary).
     """
 
     DEFAULT_CSS = """
     AgentCallBlock {
         height: auto;
-        margin: 1 0 0 0;
-        padding: 0 1 1 1;
-        border-left: thick $panel-lighten-3;
-        background: $panel;
+        padding: 0;
     }
 
-    /* ── running ──────────────────────────────────────── */
-    AgentCallBlock.running      { border-left: thick $accent; }
-    AgentCallBlock.running #ac-header { color: $accent; }
-
-    /* ── success ──────────────────────────────────────── */
-    AgentCallBlock.success      { border-left: thick $success; }
-    AgentCallBlock.success #ac-header { color: $success; }
-
-    /* ── error ────────────────────────────────────────── */
-    AgentCallBlock.error        { border-left: thick $error; }
-    AgentCallBlock.error #ac-header { color: $error; }
-
-    /* ── shared ───────────────────────────────────────── */
-    AgentCallBlock #ac-header {
-        text-style: bold;
+    AgentCallBlock Label#ac-header {
         height: 1;
-        margin-bottom: 0;
-    }
-    AgentCallBlock #ac-input {
-        color: $text-disabled;
-        text-style: italic;
-        height: auto;
-        margin: 0;
-        padding: 0;
-    }
-    AgentCallBlock #ac-output {
+        padding: 0 0 0 1;
         color: $text-muted;
+    }
+    AgentCallBlock Label#ac-header:hover {
+        background: $boost;
+        color: $text;
+    }
+    AgentCallBlock.running  Label#ac-header { color: $accent; }
+    AgentCallBlock.success  Label#ac-header { color: $success; }
+    AgentCallBlock.error    Label#ac-header { color: $error; }
+
+    AgentCallBlock Static#ac-body {
+        display: none;
         height: auto;
-        margin: 1 0 0 0;
-        padding: 0;
+        padding: 0 1 1 1;
+        margin: 0 0 0 3;
+        border-left: solid $accent-darken-1;
+        color: $text-muted;
+    }
+    AgentCallBlock.-expanded Static#ac-body {
+        display: block;
+    }
+
+    AgentCallBlock.-from-thinking {
+        margin-top: 0;
+        padding-top: 0;
+    }
+    AgentCallBlock.-from-thinking Static#ac-body {
+        border-left: solid $warning-darken-2;
     }
     """
 
-    def __init__(self, agent_name: str, input_summary: str, **kwargs) -> None:
-        super().__init__(classes="running", **kwargs)
+    def __init__(self, agent_name: str, input_summary: str, *, from_thinking: bool = False, **kwargs) -> None:
+        cls = "running from-thinking" if from_thinking else "running"
+        super().__init__(classes=cls, **kwargs)
         self._agent_name = agent_name
-        self._input_summary = input_summary
+        self._input_raw = input_summary
+        self._hint = _args_inline(input_summary)
+        self._input_detail = _args_detail(input_summary)
+        self._output_raw = ""
         self._start: float = 0.0
         self._spin_idx: int = 0
-        self._star_on: bool = True
         self._timer: Timer | None = None
+        self._done = False
 
     def compose(self) -> ComposeResult:
         yield Label(
-            f"{_STAR_ON} {_SPINNER[0]}  [agent] {self._agent_name}",
+            f"{_BULLET}  {_SPINNER[0]}  [agent] {self._agent_name}  {self._hint}",
             id="ac-header",
         )
-        parsed = _parse_input(self._input_summary)
-        yield Static(parsed or "—", id="ac-input", markup=False)
-        out = Static("", id="ac-output", markup=False)
-        out.display = False
-        yield out
+        yield Static(self._input_detail, id="ac-body", markup=False)
 
     def on_mount(self) -> None:
         self._start = time.monotonic()
@@ -119,15 +161,11 @@ class AgentCallBlock(Widget):
 
     def _tick(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPINNER)
-        if self._spin_idx % 5 == 0:
-            self._star_on = not self._star_on
-        star = _STAR_ON if self._star_on else _STAR_OFF
         spin = _SPINNER[self._spin_idx]
-        elapsed = time.monotonic() - self._start
-        elapsed_str = f"[{elapsed:.1f}s]"
+        elapsed = _elapsed_str(time.monotonic() - self._start)
         with contextlib.suppress(Exception):
             self.query_one("#ac-header", Label).update(
-                f"{star} {spin}  [agent] {self._agent_name}  {elapsed_str}"
+                f"{_BULLET}  {spin}  [agent] {self._agent_name}  {self._hint}  {elapsed}"
             )
 
     def _stop_timer(self) -> None:
@@ -136,38 +174,44 @@ class AgentCallBlock(Widget):
                 self._timer.stop()
             self._timer = None
 
+    def on_click(self, event: Click) -> None:
+        if self._done:
+            self.toggle_class("-expanded")
+
     def set_result(self, output: str) -> None:
-        elapsed = time.monotonic() - self._start
+        self._done = True
+        self._output_raw = output
+        elapsed = _elapsed_str(time.monotonic() - self._start)
         self._stop_timer()
         self.remove_class("running")
         self.add_class("success")
+        self.add_class("-expanded")   # show output by default; click to collapse
         with contextlib.suppress(Exception):
             self.query_one("#ac-header", Label).update(
-                f"{_ICON_OK}  [agent] {self._agent_name}  [{elapsed:.1f}s]"
+                f"{_BULLET}  {_ICON_OK}  [agent] {self._agent_name}  {self._hint}  {elapsed}"
             )
-        self._show_output(output)
+        self._refresh_body()
 
     def set_error(self, error: str) -> None:
-        elapsed = time.monotonic() - self._start
+        self._done = True
+        self._output_raw = error
+        elapsed = _elapsed_str(time.monotonic() - self._start)
         self._stop_timer()
         self.remove_class("running")
         self.add_class("error")
+        self.add_class("-expanded")   # show error by default; click to collapse
         with contextlib.suppress(Exception):
             self.query_one("#ac-header", Label).update(
-                f"{_ICON_ERR}  [agent] {self._agent_name}  [{elapsed:.1f}s]"
+                f"{_BULLET}  {_ICON_ERR}  [agent] {self._agent_name}  {self._hint}  {elapsed}"
             )
-        self._show_output(error or "unknown error")
+        self._refresh_body()
 
-    # ── internal ──────────────────────────────────────────────────────────────
-
-    def _show_output(self, text: str) -> None:
-        lines = [ln for ln in (text or "").strip().splitlines() if ln.strip()]
-        preview = "\n".join(lines[:5])
-        if len(lines) > 5:
-            preview += f"\n  … (+{len(lines) - 5} more lines)"
-        if len(preview) > 400:
-            preview = preview[:397] + "…"
+    def _refresh_body(self) -> None:
+        output_section = ""
+        if self._output_raw:
+            output_section = "\n  ─── output ─────────────────────────\n" + _output_detail(
+                self._output_raw
+            )
+        body_text = self._input_detail + output_section
         with contextlib.suppress(Exception):
-            out = self.query_one("#ac-output", Static)
-            out.update(preview or "(no output)")
-            out.display = True
+            self.query_one("#ac-body", Static).update(body_text)

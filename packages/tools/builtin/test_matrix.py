@@ -44,7 +44,11 @@ class MatrixInput(BaseModel):
     )
     execute: bool = Field(
         default=False,
-        description="When true, runs one pytest command per discovered bucket.",
+        description="When true, runs one test command per discovered bucket.",
+    )
+    runner: str = Field(
+        default="auto",
+        description="Test runner: auto, pytest, jest, go, cargo, maven. auto detects from repo.",
     )
     include_buckets: list[str] = Field(
         default_factory=list,
@@ -52,7 +56,7 @@ class MatrixInput(BaseModel):
     )
     pytest_args: str = Field(
         default="-q",
-        description="Additional arguments passed to pytest when execute=true.",
+        description="Additional arguments passed to the test runner when execute=true.",
     )
     max_tests: int = Field(
         default=4000,
@@ -149,9 +153,10 @@ class MatrixTool(BaseCallable):
                 if input.include_buckets
                 else list(bucket_files.keys())
             )
+            runner = self._detect_runner(root) if input.runner == "auto" else input.runner
             for bucket in selected:
                 targets = " ".join(bucket_files[bucket][:40])
-                cmd = f"{self._pytest_cmd()} {input.pytest_args} {targets}".strip()
+                cmd = self._build_runner_command(runner, targets, input.pytest_args, root).strip()
                 runs.append(
                     await self._run_command(
                         bucket=bucket,
@@ -225,6 +230,39 @@ class MatrixTool(BaseCallable):
         if "workspace" in parts:
             return "workspace"
         return "other"
+
+    @staticmethod
+    def _detect_runner(root: Path) -> str:
+        """Detect the appropriate test runner from repository markers."""
+        if (root / "go.mod").exists():
+            return "go"
+        if (root / "Cargo.toml").exists():
+            return "cargo"
+        if (root / "package.json").exists():
+            return "jest"
+        if (root / "pom.xml").exists() or (root / "build.gradle").exists():
+            return "maven"
+        return "pytest"
+
+    @staticmethod
+    def _build_runner_command(runner: str, targets: str, extra_args: str, root: Path) -> str:
+        """Build the test execution command for the given runner."""
+        if runner == "pytest":
+            venv_pytest = root / ".venv" / "bin" / "pytest"
+            cmd = str(venv_pytest) if venv_pytest.exists() else "pytest"
+            return f"{cmd} {extra_args} {targets}"
+        if runner == "jest":
+            return f"npx jest {extra_args} {targets}"
+        if runner == "go":
+            return f"go test ./... {extra_args}"
+        if runner == "cargo":
+            return f"cargo test {extra_args}"
+        if runner == "maven":
+            return f"mvn test {extra_args}"
+        # fallback
+        venv_pytest = root / ".venv" / "bin" / "pytest"
+        cmd = str(venv_pytest) if venv_pytest.exists() else "pytest"
+        return f"{cmd} {extra_args} {targets}"
 
     @staticmethod
     def _pytest_cmd() -> str:

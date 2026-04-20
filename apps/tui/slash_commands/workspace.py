@@ -25,14 +25,18 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.interfaces.slash_command import ISlashCommand
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from citnega.apps.tui.controllers.chat_controller import ChatController
+    from citnega.packages.protocol.interfaces.application_service import IApplicationService
+    from citnega.packages.strategy.mental_models import MentalModelSpec
 
 # ---------------------------------------------------------------------------
 # WizardState
@@ -60,6 +64,64 @@ class WizardState:
 
 
 # ---------------------------------------------------------------------------
+# WizardBase
+# ---------------------------------------------------------------------------
+
+
+class WizardBase:
+    """
+    Mixin that provides a reusable name-validation step for wizard commands.
+
+    Subclasses can replace their `_on_name` body by having execute() set
+    ``ctrl._pending_wizard`` with ``on_input=self._make_name_handler(step, next_fn)``.
+    """
+
+    def _start_name_step(
+        self,
+        ctrl: ChatController,
+        step_name: str,
+        next_step_fn: Callable,
+        prompt: str = "",
+    ) -> None:
+        ctrl._pending_wizard = WizardState(
+            step_name=step_name,
+            on_input=self._make_name_handler(step_name, next_step_fn),
+            prompt=prompt,
+        )
+
+    def _make_name_handler(
+        self,
+        step_name: str,
+        next_step_fn: Callable,
+    ) -> Any:
+        async def _on_name(text: str, ctrl: ChatController) -> None:
+            await self._validate_and_store_name(text, ctrl, step_name, next_step_fn)
+        return _on_name
+
+    async def _validate_and_store_name(
+        self,
+        text: str,
+        ctrl: ChatController,
+        step_name: str,
+        next_step_fn: Callable,
+    ) -> None:
+        name = text.strip().lower().replace(" ", "_")
+        if not name or not name.isidentifier():
+            await ctrl._append_message(
+                "system",
+                f"'{name}' is not a valid Python identifier. Please use snake_case (e.g. my_name).",
+            )
+            ctrl._pending_wizard = WizardState(
+                step_name=step_name,
+                on_input=self._make_name_handler(step_name, next_step_fn),
+            )
+            return
+        ctrl._wizard_data["name"] = name
+        ctrl._wizard_data["class_name"] = _to_pascal(name)
+        await next_step_fn(ctrl)
+
+
+# ---------------------------------------------------------------------------
 # /setworkfolder
 # ---------------------------------------------------------------------------
 
@@ -68,10 +130,10 @@ class SetWorkfolderCommand(ISlashCommand):
     name = "setworkfolder"
     help_text = "Set (or show) the workspace folder. Usage: /setworkfolder [path]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if not args:
             from citnega.packages.config.loaders import load_settings
 
@@ -129,10 +191,10 @@ class RefreshCommand(ISlashCommand):
     name = "refresh"
     help_text = "Scan workfolder and hot-load new/changed tools, agents, workflows."
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         from citnega.packages.config.loaders import load_settings
 
         settings = load_settings()
@@ -174,7 +236,7 @@ class RefreshCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-class CreateToolCommand(ISlashCommand):
+class CreateToolCommand(WizardBase, ISlashCommand):
     name = "createtool"
     help_text = (
         "Create a new tool. "
@@ -182,10 +244,10 @@ class CreateToolCommand(ISlashCommand):
         "— omit args for step-by-step wizard."
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if args:
             prompt = " ".join(args).strip().strip("\"'")
             await _prompt_driven_create(app_context, self._service, "tool", prompt)
@@ -200,28 +262,19 @@ class CreateToolCommand(ISlashCommand):
         )
         app_context._pending_wizard = WizardState(
             step_name="tool_name",
-            on_input=self._on_name,
+            on_input=self._make_name_handler("tool_name", self._after_name),
         )
 
-    async def _on_name(self, text: str, ctrl: Any) -> None:
-        name = text.strip().lower().replace(" ", "_")
-        if not name.isidentifier():
-            await ctrl._append_message(
-                "system",
-                f"'{name}' is not a valid Python identifier. Please use snake_case (e.g. my_tool).",
-            )
-            ctrl._pending_wizard = WizardState("tool_name", self._on_name)
-            return
-        ctrl._wizard_data["name"] = name
-        ctrl._wizard_data["class_name"] = _to_pascal(name)
+    async def _after_name(self, ctrl: ChatController) -> None:
+        name = ctrl._wizard_data["name"]
         await ctrl._append_message("system", f"Step 2/3 — Enter a description for '{name}':")
         ctrl._pending_wizard = WizardState("tool_desc", self._on_desc)
 
-    async def _on_desc(self, text: str, ctrl: Any) -> None:
+    async def _on_desc(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["description"] = text.strip()
         await _ask_param_type_or_done(ctrl, self._on_param_start, self._finalize)
 
-    async def _on_param_start(self, value: str, label: str, ctrl: Any) -> None:
+    async def _on_param_start(self, value: str, label: str, ctrl: ChatController) -> None:
         if value == "done":
             await self._finalize(ctrl)
             return
@@ -229,13 +282,13 @@ class CreateToolCommand(ISlashCommand):
         await ctrl._append_message("system", f"Parameter name for type '{value}':")
         ctrl._pending_wizard = WizardState("param_name", self._on_param_name)
 
-    async def _on_param_name(self, text: str, ctrl: Any) -> None:
+    async def _on_param_name(self, text: str, ctrl: ChatController) -> None:
         pname = text.strip().lower().replace(" ", "_")
         ctrl._wizard_data["_current_param_name"] = pname
         await ctrl._append_message("system", f"Brief description for parameter '{pname}':")
         ctrl._pending_wizard = WizardState("param_desc", self._on_param_desc)
 
-    async def _on_param_desc(self, text: str, ctrl: Any) -> None:
+    async def _on_param_desc(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["params"].append(
             {
                 "name": ctrl._wizard_data.pop("_current_param_name"),
@@ -245,7 +298,7 @@ class CreateToolCommand(ISlashCommand):
         )
         await _ask_param_type_or_done(ctrl, self._on_param_start, self._finalize)
 
-    async def _finalize(self, ctrl: Any) -> None:
+    async def _finalize(self, ctrl: ChatController) -> None:
         await _generate_and_register(ctrl, self._service)
 
 
@@ -254,7 +307,7 @@ class CreateToolCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-class CreateAgentCommand(ISlashCommand):
+class CreateAgentCommand(WizardBase, ISlashCommand):
     name = "createagent"
     help_text = (
         "Create a new specialist agent. "
@@ -262,10 +315,10 @@ class CreateAgentCommand(ISlashCommand):
         "— omit args for step-by-step wizard."
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if args:
             prompt = " ".join(args).strip().strip("\"'")
             await _prompt_driven_create(app_context, self._service, "agent", prompt)
@@ -278,20 +331,15 @@ class CreateAgentCommand(ISlashCommand):
             "Tip: you can also run  /createagent \"describe your agent here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. research_agent):",
         )
-        app_context._pending_wizard = WizardState("agent_name", self._on_name)
+        app_context._pending_wizard = WizardState(
+            "agent_name", self._make_name_handler("agent_name", self._after_name)
+        )
 
-    async def _on_name(self, text: str, ctrl: Any) -> None:
-        name = text.strip().lower().replace(" ", "_")
-        if not name.isidentifier():
-            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
-            ctrl._pending_wizard = WizardState("agent_name", self._on_name)
-            return
-        ctrl._wizard_data["name"] = name
-        ctrl._wizard_data["class_name"] = _to_pascal(name)
+    async def _after_name(self, ctrl: ChatController) -> None:
         await ctrl._append_message("system", "Step 2/4 — Enter a description:")
         ctrl._pending_wizard = WizardState("agent_desc", self._on_desc)
 
-    async def _on_desc(self, text: str, ctrl: Any) -> None:
+    async def _on_desc(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["description"] = text.strip()
         await ctrl._append_message(
             "system",
@@ -299,11 +347,11 @@ class CreateAgentCommand(ISlashCommand):
         )
         ctrl._pending_wizard = WizardState("agent_prompt", self._on_prompt)
 
-    async def _on_prompt(self, text: str, ctrl: Any) -> None:
+    async def _on_prompt(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["system_prompt"] = text.strip()
         await _ask_tool_whitelist(ctrl, self._service, self._finalize)
 
-    async def _finalize(self, ctrl: Any) -> None:
+    async def _finalize(self, ctrl: ChatController) -> None:
         await _generate_and_register(ctrl, self._service)
 
 
@@ -312,7 +360,7 @@ class CreateAgentCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-class CreateWorkflowCommand(ISlashCommand):
+class CreateWorkflowCommand(WizardBase, ISlashCommand):
     name = "createworkflow"
     help_text = (
         "Create a YAML workflow template for plan execution. "
@@ -320,10 +368,10 @@ class CreateWorkflowCommand(ISlashCommand):
         "— omit args for step-by-step wizard."
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if args:
             prompt = " ".join(args).strip().strip("\"'")
             await _prompt_driven_workflow(app_context, self._service, prompt)
@@ -340,27 +388,22 @@ class CreateWorkflowCommand(ISlashCommand):
             "Tip: you can also run  /createworkflow \"describe your workflow here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. data_pipeline_workflow):",
         )
-        app_context._pending_wizard = WizardState("wf_name", self._on_name)
+        app_context._pending_wizard = WizardState(
+            "wf_name", self._make_name_handler("wf_name", self._after_name)
+        )
 
-    async def _on_name(self, text: str, ctrl: Any) -> None:
-        name = text.strip().lower().replace(" ", "_")
-        if not name.isidentifier():
-            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
-            ctrl._pending_wizard = WizardState("wf_name", self._on_name)
-            return
-        ctrl._wizard_data["name"] = name
-        ctrl._wizard_data["class_name"] = _to_pascal(name)
+    async def _after_name(self, ctrl: ChatController) -> None:
         await ctrl._append_message("system", "Step 2/4 — Describe what this workflow does:")
         ctrl._pending_wizard = WizardState("wf_desc", self._on_desc)
 
-    async def _on_desc(self, text: str, ctrl: Any) -> None:
+    async def _on_desc(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["description"] = text.strip()
         await _ask_tool_whitelist(ctrl, self._service, self._on_tools_done)
 
-    async def _on_tools_done(self, ctrl: Any) -> None:
+    async def _on_tools_done(self, ctrl: ChatController) -> None:
         await _ask_sub_agents(ctrl, self._service, self._finalize)
 
-    async def _finalize(self, ctrl: Any) -> None:
+    async def _finalize(self, ctrl: ChatController) -> None:
         await _write_workflow_template(ctrl, self._service)
 
 
@@ -369,7 +412,7 @@ class CreateWorkflowCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-class CreateSkillCommand(ISlashCommand):
+class CreateSkillCommand(WizardBase, ISlashCommand):
     name = "createskill"
     help_text = (
         "Create a SKILL.md planning guidance bundle. "
@@ -377,10 +420,10 @@ class CreateSkillCommand(ISlashCommand):
         "— omit args for step-by-step wizard."
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if args:
             prompt = " ".join(args).strip().strip("\"'")
             await _prompt_driven_skill(app_context, self._service, prompt)
@@ -397,19 +440,15 @@ class CreateSkillCommand(ISlashCommand):
             "Tip: you can also run  /createskill \"describe your skill here\"  to skip the wizard.\n\n"
             "Step 1/4 — Enter a snake_case name (e.g. release_readiness):",
         )
-        app_context._pending_wizard = WizardState("skill_name", self._on_name)
+        app_context._pending_wizard = WizardState(
+            "skill_name", self._make_name_handler("skill_name", self._after_name)
+        )
 
-    async def _on_name(self, text: str, ctrl: Any) -> None:
-        name = text.strip().lower().replace(" ", "_")
-        if not name.isidentifier():
-            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
-            ctrl._pending_wizard = WizardState("skill_name", self._on_name)
-            return
-        ctrl._wizard_data["name"] = name
+    async def _after_name(self, ctrl: ChatController) -> None:
         await ctrl._append_message("system", "Step 2/4 — Describe what this skill should optimize:")
         ctrl._pending_wizard = WizardState("skill_desc", self._on_desc)
 
-    async def _on_desc(self, text: str, ctrl: Any) -> None:
+    async def _on_desc(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["description"] = text.strip()
         await ctrl._append_message(
             "system",
@@ -417,15 +456,15 @@ class CreateSkillCommand(ISlashCommand):
         )
         ctrl._pending_wizard = WizardState("skill_triggers", self._on_triggers)
 
-    async def _on_triggers(self, text: str, ctrl: Any) -> None:
+    async def _on_triggers(self, text: str, ctrl: ChatController) -> None:
         raw = [item.strip() for item in text.split(",") if item.strip()]
         ctrl._wizard_data["triggers"] = raw
         await _ask_tool_whitelist(ctrl, self._service, self._on_tools_done)
 
-    async def _on_tools_done(self, ctrl: Any) -> None:
+    async def _on_tools_done(self, ctrl: ChatController) -> None:
         await _ask_sub_agents(ctrl, self._service, self._finalize)
 
-    async def _finalize(self, ctrl: Any) -> None:
+    async def _finalize(self, ctrl: ChatController) -> None:
         await _write_skill_bundle(ctrl, self._service)
 
 
@@ -434,7 +473,7 @@ class CreateSkillCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-class CreateMentalModelCommand(ISlashCommand):
+class CreateMentalModelCommand(WizardBase, ISlashCommand):
     """
     Create a mental-model constraint file in the workfolder.
 
@@ -457,10 +496,10 @@ class CreateMentalModelCommand(ISlashCommand):
         "— omit args for step-by-step wizard."
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if args:
             text = " ".join(args).strip().strip("\"'")
             await _prompt_driven_mental_model(app_context, self._service, text)
@@ -475,15 +514,11 @@ class CreateMentalModelCommand(ISlashCommand):
             "Tip: you can also run  /creatementalmodel \"your constraints here\"  to skip the wizard.\n\n"
             "Step 1/2 — Enter a snake_case name (e.g. safe_execution_model):",
         )
-        app_context._pending_wizard = WizardState("mm_name", self._on_name)
+        app_context._pending_wizard = WizardState(
+            "mm_name", self._make_name_handler("mm_name", self._after_name)
+        )
 
-    async def _on_name(self, text: str, ctrl: Any) -> None:
-        name = text.strip().lower().replace(" ", "_")
-        if not name.isidentifier():
-            await ctrl._append_message("system", "Invalid identifier. Please use snake_case.")
-            ctrl._pending_wizard = WizardState("mm_name", self._on_name)
-            return
-        ctrl._wizard_data["name"] = name
+    async def _after_name(self, ctrl: ChatController) -> None:
         await ctrl._append_message(
             "system",
             "Step 2/2 — Enter your planning constraints as plain English sentences.\n"
@@ -496,7 +531,7 @@ class CreateMentalModelCommand(ISlashCommand):
         )
         ctrl._pending_wizard = WizardState("mm_text", self._on_text)
 
-    async def _on_text(self, text: str, ctrl: Any) -> None:
+    async def _on_text(self, text: str, ctrl: ChatController) -> None:
         ctrl._wizard_data["constraint_text"] = text.strip()
         await _write_mental_model(ctrl, self._service)
 
@@ -506,7 +541,7 @@ class CreateMentalModelCommand(ISlashCommand):
 # ---------------------------------------------------------------------------
 
 
-async def _ask_param_type_or_done(ctrl: Any, on_select, on_done) -> None:
+async def _ask_param_type_or_done(ctrl: ChatController, on_select, on_done) -> None:
     """Show a type picker; call on_select(value, label, ctrl) or on_done(ctrl)."""
     type_options = [
         ("str", "str   — text"),
@@ -530,7 +565,7 @@ async def _ask_param_type_or_done(ctrl: Any, on_select, on_done) -> None:
     )
 
 
-async def _ask_tool_whitelist(ctrl: Any, service: Any, on_done) -> None:
+async def _ask_tool_whitelist(ctrl: ChatController, service: IApplicationService, on_done) -> None:
     """Show a multi-select picker for tool whitelist; sentinel = 'done'."""
     tools = service.list_tools()
     if not tools:
@@ -559,7 +594,7 @@ async def _ask_tool_whitelist(ctrl: Any, service: Any, on_done) -> None:
     )
 
 
-async def _ask_sub_agents(ctrl: Any, service: Any, on_done) -> None:
+async def _ask_sub_agents(ctrl: ChatController, service: IApplicationService, on_done) -> None:
     """Show a multi-select picker for sub-agents; sentinel = 'done'."""
     agents = service.list_agents()
     if not agents:
@@ -600,7 +635,7 @@ async def _ask_sub_agents(ctrl: Any, service: Any, on_done) -> None:
 
 
 async def _prompt_driven_create(
-    app_context: Any, service: Any, kind: str, prompt: str
+    app_context: ChatController, service: IApplicationService, kind: str, prompt: str
 ) -> None:
     """
     Prompt mode entry for tool and agent creation.
@@ -647,7 +682,7 @@ async def _prompt_driven_create(
 
     # Show extracted spec preview
     preview_lines = [
-        f"Extracted spec:",
+        "Extracted spec:",
         f"  name        : {app_context._wizard_data['name']}",
         f"  class       : {app_context._wizard_data['class_name']}",
         f"  description : {app_context._wizard_data['description']}",
@@ -672,7 +707,7 @@ async def _prompt_driven_create(
 
 
 async def _prompt_driven_workflow(
-    app_context: Any, service: Any, prompt: str
+    app_context: ChatController, service: IApplicationService, prompt: str
 ) -> None:
     """Prompt mode entry for workflow YAML template creation."""
     await app_context._append_message(
@@ -722,7 +757,7 @@ async def _prompt_driven_workflow(
 
 
 async def _prompt_driven_skill(
-    app_context: Any, service: Any, prompt: str
+    app_context: ChatController, service: IApplicationService, prompt: str
 ) -> None:
     """Prompt mode entry for skill bundle creation."""
     await app_context._append_message(
@@ -772,7 +807,7 @@ async def _prompt_driven_skill(
 
 
 async def _prompt_driven_mental_model(
-    app_context: Any, service: Any, text: str
+    app_context: ChatController, service: IApplicationService, text: str
 ) -> None:
     """Prompt mode entry for mental model creation — derive name from content."""
     await app_context._append_message(
@@ -877,7 +912,7 @@ Description: {prompt}""",
 
 
 async def _extract_spec_from_prompt(
-    kind: str, prompt: str, service: Any
+    kind: str, prompt: str, service: IApplicationService
 ) -> dict:
     """
     Call the model gateway to extract a structured spec dict from a natural-language prompt.
@@ -970,7 +1005,7 @@ def _derive_name_from_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _generate_and_register(ctrl: Any, service: Any) -> None:
+async def _generate_and_register(ctrl: ChatController, service: IApplicationService) -> None:
     """
     Final pipeline — shared by wizard mode and prompt mode:
 
@@ -1125,7 +1160,7 @@ async def _generate_and_register(ctrl: Any, service: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _write_workflow_template(ctrl: Any, service: Any) -> None:
+async def _write_workflow_template(ctrl: ChatController, service: IApplicationService) -> None:
     """Write a workflow YAML template — produces plan-execution template, not Python."""
     from citnega.packages.config.loaders import load_settings
     from citnega.packages.workspace.writer import WorkspaceWriter
@@ -1177,8 +1212,7 @@ async def _write_workflow_template(ctrl: Any, service: Any) -> None:
     writer.ensure_dirs()
     written_path = writer.write_workflow_template(name, source)
 
-    if hasattr(service, "invalidate_capability_cache"):
-        service.invalidate_capability_cache()
+    service.invalidate_capability_cache()
 
     await ctrl._append_message(
         "system",
@@ -1192,7 +1226,7 @@ async def _write_workflow_template(ctrl: Any, service: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
+async def _write_skill_bundle(ctrl: ChatController, service: IApplicationService) -> None:
     """Write a SKILL.md bundle with structured front matter and guidance body."""
     from citnega.packages.config.loaders import load_settings
     from citnega.packages.workspace.writer import WorkspaceWriter
@@ -1241,8 +1275,7 @@ async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
     writer.ensure_dirs()
     written_path = writer.write_skill(name, source)
 
-    if hasattr(service, "invalidate_capability_cache"):
-        service.invalidate_capability_cache()
+    service.invalidate_capability_cache()
 
     await ctrl._append_message(
         "system",
@@ -1256,7 +1289,7 @@ async def _write_skill_bundle(ctrl: Any, service: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _write_mental_model(ctrl: Any, service: Any) -> None:
+async def _write_mental_model(ctrl: ChatController, service: IApplicationService) -> None:
     """
     Compile and write a mental-model constraint file.
 
@@ -1278,7 +1311,13 @@ async def _write_mental_model(ctrl: Any, service: Any) -> None:
 
     # Compile to structured spec for preview
     try:
-        spec = compile_mental_model(raw_text)
+        _emitter = getattr(service, "_emitter", None)
+        _session_id = getattr(ctrl, "_session_id", "")
+        spec = compile_mental_model(
+            raw_text,
+            session_id=_session_id,
+            emitter=_emitter,
+        )
     except Exception as exc:
         await ctrl._append_message("system", f"Failed to compile mental model: {exc}")
         return
@@ -1330,27 +1369,51 @@ async def _write_mental_model(ctrl: Any, service: Any) -> None:
     )
 
 
-def _apply_mental_model_to_session(ctrl: Any, service: Any, spec: Any) -> None:
+def _apply_mental_model_to_session(ctrl: ChatController, service: IApplicationService, spec: MentalModelSpec) -> None:
     """
-    Apply compiled MentalModelSpec clauses to the active session's strategy spec.
-    Silently no-ops if the session or strategy layer is unavailable.
+    Apply compiled MentalModelSpec clauses to the active session's StrategySpec
+    and persist via ApplicationService.update_session_strategy().
     """
+    import asyncio
+
+    session_id = getattr(ctrl, "_session_id", None)
+    if session_id is None:
+        return
+
+    if not callable(getattr(service, "update_session_strategy", None)):
+        return
+
+    from citnega.packages.strategy.models import StrategySpec
+
+    # Build an updated StrategySpec — start from existing or create fresh.
+    loop = None
     try:
-        session = getattr(ctrl, "_session", None) or getattr(service, "active_session", None)
-        if session is None:
-            return
-        strategy = getattr(session, "strategy_spec", None)
-        if strategy is None:
-            return
-        existing = list(getattr(strategy, "mental_model_clauses", []) or [])
-        existing.extend(spec.clauses)
-        strategy.mental_model_clauses = existing
-        if spec.risk_posture != "balanced":
-            strategy.risk_posture = spec.risk_posture
-        if spec.recommended_parallelism > 1:
-            strategy.parallelism_budget = spec.recommended_parallelism
-    except Exception:
-        pass  # strategy layer not yet wired — file was still written
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+
+    async def _update() -> None:
+        try:
+            session = await service.get_session(session_id)
+            existing_strategy = session.strategy_spec if session else None
+            if existing_strategy is None:
+                existing_strategy = StrategySpec()
+            clauses = list(existing_strategy.mental_model_clauses or [])
+            clauses.extend(spec.clauses)
+            updated = existing_strategy.model_copy(update={
+                "mental_model_clauses": clauses,
+                **({"risk_posture": spec.risk_posture} if spec.risk_posture != "balanced" else {}),
+                **({"parallelism_budget": spec.recommended_parallelism} if spec.recommended_parallelism > 1 else {}),
+            })
+            await service.update_session_strategy(session_id, updated)
+        except Exception as exc:
+            from citnega.packages.observability.logging_setup import runtime_logger
+            runtime_logger.warning("apply_mental_model_failed", session_id=session_id, error=str(exc))
+
+    if loop is not None and loop.is_running():
+        loop.create_task(_update())
+    else:
+        asyncio.run(_update())
 
 
 # ---------------------------------------------------------------------------
@@ -1358,7 +1421,7 @@ def _apply_mental_model_to_session(ctrl: Any, service: Any, spec: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _set_run_state(ctrl: Any, state: str) -> None:
+def _set_run_state(ctrl: ChatController, state: str) -> None:
     """Update the ContextBar run_state safely (no-op if TUI unavailable)."""
     try:
         from citnega.apps.tui.widgets.context_bar import ContextBar

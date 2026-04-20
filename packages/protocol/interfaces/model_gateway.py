@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -30,6 +30,10 @@ class IModelGateway(ABC):
 
     @abstractmethod
     async def health_check_all(self) -> dict[str, str]: ...
+
+    def list_providers(self) -> dict[str, Any]:
+        """Return registered providers keyed by model_id. Default: empty dict."""
+        return {}
 
 
 class IModelProvider(ABC):

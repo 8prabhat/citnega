@@ -157,9 +157,34 @@ class ProviderFactory:
                 extra_kwargs=provider_cfg.extra,
             )
 
+        if ptype == "openrouter":
+            # OpenRouter is OpenAI-compatible via LiteLLM with "openrouter/" prefix.
+            # No new provider class — DRY reuse of LiteLLMProvider.
+            from citnega.packages.model_gateway.providers.litellm_provider import LiteLLMProvider
+
+            site_url = (provider_cfg.extra or {}).get("site_url", "")
+            app_name = (provider_cfg.extra or {}).get("app_name", "citnega")
+            extra_headers = {}
+            if site_url:
+                extra_headers["HTTP-Referer"] = site_url
+            if app_name:
+                extra_headers["X-Title"] = app_name
+
+            extra_kwargs = dict(provider_cfg.extra or {})
+            if extra_headers:
+                extra_kwargs["extra_headers"] = extra_headers
+
+            return LiteLLMProvider(
+                model_info=model_info,
+                api_key=provider_cfg.api_key,
+                base_url="https://openrouter.ai/api/v1",
+                credential=None,
+                extra_kwargs=extra_kwargs,
+            )
+
         raise ValueError(
             f"Unsupported provider type '{ptype}' for model '{entry.id}'. "
-            f"Supported: ollama, openai_compatible, vllm, custom_remote, litellm"
+            f"Supported: ollama, openai_compatible, vllm, custom_remote, litellm, openrouter"
         )
 
 

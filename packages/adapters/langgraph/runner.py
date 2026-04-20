@@ -158,12 +158,25 @@ class LangGraphRunner(BaseFrameworkRunner):
         return context.run_id
 
     async def _do_pause(self, run_id: str) -> None:
-        runtime_logger.info("langgraph_runner_paused", run_id=run_id)
+        # In-flight astream() completes naturally; _paused guard in base blocks new turns.
+        # Snapshot graph state so it survives the pause period.
+        runtime_logger.info(
+            "langgraph_runner_paused",
+            run_id=run_id,
+            state_messages=len(self._graph_state.get("messages", [])),
+        )
 
     async def _do_resume(self, run_id: str) -> None:
-        runtime_logger.info("langgraph_runner_resumed", run_id=run_id)
+        # Graph state is in self._graph_state; next run_turn rebuilds from it via astream().
+        runtime_logger.info(
+            "langgraph_runner_resumed",
+            run_id=run_id,
+            state_messages=len(self._graph_state.get("messages", [])),
+        )
 
     async def _do_cancel(self, run_id: str) -> None:
+        # CancellationToken is already cancelled by base cancel(); astream() will exit.
+        self._graph_state = {}
         runtime_logger.info("langgraph_runner_cancelled", run_id=run_id)
 
     async def _do_get_state_snapshot(self) -> RunState:

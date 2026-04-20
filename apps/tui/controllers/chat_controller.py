@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING
 
 from textual.containers import VerticalScroll
 
-from citnega.packages.observability.logging_setup import runtime_logger as _logger
-
 from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
 from citnega.apps.tui.widgets.approval_block import ApprovalBlock
 from citnega.apps.tui.widgets.message_block import MessageBlock
@@ -36,6 +34,7 @@ from citnega.apps.tui.workers.event_consumer import (
     ToolCallFinished,
     ToolCallStarted,
 )
+from citnega.packages.observability.logging_setup import runtime_logger as _logger
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -64,12 +63,18 @@ class ChatController:
 
         # Active streaming block (one at a time — sequential turns)
         self._streaming_block: StreamingBlock | None = None
-        # Active thinking block for current turn (created on first ThinkingReceived)
+        # Thinking block currently streaming tokens (not yet finalized)
         self._thinking_block: ThinkingBlock | None = None
+        # Last finalized thinking block — claimed by the next tool/agent call to map them visually
+        self._last_thinking_block: ThinkingBlock | None = None
         # Mapping callable_name → open ToolCallBlock
         self._open_tool_blocks: dict[str, ToolCallBlock] = {}
         # Mapping callable_name → input_summary (captured on start, used on finish for persistence)
         self._tool_input_summaries: dict[str, str] = {}
+        # Mapping callable_name → msg_count at tool start (before assistant msg is added).
+        # Captured on ToolCallStarted so the race with add_message("assistant") doesn't affect
+        # which conversation position the tool block gets assigned on session resume.
+        self._tool_msg_counts: dict[str, int] = {}
         # Active event consumer worker
         self._consumer: EventConsumerWorker | None = None
         # Slash command registry
@@ -143,7 +148,6 @@ class ChatController:
         try:
             run_id = await self._service.run_turn(self._session_id, text)
         except Exception as exc:
-            from citnega.packages.shared.errors import CitnegaError
             msg = getattr(exc, "user_message", "") or str(exc)
             await self._append_message("system", f"Error: {msg}")
             return
@@ -178,7 +182,11 @@ class ChatController:
     # ── TUI message handlers (called by App.on_*) ──────────────────────────────
 
     async def on_thinking_received(self, message: ThinkingReceived) -> None:
-        """Create the ThinkingBlock on first token; stream into it thereafter."""
+        """Create the ThinkingBlock on first token; stream into it thereafter.
+
+        Each finalized thinking block is tracked in _last_thinking_block so
+        the next tool/agent call can claim it visually (thinking → tool mapping).
+        """
         if self._thinking_block is None:
             self._thinking_block = ThinkingBlock()
             scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
@@ -193,13 +201,17 @@ class ChatController:
 
         if message.is_final:
             self._thinking_block.finalize()
+            self._last_thinking_block = self._thinking_block   # remember for tool mapping
             self._thinking_block = None
 
     async def on_token_received(self, message: TokenReceived) -> None:
         # If a thinking block is still open when response tokens arrive, close it
         if self._thinking_block is not None:
             self._thinking_block.finalize()
+            self._last_thinking_block = self._thinking_block
             self._thinking_block = None
+        # Response tokens following thinking are NOT tool calls — clear the mapping
+        self._last_thinking_block = None
 
         if self._streaming_block is not None:
             self._streaming_block.append_token(message.token)
@@ -215,19 +227,13 @@ class ChatController:
         if self._thinking_block is not None:
             self._thinking_block.finalize()
             self._thinking_block = None
+        self._last_thinking_block = None
 
         if self._streaming_block is not None:
             await self._streaming_block.finalize()
             self._streaming_block = None
 
         self._update_context_bar(state="idle")
-
-        # Restore panel header
-        try:
-            from textual.widgets import Label as _Label
-            self._app.screen.query_one("#tools-panel-header", _Label).update("⚙  Tools")
-        except Exception:
-            pass
 
         if message.final_state not in ("completed", "cancelled"):
             await self._append_message(
@@ -247,49 +253,49 @@ class ChatController:
         elif self._plan_state == "executing":
             self._plan_state = None
 
-        # If no tool calls remain open, restore the sidebar placeholder
-        if not self._open_tool_blocks:
-            try:
-                from textual.widgets import Label as _Label
-                tools_panel = self._app.screen.query_one("#tools-panel", VerticalScroll)
-                # Only mount if the placeholder doesn't already exist
-                if not tools_panel.query("#tools-empty"):
-                    await tools_panel.mount(_Label("No active tools", id="tools-empty"))
-            except Exception:
-                pass
-
     async def on_tool_call_started(self, message: ToolCallStarted) -> None:
         input_summary = message.input_summary or f"run:{message.run_id[:8]}"
         self._tool_input_summaries[message.callable_name] = input_summary
+        # Capture msg_count NOW — before the assistant message is added — so that
+        # the stored position is stable regardless of async ordering.
+        try:
+            n = len(self._service.get_conversation_messages(self._session_id))
+        except Exception:
+            n = 0
+        self._tool_msg_counts[message.callable_name] = n
+
+        # Claim the last finalized thinking block: connect it visually to THIS tool/agent call
+        from_thinking = self._last_thinking_block is not None
+        if self._last_thinking_block is not None:
+            self._last_thinking_block.connect_to_next()
+            self._last_thinking_block = None   # one-to-one: each thinking maps to first tool
 
         is_agent = message.callable_type in ("specialist", "core")
         if is_agent:
             block: ToolCallBlock | AgentCallBlock = AgentCallBlock(
                 agent_name=message.callable_name,
                 input_summary=input_summary,
+                from_thinking=from_thinking,
             )
         else:
             block = ToolCallBlock(
                 tool_name=message.callable_name,
                 input_summary=input_summary,
+                from_thinking=from_thinking,
             )
         self._open_tool_blocks[message.callable_name] = block
 
-        # Route to the tools sidebar panel (not the main chat scroll)
+        # Mount inline in the chat stream — Claude Code style
         try:
-            tools_panel = self._app.screen.query_one("#tools-panel", VerticalScroll)
-            # Remove the "No active tools" placeholder on first tool
-            try:
-                await tools_panel.query_one("#tools-empty").remove()
-            except Exception:
-                pass
-            await tools_panel.mount(block)
-            self._app.call_after_refresh(tools_panel.scroll_end)
-        except Exception:
-            # Fallback: chat scroll
             scroll = self._app.screen.query_one("#chat-scroll", VerticalScroll)
-            await scroll.mount(block)
+            # Insert before the streaming block so tool calls appear above the response
+            if self._streaming_block is not None:
+                await scroll.mount(block, before=self._streaming_block)
+            else:
+                await scroll.mount(block)
             self._app.call_after_refresh(scroll.scroll_end)
+        except Exception as exc:
+            _logger.debug("tui_tool_block_mount_failed", error=str(exc))
 
     async def on_tool_call_finished(self, message: ToolCallFinished) -> None:
         block = self._open_tool_blocks.pop(message.callable_name, None)
@@ -302,6 +308,7 @@ class ChatController:
 
         # Persist to tool history for session resume
         input_summary = self._tool_input_summaries.pop(message.callable_name, "")
+        msg_count = self._tool_msg_counts.pop(message.callable_name, None)
         try:
             await self._service.record_tool_call(
                 self._session_id,
@@ -310,6 +317,7 @@ class ChatController:
                 message.output_summary or "",
                 message.success,
                 callable_type=message.callable_type,
+                msg_count=msg_count,
             )
         except Exception as _exc:
             _logger.debug("tui_record_tool_call_failed", error=str(_exc))
@@ -337,24 +345,8 @@ class ChatController:
         self._update_context_bar(state="running")
 
     def on_run_phase_changed(self, message: RunPhaseChanged) -> None:
-        """Update ContextBar + panel header on every run-state transition."""
+        """Update ContextBar state on every run-state transition."""
         self._update_context_bar(state=message.phase)
-        # Update tools panel header to show what the system is doing
-        _PHASE_HEADERS: dict[str, str] = {
-            "context_assembling": "⚙  assembling context…",
-            "executing":          "⚙  executing…",
-            "waiting_approval":   "⚙  ⚠  waiting approval",
-            "paused":             "⚙  paused",
-            "completed":          "⚙  Tools",
-            "failed":             "⚙  Tools",
-            "cancelled":          "⚙  Tools",
-        }
-        label_text = _PHASE_HEADERS.get(message.phase, "⚙  Tools")
-        try:
-            from textual.widgets import Label as _Label
-            self._app.screen.query_one("#tools-panel-header", _Label).update(label_text)
-        except Exception:
-            pass
 
     # ── Popup ──────────────────────────────────────────────────────────────────
 
@@ -370,7 +362,19 @@ class ChatController:
                 self._popup.remove()
             self._popup = None
 
-    def _show_slash_popup(self) -> None:
+    def on_input_value_changed(self, value: str) -> None:
+        """Called by ChatScreen whenever the chat input value changes."""
+        if value.startswith("/"):
+            prefix = value[1:]  # text after the slash
+            if self._popup is None:
+                self._show_slash_popup(initial_filter=prefix)
+            else:
+                self._popup.update_filter(prefix)
+        else:
+            if self._popup is not None:
+                self.dismiss_popup()
+
+    def _show_slash_popup(self, initial_filter: str = "") -> None:
         from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup
 
         cmds = [
@@ -378,6 +382,8 @@ class ChatController:
             for name, cmd in self._slash_commands.items()
         ]
         popup = SlashCommandPopup(commands=cmds)
+        if initial_filter:
+            popup._filter = initial_filter
         self._popup = popup
         self._app.mount(popup)
 
@@ -511,10 +517,13 @@ def _build_slash_registry(app, service, session_id, controller):
         RenameCommand,
         SessionsCommand,
         ShowSessionCommand,
+        SkillCommand,
+        SkillsCommand,
         ThinkCommand,
     )
     from citnega.apps.tui.slash_commands.workspace import (
         CreateAgentCommand,
+        CreateMentalModelCommand,
         CreateSkillCommand,
         CreateToolCommand,
         CreateWorkflowCommand,
@@ -537,6 +546,8 @@ def _build_slash_registry(app, service, session_id, controller):
         ShowSessionCommand(service=service),
         SessionsCommand(service=service),
         ThinkCommand(service=service),
+        SkillsCommand(),
+        SkillCommand(),
         # Workspace commands
         SetWorkfolderCommand(service=service),
         RefreshCommand(service=service),
@@ -544,5 +555,6 @@ def _build_slash_registry(app, service, session_id, controller):
         CreateAgentCommand(service=service),
         CreateWorkflowCommand(service=service),
         CreateSkillCommand(service=service),
+        CreateMentalModelCommand(service=service),
     ]
     return {cmd.name: cmd for cmd in cmds}

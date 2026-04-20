@@ -20,8 +20,12 @@ class MentalModelClause(BaseModel):
 
 
 class MentalModelSpec(BaseModel):
-    source_text: str
+    source_text: str = ""
     clauses: list[MentalModelClause] = Field(default_factory=list)
+    negations: list[str] = Field(
+        default_factory=list,
+        description="Explicit prohibitions extracted by LLM compiler (do-not instructions).",
+    )
     recommended_parallelism: int = 1
     risk_posture: str = "balanced"
 

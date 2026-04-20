@@ -54,6 +54,7 @@ class PolicyEnforcer(IPolicyEnforcer):
         approval_manager: ApprovalManager,
         deny_network: bool = False,
         path_vars: dict[str, str] | None = None,
+        bypass_permissions: bool = False,
     ) -> None:
         self._emitter = emitter
         self._approval_manager = approval_manager
@@ -61,6 +62,8 @@ class PolicyEnforcer(IPolicyEnforcer):
         self._deny_network = deny_network
         # Variable substitutions for allowed_paths: e.g. {"WORKSPACE_ROOT": "/tmp/ws"}
         self._path_vars: dict[str, str] = path_vars or {}
+        # When True, ALL pre-execution checks are skipped. DANGEROUS — dev only.
+        self._bypass_permissions = bypass_permissions
 
     async def enforce(
         self,
@@ -74,6 +77,14 @@ class PolicyEnforcer(IPolicyEnforcer):
         Raises a CallablePolicyError subclass on the first violation.
         Returns None when all checks pass.
         """
+        if self._bypass_permissions:
+            runtime_logger.debug(
+                "policy_bypass_active",
+                callable_name=callable.name,
+                run_id=context.run_id,
+            )
+            return
+
         runtime_logger.debug(
             "policy_enforce_start",
             callable_name=callable.name,

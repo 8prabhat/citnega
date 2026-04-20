@@ -65,6 +65,7 @@ class RepoMapOutput(BaseModel):
     top_modules: list[str]
     hotspots: list[str]
     import_edges: list[str]
+    detected_stacks: list[str] = []
     cache_hit: bool = False
     summary: str
 
@@ -193,6 +194,10 @@ class RepoMapTool(BaseCallable):
             f"Hotspots={len(hotspots)}. Import edges={len(import_edges)}."
         )
 
+        detected_stacks = self._detect_stacks(root)
+        if detected_stacks:
+            summary += f" Stacks: {', '.join(detected_stacks)}."
+
         out = RepoMapOutput(
             root_path=str(root),
             total_files_scanned=total_files,
@@ -200,6 +205,7 @@ class RepoMapTool(BaseCallable):
             top_modules=top_modules,
             hotspots=hotspots,
             import_edges=import_edges,
+            detected_stacks=detected_stacks,
             summary=summary,
         )
         if cache_path is not None:
@@ -231,6 +237,31 @@ class RepoMapTool(BaseCallable):
                 and (include_tests or not self._is_test_path(candidate, root))
             ),
         )
+
+    @staticmethod
+    def _detect_stacks(root: Path) -> list[str]:
+        """Detect technology stacks present in the repository root."""
+        stacks: list[str] = []
+        markers = {
+            "python": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"],
+            "node": ["package.json"],
+            "go": ["go.mod"],
+            "rust": ["Cargo.toml"],
+            "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+            "ruby": ["Gemfile"],
+            "dotnet": ["*.csproj", "*.sln"],
+        }
+        for stack, files in markers.items():
+            for marker in files:
+                if "*" in marker:
+                    # glob pattern
+                    if any(root.glob(marker)):
+                        stacks.append(stack)
+                        break
+                elif (root / marker).exists():
+                    stacks.append(stack)
+                    break
+        return stacks
 
     @staticmethod
     def _is_test_path(path: Path, root: Path) -> bool:

@@ -245,7 +245,7 @@ def _summarise_input(input: object) -> str:
         if isinstance(input, _BM):
             return input.model_dump_json()[:512]
     except Exception:
-        pass
+        return str(repr(input))[:512]
     return str(repr(input))[:512]
 
 

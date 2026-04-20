@@ -1,8 +1,8 @@
-"""Unit tests for ContextBar content rendering via _build_bar_content."""
+"""Unit tests for ContextBar content rendering via _build_state_line."""
 
 from __future__ import annotations
 
-from citnega.apps.tui.widgets.context_bar import _build_bar_content
+from citnega.apps.tui.widgets.context_bar import _build_state_line
 
 
 def _build(**kwargs) -> str:
@@ -20,7 +20,7 @@ def _build(**kwargs) -> str:
         framework="",
     )
     defaults.update(kwargs)
-    return _build_bar_content(**defaults)
+    return _build_state_line(**defaults)
 
 
 def test_model_appears_in_output() -> None:

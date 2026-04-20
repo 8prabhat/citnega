@@ -1,7 +1,11 @@
 """Built-in tools — v1 set."""
 
 from citnega.packages.tools.builtin.artifact_pack import ArtifactPackTool
+from citnega.packages.tools.builtin.diff_tool import DiffTool
+from citnega.packages.tools.builtin.env_inspector_tool import EnvInspectorTool
 from citnega.packages.tools.builtin.fetch_url import FetchURLTool
+from citnega.packages.tools.builtin.git_log_tool import GitLogTool
+from citnega.packages.tools.builtin.json_query_tool import JSONQueryTool
 from citnega.packages.tools.builtin.list_dir import ListDirTool
 from citnega.packages.tools.builtin.quality_gate import QualityGateTool
 from citnega.packages.tools.builtin.read_file import ReadFileTool
@@ -30,12 +34,20 @@ ALL_TOOLS = [
     ReadKBTool,
     WriteKBTool,
     SummarizeTextTool,
+    DiffTool,
+    JSONQueryTool,
+    GitLogTool,
+    EnvInspectorTool,
 ]
 
 __all__ = [
     "ALL_TOOLS",
     "ArtifactPackTool",
+    "DiffTool",
+    "EnvInspectorTool",
     "FetchURLTool",
+    "GitLogTool",
+    "JSONQueryTool",
     "ListDirTool",
     "MatrixTool",
     "QualityGateTool",

@@ -18,6 +18,7 @@ import asyncio
 from datetime import UTC, datetime
 import json
 import os
+import subprocess
 from typing import TYPE_CHECKING, Any
 import uuid
 
@@ -112,6 +113,7 @@ class DirectModelRunner(IFrameworkRunner):
         conversation_store: ConversationStore,
         callables: list[IInvocable] | None = None,
         model_gateway: object | None = None,
+        capability_registry: object | None = None,
         max_tool_rounds: int = _MAX_TOOL_ROUNDS_DEFAULT,
     ) -> None:
         self._session = session
@@ -124,6 +126,7 @@ class DirectModelRunner(IFrameworkRunner):
         # Injected ModelGateway (routing + rate-limiting). Falls back to
         # _RunnerModelGateway (direct ProviderFactory) when not provided.
         self._model_gateway = model_gateway
+        self._capability_registry = capability_registry
         # Expose TOOL and SPECIALIST callables to the model for function calling.
         # SPECIALIST agents appear as callable tools so the model can invoke them.
         from citnega.packages.protocol.callables.types import CallableType
@@ -174,6 +177,14 @@ class DirectModelRunner(IFrameworkRunner):
             )
         }
 
+        # Trigger matcher: auto-activates skills from user input on each turn
+        from citnega.packages.skills.builtins import BUILTIN_SKILL_INDEX
+        from citnega.packages.skills.trigger_matcher import SkillTriggerMatcher
+        self._trigger_matcher = SkillTriggerMatcher(BUILTIN_SKILL_INDEX)
+
+        # Post-turn skill improver (None = disabled until wired by bootstrap)
+        self._skill_improver: object | None = None
+
     # ── IFrameworkRunner ──────────────────────────────────────────────────────
 
     async def run_turn(
@@ -211,6 +222,7 @@ class DirectModelRunner(IFrameworkRunner):
 
         # 3. Augment system prompt with session mode + phase
         mode = get_mode(self._conv.mode_name)
+        turn_temperature = mode.temperature
         phase = self._conv.plan_phase
         base_prompt = (
             ConversationStore._SYSTEM_PROMPT
@@ -221,7 +233,29 @@ class DirectModelRunner(IFrameworkRunner):
         except TypeError:
             system_prompt = mode.augment_system_prompt(base_prompt)
 
-        # 3b. Inject KB context sources into the system prompt
+        # 3b. Auto-activate skills from trigger matching (session-scoped, non-persistent)
+        try:
+            matched = self._trigger_matcher.match(user_input)
+            if matched:
+                existing = set(getattr(self._conv, "active_skills", None) or [])
+                new_skills = [s for s in matched if s not in existing]
+                if new_skills:
+                    self._conv.set_active_skills(list(existing | set(new_skills)))
+        except Exception:
+            pass
+
+        # 3b. Inject strategy context (active skills + mental model clauses)
+        _token_budget = int(context.metadata.get("token_budget_remaining", 8000)) if hasattr(context, "metadata") and context.metadata else 8000
+        strategy_block = self._build_strategy_context(token_budget=_token_budget)
+        if strategy_block:
+            system_prompt = system_prompt + strategy_block
+
+        # 3c. Inject ambient workspace context (cwd, git branch/status, time)
+        ambient_block = self._build_ambient_context()
+        if ambient_block:
+            system_prompt = system_prompt + ambient_block
+
+        # 3d. Inject KB context sources into the system prompt
         kb_sources = [s for s in (context.sources or []) if s.source_type == "kb"]
         if kb_sources:
             kb_block = "\n\n".join(s.content for s in kb_sources)
@@ -260,16 +294,22 @@ class DirectModelRunner(IFrameworkRunner):
         tools_schema = self._build_tools_schema()
 
         # 7. Multi-round tool-calling loop
+        # Mode can declare a higher round budget (e.g. explore=12, research=15).
+        # self._max_tool_rounds is the constructor default; mode may raise it.
+        effective_rounds = max(self._max_tool_rounds, mode.max_tool_rounds)
         full_response: list[str] = []
+        # Track whether any thinking was emitted this round so we can close it.
+        round_had_thinking = False
 
-        for _round in range(self._max_tool_rounds):
+        for _round in range(effective_rounds):
             parser = ThinkingStreamParser() if use_thinking else None
+            round_had_thinking = False
 
             request = ModelRequest(
                 model_id=model_id,
                 messages=current_messages,
                 stream=True,
-                temperature=0.7,
+                temperature=turn_temperature,
                 tools=tools_schema,
             )
 
@@ -284,6 +324,7 @@ class DirectModelRunner(IFrameworkRunner):
 
                         # 7a. Native thinking field (Ollama gemma4 etc.)
                         if chunk.thinking and use_thinking:
+                            round_had_thinking = True
                             await self._emit(
                                 event_queue,
                                 session_id,
@@ -297,6 +338,8 @@ class DirectModelRunner(IFrameworkRunner):
                         if chunk.content:
                             if parser is not None:
                                 for is_thinking, text in parser.feed(chunk.content):
+                                    if is_thinking:
+                                        round_had_thinking = True
                                     await self._emit(
                                         event_queue, session_id, run_id, turn_id, text, is_thinking
                                     )
@@ -355,15 +398,34 @@ class DirectModelRunner(IFrameworkRunner):
                     )
                 )
 
-            # 7d. Flush parser remnant
+            # 7d. Flush parser remnant and signal end-of-thinking.
+            # Emit is_final=True so the TUI ThinkingBlock finalises immediately
+            # rather than waiting until on_run_finished.
             if parser is not None:
-                for is_thinking, text in parser.flush():
+                remnants = parser.flush()
+                for is_thinking, text in remnants:
                     if text:
+                        if is_thinking:
+                            round_had_thinking = True
                         await self._emit(
                             event_queue, session_id, run_id, turn_id, text, is_thinking
                         )
                         if not is_thinking:
                             round_content.append(text)
+
+            # Signal that the thinking block for this round is complete so the
+            # TUI can finalise and map it to the following tool call.
+            if round_had_thinking:
+                await event_queue.put(
+                    ThinkingEvent(
+                        session_id=session_id,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                        token="",
+                        is_final=True,
+                    )
+                )
+                round_had_thinking = False
 
             full_response.extend(round_content)
 
@@ -398,9 +460,163 @@ class DirectModelRunner(IFrameworkRunner):
                     )
                 )
 
-        # 8. Persist assistant reply (user message was already saved in step 4)
+        # 8. Synthesis pass.
+        #
+        # Runs when the tool-calling loop produced no visible text.  The root
+        # cause is almost always that the last message in current_messages has
+        # role="tool" — Ollama and every OpenAI-compatible API reject (or
+        # silently return empty content for) a conversation ending with a tool
+        # result unless followed by an explicit user turn.  We append one here.
+        #
+        # Layers of defence (each only activates if the previous layer produced
+        # no visible text):
+        #   L1 — Model call with explicit "please respond" user turn.
+        #   L2 — Thinking-only fallback (models that route everything through
+        #         chunk.thinking, e.g. Ollama gemma4 in thinking mode).
+        #   L3 — Tool-results digest: format every tool result we collected into
+        #         a readable response so the user always sees SOMETHING.
+        if not any(t.strip() for t in full_response):
+            # ── Build synthesis message list ──────────────────────────────────
+            synth_messages = list(current_messages)
+
+            # Every API requires the final message to be role="user".
+            # If the conversation ends with tool results, append an explicit
+            # instruction so the model knows to write a visible response now.
+            if not synth_messages or synth_messages[-1].role != "user":
+                synth_messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "Based on the information and tool results above, "
+                            "please provide a clear and complete answer."
+                        ),
+                    )
+                )
+
+            synth_request = ModelRequest(
+                model_id=model_id,
+                messages=synth_messages,
+                stream=True,
+                temperature=turn_temperature,
+                tools=[],  # never pass tools — we want text, not more calls
+            )
+
+            # ── L1: stream synthesis response ─────────────────────────────────
+            synth_parser = ThinkingStreamParser() if use_thinking else None
+            synth_thinking_buf: list[str] = []
+            synth_error: str = ""
+            try:
+                async for chunk in provider.stream_generate(synth_request):
+                    if self._cancelled:
+                        break
+                    # Buffer native thinking — used only as L2 fallback.
+                    # We do NOT emit ThinkingEvent here so there is no duplicate
+                    # ThinkingBlock; this thinking text belongs to synthesis only.
+                    if chunk.thinking:
+                        synth_thinking_buf.append(chunk.thinking)
+                    if chunk.content:
+                        if synth_parser is not None:
+                            for is_t, text in synth_parser.feed(chunk.content):
+                                if text and not is_t:
+                                    full_response.append(text)
+                                    await event_queue.put(
+                                        TokenEvent(
+                                            session_id=session_id,
+                                            run_id=run_id,
+                                            turn_id=turn_id,
+                                            token=text,
+                                        )
+                                    )
+                        else:
+                            full_response.append(chunk.content)
+                            await event_queue.put(
+                                TokenEvent(
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    turn_id=turn_id,
+                                    token=chunk.content,
+                                )
+                            )
+                # Flush tag-parser remnant
+                if synth_parser is not None:
+                    for is_t, text in synth_parser.flush():
+                        if text and not is_t:
+                            full_response.append(text)
+                            await event_queue.put(
+                                TokenEvent(
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    turn_id=turn_id,
+                                    token=text,
+                                )
+                            )
+            except Exception as exc:
+                synth_error = str(exc)
+                runtime_logger.error(
+                    "direct_runner_synthesis_error",
+                    session_id=session_id,
+                    run_id=run_id,
+                    error=synth_error,
+                )
+
+            # ── L2: thinking-only models ──────────────────────────────────────
+            # Some models (gemma4, deepseek-r1 via Ollama) route their final
+            # answer entirely through chunk.thinking.  Surface that text as the
+            # visible response.  Safe: synthesis never emitted ThinkingEvent for
+            # this text, so no ThinkingBlock duplication.
+            if not any(t.strip() for t in full_response) and synth_thinking_buf:
+                synth_text = "".join(synth_thinking_buf)
+                full_response.append(synth_text)
+                await event_queue.put(
+                    TokenEvent(
+                        session_id=session_id,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                        token=synth_text,
+                    )
+                )
+
+            # ── L3: tool-results digest ───────────────────────────────────────
+            # Synthesis failed entirely (model error, empty stream, or an API
+            # that refused the request).  Rather than showing a blank response,
+            # assemble the tool results from current_messages into a readable
+            # digest so the user at least sees what was collected.
+            if not any(t.strip() for t in full_response):
+                digest = self._build_tool_digest(current_messages, synth_error)
+                full_response.append(digest)
+                await event_queue.put(
+                    TokenEvent(
+                        session_id=session_id,
+                        run_id=run_id,
+                        turn_id=turn_id,
+                        token=digest,
+                    )
+                )
+
+        # 9. Persist assistant reply (user message was already saved in step 4)
         assistant_reply = "".join(full_response)
         await self._conv.add_message("assistant", assistant_reply)
+
+        # 10. Auto-persist research/explore findings to KB (best-effort)
+        if mode.name in ("research", "explore") and len(assistant_reply) > 200:
+            await self._auto_save_to_kb(user_input, assistant_reply, session_id, run_id)
+
+        # 11. Post-turn skill improvement (best-effort, at most 1 skill per turn)
+        if self._skill_improver is not None:
+            try:
+                active_skills_now = list(getattr(self._conv, "active_skills", None) or [])
+                if active_skills_now and assistant_reply:
+                    from citnega.packages.skills.builtins import BUILTIN_SKILL_INDEX
+                    from citnega.packages.skills.impact_analyzer import SkillImpactAnalyzer
+                    scores = SkillImpactAnalyzer().analyze(active_skills_now, assistant_reply, [])
+                    for score in scores[:1]:
+                        improved = await self._skill_improver.maybe_improve(  # type: ignore[union-attr]
+                            score, user_input, assistant_reply
+                        )
+                        if improved and score.skill_name in BUILTIN_SKILL_INDEX:
+                            BUILTIN_SKILL_INDEX[score.skill_name]["body"] = improved
+            except Exception:
+                pass
 
         runtime_logger.debug(
             "direct_runner_turn_complete",
@@ -411,6 +627,169 @@ class DirectModelRunner(IFrameworkRunner):
         )
 
         return run_id
+
+    # ── Strategy context (mental models + skills) ─────────────────────────────
+
+    # Token thresholds for progressive skill disclosure
+    _SKILL_BUDGET_FULL = 4000      # full body
+    _SKILL_BUDGET_SUMMARY = 1500   # name + first 3 bullet steps
+    # Below summary threshold: name + triggers only (minimal)
+
+    def _build_strategy_context(self, token_budget: int = 8000) -> str:
+        """Return active skill bodies and mental model clauses as a prompt block."""
+        try:
+            parts: list[str] = []
+
+            # Active skills (filtered by current mode)
+            active_skills: list[str] = getattr(self._conv, "active_skills", None) or []
+            current_mode = self._conv.mode_name
+            if active_skills and self._capability_registry is not None:
+                skill_bodies: list[str] = []
+                per_skill_budget = token_budget // max(len(active_skills), 1)
+                for skill_name in active_skills:
+                    try:
+                        descriptor = self._capability_registry.get_descriptor(
+                            f"skill:{skill_name}"
+                        )
+                        if descriptor is None:
+                            continue
+                        supported = getattr(
+                            getattr(descriptor, "runtime_object", None), "supported_modes", None
+                        )
+                        if supported and current_mode not in supported:
+                            continue
+                        body = getattr(
+                            getattr(descriptor, "runtime_object", None), "body", None
+                        )
+                        if not body:
+                            continue
+                        if per_skill_budget >= self._SKILL_BUDGET_FULL:
+                            content = body
+                        elif per_skill_budget >= self._SKILL_BUDGET_SUMMARY:
+                            lines = body.split("\n")
+                            steps = [l for l in lines if l.strip() and l.strip()[0] in "-1234567890"][:3]
+                            content = "\n".join(steps) + f"\n...(full: /skill {skill_name})" if steps else body[:300]
+                        else:
+                            triggers_obj = getattr(getattr(descriptor, "runtime_object", None), "triggers", [])
+                            trig_str = ", ".join(list(triggers_obj)[:3]) if triggers_obj else ""
+                            content = f"Skill active: {skill_name}" + (f". Triggers: {trig_str}" if trig_str else "")
+                        skill_bodies.append(f"### Skill: {skill_name}\n{content}")
+                    except Exception:
+                        continue
+                if skill_bodies:
+                    parts.append("## Active Skills\n\n" + "\n\n".join(skill_bodies))
+
+            # Mental model clauses + negations
+            mental_model_spec = getattr(self._conv, "mental_model_spec", None)
+            if mental_model_spec is not None:
+                clauses = getattr(mental_model_spec, "clauses", None) or []
+                if clauses:
+                    clause_lines = "\n".join(f"- {getattr(c, 'text', str(c))}" for c in clauses)
+                    parts.append(f"## Behavioral Guidelines\n\n{clause_lines}")
+                negations = getattr(mental_model_spec, "negations", None) or []
+                if negations:
+                    neg_lines = "\n".join(f"- {n}" for n in negations)
+                    parts.append(f"## Behavioral Prohibitions\n\n{neg_lines}")
+
+            if not parts:
+                return ""
+            return "\n\n" + "\n\n".join(parts)
+        except Exception:
+            return ""
+
+    # ── Ambient workspace context ─────────────────────────────────────────────
+
+    @staticmethod
+    def _build_ambient_context(cwd: str | None = None) -> str:
+        """Return a formatted block with cwd, git branch, git status, and time."""
+        try:
+            work_dir = cwd or os.getcwd()
+            now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+            branch = ""
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    cwd=work_dir,
+                )
+                if result.returncode == 0:
+                    branch = result.stdout.strip()
+            except Exception:
+                pass
+
+            status_summary = ""
+            try:
+                result = subprocess.run(
+                    ["git", "status", "--short"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    cwd=work_dir,
+                )
+                if result.returncode == 0:
+                    lines = [l for l in result.stdout.splitlines() if l.strip()]
+                    if lines:
+                        status_summary = f"{len(lines)} changed file(s)"
+                        sample = ", ".join(l.strip() for l in lines[:5])
+                        status_summary += f" ({sample}{'…' if len(lines) > 5 else ''})"
+                    else:
+                        status_summary = "clean"
+            except Exception:
+                pass
+
+            lines = [f"- Working directory: {work_dir}", f"- Current time: {now_str}"]
+            if branch:
+                lines.append(f"- Git branch: {branch}")
+            if status_summary:
+                lines.append(f"- Git status: {status_summary}")
+
+            return (
+                "\n\n---\n**Workspace context (auto-injected):**\n"
+                + "\n".join(lines)
+                + "\n---"
+            )
+        except Exception:
+            return ""
+
+    # ── Auto-save research/explore results to KB ──────────────────────────────
+
+    async def _auto_save_to_kb(
+        self,
+        query: str,
+        reply: str,
+        session_id: str,
+        run_id: str,
+    ) -> None:
+        """Persist a truncated summary of research/explore output to the KB."""
+        try:
+            kb_tool = self._all_callables.get("write_kb") or self._tools.get("write_kb")
+            if kb_tool is None:
+                return
+            title = query[:80].replace("\n", " ").strip()
+            summary = reply[:1000]
+            from citnega.packages.tools.builtin.write_kb import WriteKBInput  # type: ignore[import]
+            from citnega.packages.protocol.callables.context import CallContext
+
+            gateway = self._model_gateway or (
+                _RunnerModelGateway(self._factory, self._current_model_id)
+                if self._current_model_id
+                else None
+            )
+            ctx = CallContext(
+                session_id=session_id,
+                run_id=run_id,
+                turn_id="auto_save",
+                depth=1,
+                session_config=self._session.config,
+                model_gateway=gateway,
+                capability_registry=self._capability_registry,
+            )
+            await kb_tool.invoke(WriteKBInput(title=title, content=summary), ctx)
+        except Exception:
+            pass  # KB write failures must never crash a turn
 
     async def _execute_pending_tool_calls(
         self,
@@ -613,10 +992,21 @@ class DirectModelRunner(IFrameworkRunner):
                 depth=1,
                 session_config=self._session.config,
                 model_gateway=gateway,
+                capability_registry=self._capability_registry,
+                mode_temperature=get_mode(self._conv.mode_name).temperature,
             )
             result = await tool.invoke(input_obj, ctx)
             if result.success and result.output:
-                output_text = result.output.model_dump_json()
+                # For specialist agents, prefer a plain-text field over the full JSON
+                # blob — feeding raw JSON to a local LLM produces garbled/empty replies.
+                output_text = None
+                for field in ("response", "result", "content", "summary", "output"):
+                    val = getattr(result.output, field, None)
+                    if val and isinstance(val, str):
+                        output_text = val
+                        break
+                if output_text is None:
+                    output_text = result.output.model_dump_json()
             elif result.error:
                 output_text = f"[Tool error: {result.error.message}]"
             else:
@@ -730,15 +1120,59 @@ class DirectModelRunner(IFrameworkRunner):
         output_summary: str,
         success: bool,
         callable_type: str = "tool",
+        msg_count: int | None = None,
     ) -> None:
         await self._conv.add_tool_call(
-            name, input_summary, output_summary, success, callable_type=callable_type
+            name, input_summary, output_summary, success,
+            callable_type=callable_type, msg_count=msg_count,
         )
 
     async def compact(self, summary: str, *, keep_recent: int = 10) -> int:
         return await self._conv.compact(summary, keep_recent=keep_recent)
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_tool_digest(messages: list[ModelMessage], error: str = "") -> str:
+        """
+        Build a human-readable summary of tool calls and results from the
+        message history.  Used as the L3 fallback when model synthesis fails.
+        """
+        lines: list[str] = []
+        i = 0
+        tool_index = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    name = fn.get("name") or "unknown_tool"
+                    raw_args = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        args_preview = ", ".join(
+                            f"{k}={str(v)[:60]}" for k, v in (args or {}).items()
+                        )
+                    except Exception:
+                        args_preview = str(raw_args)[:80]
+                    tool_index += 1
+                    lines.append(f"**{tool_index}. {name}**({args_preview})")
+            elif msg.role == "tool" and msg.content:
+                result = msg.content.strip()
+                if len(result) > 400:
+                    result = result[:400] + " …"
+                lines.append(f"   → {result}")
+            i += 1
+
+        if not lines:
+            if error:
+                return f"*(Model did not produce a response. Error: {error})*"
+            return "*(Tool calls completed — model did not produce a summary.)*"
+
+        header = "**Tool results:**\n\n"
+        if error:
+            header = f"*(Synthesis failed: {error})*\n\n**Tool results:**\n\n"
+        return header + "\n\n".join(lines)
 
     def _resolve_provider(self, model_id: str):
         """Return (provider, effective_model_id) with best-effort fallback."""

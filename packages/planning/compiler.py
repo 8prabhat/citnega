@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from citnega.packages.planning.models import (
@@ -12,6 +12,9 @@ from citnega.packages.planning.models import (
 )
 from citnega.packages.planning.workflows import render_template_value
 from citnega.packages.strategy.models import StrategySpec
+
+if TYPE_CHECKING:
+    from citnega.packages.protocol.events.emitter import EventEmitter
 
 
 class PlanCompiler:
@@ -53,6 +56,9 @@ class PlanCompiler:
         variables: dict[str, Any] | None = None,
         strategy: StrategySpec | None = None,
         objective: str = "",
+        emitter: EventEmitter | None = None,
+        session_id: str = "",
+        run_id: str = "",
     ) -> CompiledPlan:
         strategy = strategy or StrategySpec(objective=objective or template.description)
         rendered_variables = variables or {}
@@ -70,7 +76,7 @@ class PlanCompiler:
                     execution_target=template_step.execution_target,
                 )
             )
-        return CompiledPlan(
+        plan = CompiledPlan(
             plan_id=str(uuid.uuid4()),
             objective=objective or template.description,
             steps=steps,
@@ -81,6 +87,22 @@ class PlanCompiler:
                 "active_skills": list(strategy.active_skills),
             },
         )
+        if emitter is not None:
+            try:
+                from citnega.packages.protocol.events.planning import WorkflowTemplateExpandedEvent
+
+                emitter.emit(
+                    WorkflowTemplateExpandedEvent(
+                        session_id=session_id,
+                        run_id=run_id,
+                        workflow_name=template.name,
+                        plan_id=plan.plan_id,
+                        step_count=len(steps),
+                    )
+                )
+            except Exception:
+                pass
+        return plan
 
     @staticmethod
     def _infer_step_type(capability_id: str) -> PlanStepType:

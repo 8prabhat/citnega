@@ -74,6 +74,10 @@ class ModelGateway(IModelGateway):
             provider_type=provider.model_info.provider_type,
         )
 
+    def list_providers(self) -> dict[str, IModelProvider]:
+        """Return all registered providers keyed by model_id."""
+        return dict(self._providers)
+
     def _resolve_provider(self, request: ModelRequest) -> IModelProvider:
         """Select provider for the request, raising if none is suitable."""
         if request.model_id:

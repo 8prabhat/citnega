@@ -85,7 +85,8 @@ class SpecialistBase(BaseCallable):
             ModelMessage(role="system", content=system_override or self.SYSTEM_PROMPT),
             ModelMessage(role="user", content=user_input),
         ]
+        temperature = context.mode_temperature if context.mode_temperature is not None else 0.5
         response = await context.model_gateway.generate(
-            ModelRequest(messages=messages, stream=False, temperature=0.5)
+            ModelRequest(messages=messages, stream=False, temperature=temperature)
         )
         return response.content

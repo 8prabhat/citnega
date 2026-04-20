@@ -141,7 +141,28 @@ class SecurityAgent(SpecialistBase):
         "You are a security reviewer focused on practical risk reduction. "
         "Prioritize exploitable issues and data-leak vectors over style concerns."
     )
-    TOOL_WHITELIST = ["repo_map", "quality_gate"]
+    TOOL_WHITELIST = [
+        # Architecture context
+        "repo_map",
+        "quality_gate",
+        # Static analysis (passive/local)
+        "vuln_scanner",
+        "secrets_scanner",
+        "hash_integrity",
+        # System inspection (passive/local)
+        "os_fingerprint",
+        "hypervisor_detect",
+        "kernel_audit",
+        "process_inspector",
+        "user_audit",
+        "firewall_inspect",
+        # Network tools (requires_approval=True in policy — PolicyEnforcer gates these)
+        "port_scanner",
+        "network_recon",
+        "network_vuln_scan",
+        "ssl_tls_audit",
+        "dns_recon",
+    ]
 
     async def _execute(self, input: SecurityAgentInput, context: CallContext) -> SpecialistOutput:
         root = Path(input.working_dir or os.getcwd()).expanduser().resolve()
@@ -222,6 +243,31 @@ class SecurityAgent(SpecialistBase):
 
         if input.include_event_log_scan and run_id:
             findings.extend(self._scan_event_log(run_id=run_id, working_dir=root))
+
+        # Augment with dedicated vuln_scanner + secrets_scanner tools
+        vuln_tool = self._get_tool("vuln_scanner")
+        if vuln_tool is not None:
+            from citnega.packages.tools.security.vuln_scanner import VulnScannerInput
+            vr = await vuln_tool.invoke(VulnScannerInput(path=str(root)), child_ctx)
+            if vr.success and vr.output:
+                tool_calls_made.append("vuln_scanner")
+                sections.append(
+                    f"Static vuln scan: {vr.output.total_findings} findings "
+                    f"({vr.output.critical} critical, {vr.output.high} high)"
+                )
+                sources.append("vuln_scanner")
+
+        secrets_tool = self._get_tool("secrets_scanner")
+        if secrets_tool is not None:
+            from citnega.packages.tools.security.secrets_scanner import SecretsScannerInput
+            sr = await secrets_tool.invoke(SecretsScannerInput(path=str(root)), child_ctx)
+            if sr.success and sr.output:
+                tool_calls_made.append("secrets_scanner")
+                sections.append(
+                    f"Secrets scan: {sr.output.critical + sr.output.high} high/critical findings "
+                    f"across {sr.output.scanned_files} files"
+                )
+                sources.append("secrets_scanner")
 
         findings = sorted(
             findings,

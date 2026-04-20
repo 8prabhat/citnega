@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from citnega.packages.observability.logging_setup import runtime_logger
@@ -229,6 +229,26 @@ class CoreRuntime(IRuntime):
 
             # 2. Assemble context
             context_obj = await self._assembler.assemble(session, user_input, run_id)
+
+            # 2b. Inject strategy_spec into context so mental model constraints are active
+            if session.strategy_spec is not None:
+                try:
+                    context_obj.strategy_spec = session.strategy_spec
+                    for skill_name in session.strategy_spec.active_skills:
+                        try:
+                            from citnega.packages.protocol.events.planning import SkillActivatedEvent
+                            self._emitter.emit(
+                                SkillActivatedEvent(
+                                    session_id=session_id,
+                                    run_id=run_id,
+                                    skill_name=skill_name,
+                                    rationale="active_skill_from_strategy_spec",
+                                )
+                            )
+                        except Exception as skill_exc:
+                            runtime_logger.debug("skill_event_emit_failed", skill=skill_name, error=str(skill_exc))
+                except Exception as exc:
+                    runtime_logger.debug("strategy_spec_inject_failed", error=str(exc))
 
             # 3. CONTEXT_ASSEMBLING → EXECUTING
             await _transition(RunState.EXECUTING)
@@ -452,6 +472,12 @@ class CoreRuntime(IRuntime):
     async def save_session(self, session: Session) -> None:
         """Persist a modified session record."""
         await self._sessions.save(session)
+
+    async def update_session_strategy(self, session_id: str, strategy: Any) -> None:
+        """Attach a StrategySpec to the session and persist it."""
+        session = await self._sessions.get(session_id)
+        updated = session.model_copy(update={"strategy_spec": strategy})
+        await self._sessions.save(updated)
 
     async def get_run_summary(self, run_id: str) -> RunSummary | None:
         """Return a run summary, or None if not found."""

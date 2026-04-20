@@ -166,9 +166,7 @@ class PlannerAgent(BaseCoreAgent):
                 continue
 
             child_ctx = context.child(self.name, self.callable_type)
-            spec_input = specialist.input_schema.model_validate(
-                {"task": task, "query": task, "text": task, "goal": task}
-            )
+            spec_input = specialist.input_schema.model_validate({"task": task})
             result = await specialist.invoke(spec_input, child_ctx)
             if result.success and result.output:
                 step_outputs.append(result.get_output_field("response", str(result.output)))

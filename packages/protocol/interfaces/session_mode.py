@@ -32,6 +32,26 @@ class ISessionMode(ABC):
         """One-sentence description shown in /mode help."""
         ...
 
+    @property
+    def max_tool_rounds(self) -> int:
+        """
+        Maximum tool-calling rounds the runner will execute for this mode.
+
+        Override in subclasses that need deeper agentic loops (e.g. explore,
+        research).  Default matches the runner's historical constant of 5.
+        """
+        return 5
+
+    @property
+    def temperature(self) -> float:
+        """
+        Model sampling temperature for this mode.
+
+        Default is 0.7 (conversational).  Override in modes that require
+        more deterministic (lower) or more creative (higher) output.
+        """
+        return 0.7
+
     @abstractmethod
     def augment_system_prompt(self, base_prompt: str) -> str:
         """

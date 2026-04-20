@@ -189,7 +189,7 @@ def test_registry_all_states() -> None:
 @pytest.mark.asyncio
 async def test_base_provider_skips_retry_when_circuit_open() -> None:
     """If circuit is OPEN, _with_retry raises immediately without calling _do_generate."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from citnega.packages.model_gateway.providers.base_provider import BaseProvider
 

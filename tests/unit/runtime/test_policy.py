@@ -215,7 +215,6 @@ class TestPathCheck:
     @pytest.mark.asyncio
     async def test_symlink_escape_raises(self, tmp_path: pytest.TempDir) -> None:
         """A symlink that resolves outside the allowed root must be rejected."""
-        import pathlib
         from pydantic import BaseModel as BM
 
         outside = tmp_path.parent / "outside_root"
@@ -240,7 +239,6 @@ class TestPathCheck:
     @pytest.mark.asyncio
     async def test_symlink_within_allowed_passes(self, tmp_path: pytest.TempDir) -> None:
         """A symlink that resolves inside the allowed root must be permitted."""
-        import pathlib
         from pydantic import BaseModel as BM
 
         allowed = tmp_path / "workspace"

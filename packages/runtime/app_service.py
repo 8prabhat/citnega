@@ -99,6 +99,10 @@ class ApplicationService(IApplicationService):
     async def delete_session(self, session_id: str) -> None:
         await self._runtime.delete_session(session_id)
 
+    async def update_session_strategy(self, session_id: str, strategy: Any) -> None:
+        """Apply a StrategySpec to the active session and persist it."""
+        await self._runtime.update_session_strategy(session_id, strategy)
+
     # ── Run execution ──────────────────────────────────────────────────────────
 
     async def run_turn(self, session_id: str, user_input: str) -> str:
@@ -114,12 +118,16 @@ class ApplicationService(IApplicationService):
         # Auto-compact if thresholds are exceeded
         try:
             await self._maybe_auto_compact(session_id, _turn_settings)
-        except Exception:
-            pass  # auto-compact failure must never surface to the user
+        except Exception as exc:
+            from citnega.packages.observability.logging_setup import runtime_logger as _log
+            _log.warning("auto_compact_failed", session_id=session_id, error=str(exc))
 
         # Auto-rename new session from first user message
-        with contextlib.suppress(Exception):
+        try:
             await self._maybe_auto_rename(session_id, user_input, _turn_settings)
+        except Exception as exc:
+            from citnega.packages.observability.logging_setup import runtime_logger as _log
+            _log.debug("auto_rename_failed", session_id=session_id, error=str(exc))
 
         return run_id
 
@@ -179,13 +187,17 @@ class ApplicationService(IApplicationService):
         """
         Async generator: yields events for *run_id* until RunCompleteEvent
         arrives or the stream times out.
+
+        The per-event timeout (stream_timeout_seconds, default 3600) prevents
+        hanging forever when a run crashes without emitting RunCompleteEvent.
+        It must be large enough to cover the slowest tool calls.
         """
         from citnega.packages.config.loaders import load_settings
 
         try:
             timeout = load_settings().runtime.stream_timeout_seconds
         except Exception:
-            timeout = 60.0
+            timeout = 3600.0
 
         queue = self._emitter.get_queue(run_id)
         try:
@@ -193,6 +205,10 @@ class ApplicationService(IApplicationService):
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
+                    # No event arrived within the window — run likely crashed.
+                    # Log and exit; _drain() will post RunFinished to unblock the UI.
+                    from citnega.packages.observability.logging_setup import runtime_logger as _log
+                    _log.warning("stream_events_timeout", run_id=run_id, timeout=timeout)
                     break
                 yield event
                 if isinstance(event, RunCompleteEvent):
@@ -323,14 +339,16 @@ class ApplicationService(IApplicationService):
         import inspect
 
         runner = self._get_runner(session_id)
-        if runner is not None and hasattr(runner, "_store"):
-            await runner._store.add_message(role, content)
-        else:
-            adapter = self._runtime.adapter
-            if hasattr(adapter, "append_message_to_session"):
-                result = adapter.append_message_to_session(session_id, role, content)
-                if inspect.isawaitable(result):
-                    await result
+        if runner is not None:
+            store = runner.get_store()
+            if store is not None:
+                await store.add_message(role, content)
+                return
+        adapter = self._runtime.adapter
+        if hasattr(adapter, "append_message_to_session"):
+            result = adapter.append_message_to_session(session_id, role, content)
+            if inspect.isawaitable(result):
+                await result
 
     # ── Model management ──────────────────────────────────────────────────────
 
@@ -345,6 +363,14 @@ class ApplicationService(IApplicationService):
         if runner is not None:
             return runner.get_active_model_id()
         return None
+
+    def get_model_gateway(self) -> Any:
+        """Return the model gateway, or None if not configured."""
+        return self._model_gateway
+
+    def invalidate_capability_cache(self) -> None:
+        """Clear the cached CapabilityRegistry so it is rebuilt on next access."""
+        self._capability_registry_cache = None
 
     def set_session_plan_phase(self, session_id: str, phase: str) -> None:
         """Set the plan phase (``"draft"`` | ``"execute"``) synchronously."""
@@ -505,12 +531,14 @@ class ApplicationService(IApplicationService):
         output_summary: str,
         success: bool,
         callable_type: str = "tool",
+        msg_count: int | None = None,
     ) -> None:
         """Persist a completed tool/agent call into the session's tool history."""
         runner = self._get_runner(session_id)
         if runner is not None:
             await runner.add_tool_call(
-                name, input_summary, output_summary, success, callable_type=callable_type
+                name, input_summary, output_summary, success,
+                callable_type=callable_type, msg_count=msg_count,
             )
 
     def get_session_tool_history(self, session_id: str) -> list[dict[str, Any]]:
@@ -793,8 +821,9 @@ class ApplicationService(IApplicationService):
             refresh_result = await self._runtime.refresh_runners()
             refreshed = refresh_result.get("refreshed", [])
             skipped = refresh_result.get("skipped", [])
-        except Exception:
-            pass
+        except Exception as exc:
+            from citnega.packages.observability.logging_setup import runtime_logger as _log
+            _log.warning("workspace_runner_refresh_failed", error=str(exc))
 
         result: dict[str, Any] = {
             "registered": registered,
@@ -840,8 +869,9 @@ class ApplicationService(IApplicationService):
                 if asyncio.iscoroutine(models):
                     return []
                 return list(models)
-            except Exception:
-                pass
+            except Exception as exc:
+                from citnega.packages.observability.logging_setup import runtime_logger as _log
+                _log.warning("model_gateway_list_models_failed", error=str(exc))
 
         # 3. Fallback: load directly from the bundled model_registry.toml
         try:
@@ -860,6 +890,7 @@ class ApplicationService(IApplicationService):
             CapabilityRegistry,
             WorkspaceCapabilityProvider,
         )
+        from citnega.packages.capabilities.providers import MentalModelCapabilityProvider
         from citnega.packages.config.loaders import load_settings
         from citnega.packages.protocol.events.planning import CapabilityLoadFailedEvent
 
@@ -924,5 +955,22 @@ class ApplicationService(IApplicationService):
             ):
                 continue
             registry.register(record, overwrite=True)
+        # Load mental models from workspace
+        mm_records, mm_diagnostics = MentalModelCapabilityProvider(workspace_root).load()
+        for failure in mm_diagnostics.failures:
+            self._emitter.emit(
+                CapabilityLoadFailedEvent(
+                    session_id="system",
+                    run_id="capability-bootstrap",
+                    capability_id=failure.capability_id,
+                    source=failure.source,
+                    path=failure.path,
+                    error=failure.error,
+                    required=failure.required,
+                )
+            )
+        for record in mm_records:
+            registry.register(record, overwrite=True)
+
         self._capability_registry_cache = registry
         return registry

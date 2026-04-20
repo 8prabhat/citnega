@@ -35,6 +35,8 @@ class CallContext(BaseModel):
     parent_callable: str | None = None
     session_config: SessionConfig
     model_gateway: Any = None  # IModelGateway | None — injected for agents only
+    capability_registry: Any = None  # CapabilityRegistry | None — injected by CoreRuntime
+    mode_temperature: float | None = None  # per-mode temperature, read by SpecialistBase
     deadline: float | None = None  # monotonic clock deadline
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -65,6 +67,8 @@ class CallContext(BaseModel):
             parent_callable=callable_name,
             session_config=self.session_config,
             model_gateway=self.model_gateway,
+            capability_registry=self.capability_registry,
+            mode_temperature=self.mode_temperature,
             deadline=self.deadline,
             metadata=dict(self.metadata),
         )

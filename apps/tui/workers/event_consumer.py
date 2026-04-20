@@ -180,17 +180,26 @@ class EventConsumerWorker:
 
     async def _drain(self) -> None:
         """Consume events until RunCompleteEvent or task cancellation."""
+        completed = False
         try:
             async for event in self._service.stream_events(self._run_id):
                 self._dispatch(event)
                 if isinstance(event, RunCompleteEvent):
+                    completed = True
                     break
         except asyncio.CancelledError:
-            pass
+            return
         except Exception as exc:
-            # Worker errors are non-fatal — notify user and finish
-            self._app.notify(f"Stream error: {exc}", severity="error", timeout=8)
+            user_msg = getattr(exc, "user_message", "") or str(exc)
+            self._app.notify(user_msg, severity="error", timeout=8)
             self._app.post_message(RunFinished(self._run_id, f"error: {exc}"))
+            return
+
+        # Stream ended without a RunCompleteEvent (e.g. per-event timeout fired).
+        # Always finalize the UI so the StreamingBlock is resolved and the input
+        # box re-enabled — without this the TUI appears frozen.
+        if not completed:
+            self._app.post_message(RunFinished(self._run_id, "completed"))
 
     def _dispatch(self, event: CanonicalEvent) -> None:
         """Translate a canonical event into one or more Textual messages."""

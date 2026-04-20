@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.interfaces.slash_command import ISlashCommand
+
+if TYPE_CHECKING:
+    from citnega.apps.tui.controllers.chat_controller import ChatController
+    from citnega.packages.protocol.interfaces.application_service import IApplicationService
 
 
 class HelpCommand(ISlashCommand):
     name = "help"
     help_text = "Show available slash commands."
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         lines = ["Available commands:"]
         for cmd_name, cmd in app_context._slash_commands.items():
             lines.append(f"  /{cmd_name:<12} {cmd.help_text}")
@@ -22,10 +26,10 @@ class CancelCommand(ISlashCommand):
     name = "cancel"
     help_text = "Cancel the currently running turn."
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         # Find the current run_id from the consumer worker
         consumer = app_context._consumer
         if consumer is None:
@@ -43,7 +47,7 @@ class ClearCommand(ISlashCommand):
     name = "clear"
     help_text = "Clear the chat window."
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         screen = app_context._app.screen
         screen.action_clear_chat()
 
@@ -52,10 +56,10 @@ class ModelCommand(ISlashCommand):
     name = "model"
     help_text = "Show or switch the active model. Usage: /model [model_id]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         models = self._service.list_models()
         session_id = getattr(app_context, "_session_id", None)
         active_id = self._service.get_session_model(session_id) if session_id else None
@@ -97,7 +101,7 @@ class ModelCommand(ISlashCommand):
         # ── Manual / scripted path: /model <model_id> ─────────────────────
         await self._switch_model(app_context, session_id, args[0])
 
-    async def _switch_model(self, app_context: Any, session_id: str | None, model_id: str) -> None:
+    async def _switch_model(self, app_context: ChatController, session_id: str | None, model_id: str) -> None:
         models = self._service.list_models()
         model_ids = [m.model_id for m in models]
         if model_id not in model_ids:
@@ -111,13 +115,6 @@ class ModelCommand(ISlashCommand):
         try:
             await self._service.set_session_model(session_id, model_id)
             await app_context._append_message("system", f"Switched to model: {model_id}")
-            try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar
-
-                status = app_context._app.screen.query_one(StatusBar)
-                status.set_model(model_id)
-            except Exception:
-                pass
             app_context._update_context_bar(model=model_id)
         except Exception as exc:
             await app_context._append_message("system", f"Model switch failed: {exc}")
@@ -130,10 +127,10 @@ class ModeCommand(ISlashCommand):
         "/mode [chat|plan|explore|research|code|review|operate]"
     )
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         from citnega.packages.protocol.modes import all_modes
 
         session_id = getattr(app_context, "_session_id", None)
@@ -167,7 +164,7 @@ class ModeCommand(ISlashCommand):
         # ── Manual path: /mode <name> ──────────────────────────────────────
         await self._switch_mode(app_context, session_id, args[0].lower())
 
-    async def _switch_mode(self, app_context: Any, session_id: str | None, requested: str) -> None:
+    async def _switch_mode(self, app_context: ChatController, session_id: str | None, requested: str) -> None:
         from citnega.packages.protocol.modes import all_modes, get_mode
 
         valid = [m.name for m in all_modes()]
@@ -182,13 +179,6 @@ class ModeCommand(ISlashCommand):
         try:
             await self._service.set_session_mode(session_id, requested)
             mode_obj = get_mode(requested)
-            try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar
-
-                status = app_context._app.screen.query_one(StatusBar)
-                status.set_mode(mode_obj.display_label)
-            except Exception:
-                pass
             label = mode_obj.display_label or "[CHAT]"
             app_context._update_context_bar(mode=requested)
             await app_context._append_message(
@@ -202,10 +192,10 @@ class ThinkCommand(ISlashCommand):
     name = "think"
     help_text = "Toggle thinking tokens. Usage: /think [on|off|auto]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         session_id = getattr(app_context, "_session_id", None)
         if not session_id:
             await app_context._append_message("system", "No active session.")
@@ -251,10 +241,10 @@ class ApproveCommand(ISlashCommand):
     name = "approve"
     help_text = "Approve a pending tool call. Usage: /approve <approval_id> [--deny]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         if not args:
             await app_context._append_message("system", "Usage: /approve <approval_id> [--deny]")
             return
@@ -272,10 +262,10 @@ class AgentCommand(ISlashCommand):
     name = "agent"
     help_text = "List available agents and tools. Usage: /agent [agents|tools]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         sub = args[0].lower() if args else "all"
 
         if sub in ("all", "agents"):
@@ -316,10 +306,10 @@ class NewSessionCommand(ISlashCommand):
     name = "new"
     help_text = "Clear the current chat and start a fresh session."
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         import uuid
 
         from citnega.packages.protocol.models.sessions import SessionConfig
@@ -355,15 +345,7 @@ class NewSessionCommand(ISlashCommand):
             screen = app_context._app.screen
             screen.action_clear_chat()
 
-            # Update status bar
-            try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar
-
-                status = app_context._app.screen.query_one(StatusBar)
-                status.session_id = session.config.session_id
-            except Exception:
-                pass
-
+            app_context._update_context_bar(session_id=session.config.session_id)
             await app_context._append_message(
                 "system",
                 f"New session started: {session.config.session_id[:8]}…\n"
@@ -377,10 +359,10 @@ class SessionsCommand(ISlashCommand):
     name = "sessions"
     help_text = "Show all sessions or switch to one. Usage: /sessions [session_id]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         try:
             sessions = await self._service.list_sessions()
         except Exception as exc:
@@ -432,17 +414,15 @@ class SessionsCommand(ISlashCommand):
             on_select=_on_select,
         )
 
-    async def _switch_session(self, app_context: Any, session) -> None:
+    async def _switch_session(self, app_context: ChatController, session) -> None:
         from textual.containers import VerticalScroll
-        from textual.widgets import Label as _Label
 
         sid = session.config.session_id
         app_context._session_id = sid
         app_context._app._session_id = sid
 
-        # ── Hard-clear both panels with await so removal is complete before
-        #    we start mounting history.  Using action_clear_chat() without
-        #    await leaves old nodes registered when _append_message runs.
+        # ── Hard-clear chat with await so removal is complete before
+        #    we start mounting history.
         screen = app_context._app.screen
         try:
             scroll = screen.query_one("#chat-scroll", VerticalScroll)
@@ -450,17 +430,7 @@ class SessionsCommand(ISlashCommand):
         except Exception:
             scroll = None
 
-        try:
-            tools_panel = screen.query_one("#tools-panel", VerticalScroll)
-            await tools_panel.remove_children()
-        except Exception:
-            tools_panel = None
-
-        try:
-            from citnega.apps.tui.widgets.status_bar import StatusBar
-            screen.query_one(StatusBar).session_id = sid
-        except Exception:
-            pass
+        app_context._update_context_bar(session_id=sid)
 
         # ── Load message history of the selected session ──────────────────
         messages_loaded = 0
@@ -481,9 +451,8 @@ class SessionsCommand(ISlashCommand):
         except Exception:
             pass
 
-        # ── Restore tool call / agent call history ────────────────────────
-        tool_history = []
-        if tools_panel is not None:
+        # ── Restore tool call / agent call history inline ─────────────────
+        if scroll is not None:
             try:
                 from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
                 from citnega.apps.tui.widgets.tool_call_block import ToolCallBlock
@@ -502,7 +471,7 @@ class SessionsCommand(ISlashCommand):
                             tool_name=entry.get("name", "?"),
                             input_summary=entry.get("input_summary", ""),
                         )
-                    await tools_panel.mount(block)
+                    await scroll.mount(block)
                     if entry.get("success", True):
                         block.set_result(entry.get("output_summary", ""))
                     else:
@@ -524,17 +493,11 @@ class SessionsCommand(ISlashCommand):
         except Exception:
             pass
 
-        # ── Restore placeholders if panels are still empty ────────────────
+        # ── Restore placeholder if chat is still empty ────────────────────
         if scroll is not None and messages_loaded == 0 and not scroll.query("#empty-hint"):
             try:
                 from citnega.apps.tui.widgets.welcome_banner import WelcomeBanner
                 await scroll.mount(WelcomeBanner(id="empty-hint"))
-            except Exception:
-                pass
-
-        if tools_panel is not None and not tool_history and not tools_panel.query("#tools-empty"):
-            try:
-                await tools_panel.mount(_Label("No active tools", id="tools-empty"))
             except Exception:
                 pass
 
@@ -547,10 +510,10 @@ class CompactCommand(ISlashCommand):
     name = "compact"
     help_text = "Compact the conversation history. Usage: /compact [keep_recent_count]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         session_id = getattr(app_context, "_session_id", None)
         if not session_id:
             await app_context._append_message("system", "No active session.")
@@ -587,10 +550,10 @@ class RenameCommand(ISlashCommand):
     name = "rename"
     help_text = "Rename the current session. Usage: /rename <new_name>"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         session_id = getattr(app_context, "_session_id", None)
         if not session_id:
             await app_context._append_message("system", "No active session.")
@@ -604,13 +567,7 @@ class RenameCommand(ISlashCommand):
             return
         try:
             await self._service.rename_session(session_id, new_name)
-            # Update status bar if available
-            try:
-                from citnega.apps.tui.widgets.status_bar import StatusBar
-                status = app_context._app.screen.query_one(StatusBar)
-                status.session_name = new_name
-            except Exception:
-                pass
+            app_context._update_context_bar(session_name=new_name)
             await app_context._append_message(
                 "system", f"Session renamed to: {new_name!r}"
             )
@@ -622,10 +579,10 @@ class DeleteSessionCommand(ISlashCommand):
     name = "delete"
     help_text = "Delete the current session and start a new one. Usage: /delete [--yes]"
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         session_id = getattr(app_context, "_session_id", None)
         if not session_id:
             await app_context._append_message("system", "No active session to delete.")
@@ -655,10 +612,10 @@ class ShowSessionCommand(ISlashCommand):
     name = "show"
     help_text = "Show details for the current session."
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: IApplicationService) -> None:
         self._service = service
 
-    async def execute(self, args: list[str], app_context: Any) -> None:
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
         session_id = getattr(app_context, "_session_id", None)
         if not session_id:
             await app_context._append_message("system", "No active session.")
@@ -681,3 +638,92 @@ class ShowSessionCommand(ISlashCommand):
             await app_context._append_message("system", "\n".join(lines))
         except Exception as exc:
             await app_context._append_message("system", f"Show failed: {exc}")
+
+
+_SKILL_GROUPS: dict[str, list[str]] = {
+    "Core":                ["security_review", "code_review", "research_protocol", "debug_session", "deploy_checklist"],
+    "Business & Finance":  ["requirements_gathering", "stakeholder_report", "variance_analysis", "audit_protocol"],
+    "Data & ML":           ["eda_protocol", "dashboard_design", "ml_experiment", "model_review", "model_deployment"],
+    "Operations & SRE":    ["incident_response", "postmortem"],
+    "Risk & Legal":        ["risk_assessment", "control_testing", "contract_review", "legal_research_protocol"],
+}
+
+
+class SkillsCommand(ISlashCommand):
+    name = "skills"
+    help_text = "List all available built-in skills grouped by domain."
+
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
+        from citnega.packages.skills.builtins import BUILTIN_SKILL_INDEX
+
+        lines = ["Built-in skills  (use /skill <name> to activate)\n"]
+        listed: set[str] = set()
+
+        for group, names in _SKILL_GROUPS.items():
+            lines.append(f"◆ {group}")
+            for name in names:
+                s = BUILTIN_SKILL_INDEX.get(name)
+                if not s:
+                    continue
+                listed.add(name)
+                modes = ", ".join(s.get("supported_modes", []))
+                lines.append(f"  {name:<26} {s['description'][:55]}")
+                lines.append(f"  {'':26} modes: [{modes}]")
+            lines.append("")
+
+        # Any skills not in a named group
+        remaining = [s for s in BUILTIN_SKILL_INDEX if s not in listed]
+        if remaining:
+            lines.append("◆ Other")
+            for name in remaining:
+                s = BUILTIN_SKILL_INDEX[name]
+                lines.append(f"  {name:<26} {s['description'][:55]}")
+
+        await app_context._append_message("system", "\n".join(lines))
+
+
+class SkillCommand(ISlashCommand):
+    name = "skill"
+    help_text = "Activate or show a skill. Usage: /skill <name> | /skill list"
+
+    async def execute(self, args: list[str], app_context: ChatController) -> None:
+        from citnega.packages.skills.builtins import BUILTIN_SKILL_INDEX
+
+        if not args or args[0] in ("list", "ls"):
+            names = list(BUILTIN_SKILL_INDEX.keys())
+            await app_context._append_message(
+                "system",
+                f"Built-in skills: {', '.join(names)}\n"
+                "Usage: /skill <name>  to activate one, or /skills to see descriptions.",
+            )
+            return
+
+        skill_name = args[0].lower().strip()
+        skill_dict = BUILTIN_SKILL_INDEX.get(skill_name)
+        if skill_dict is None:
+            # Fuzzy match: find skills whose name contains the query or vice-versa
+            candidates = [n for n in BUILTIN_SKILL_INDEX if skill_name in n or n.startswith(skill_name)]
+            if not candidates:
+                # Fallback: any skill where any word in the name matches
+                words = skill_name.replace("-", "_").split("_")
+                candidates = [n for n in BUILTIN_SKILL_INDEX if any(w in n for w in words if len(w) > 2)]
+            if len(candidates) == 1:
+                skill_name = candidates[0]
+                skill_dict = BUILTIN_SKILL_INDEX[skill_name]
+            else:
+                suggestion = f"\nDid you mean: {', '.join(candidates)}?" if candidates else ""
+                await app_context._append_message(
+                    "system",
+                    f"Unknown skill '{args[0]}'.{suggestion}\n"
+                    f"Available: {', '.join(BUILTIN_SKILL_INDEX.keys())}",
+                )
+                return
+
+        # Show the skill body so the user knows what protocol is now active
+        body = skill_dict.get("body", "")
+        triggers = ", ".join(skill_dict.get("triggers", []))
+        await app_context._append_message(
+            "system",
+            f"Skill '{skill_name}' is now active for this session.\n\n"
+            f"{body}\n\nTriggers: {triggers}",
+        )

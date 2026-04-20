@@ -115,8 +115,7 @@ class StreamingBlock(Widget):
             await plain.remove()
         except Exception:
             pass
-        md_content = self._buffer.strip() or "(empty response)"
-        await self.mount(Markdown(md_content, id="stream-md"))
+        await self.mount(Markdown(self._buffer.strip() or "", id="stream-md"))
         with contextlib.suppress(Exception):
             self.scroll_visible(animate=False)
 

@@ -8,7 +8,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,7 +18,6 @@ from citnega.packages.bootstrap.bootstrap import (
     _build_model_gateway,
     _select_adapter,
 )
-
 
 # ── _select_adapter ────────────────────────────────────────────────────────────
 

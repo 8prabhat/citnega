@@ -31,7 +31,7 @@ class WorkspaceWriter:
         workfolder: Absolute path to the user's workfolder directory.
     """
 
-    _SUBDIRS = ("memory", "agents", "tools", "workflows", "skills")
+    _SUBDIRS = ("memory", "agents", "tools", "workflows", "skills", "mental_models")
 
     def __init__(self, workfolder: Path) -> None:
         self._root = Path(workfolder)
@@ -106,6 +106,24 @@ class WorkspaceWriter:
     @property
     def skills_dir(self) -> Path:
         return self._root / "skills"
+
+    @property
+    def mental_models_dir(self) -> Path:
+        return self._root / "mental_models"
+
+    def write_mental_model(self, name: str, source: str) -> Path:
+        """Write a mental-model constraint file to mental_models/<name>.md."""
+        directory = self._root / "mental_models"
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / f"{pascal_to_snake(name)}.md"
+        tmp = target.with_suffix(".tmp")
+        try:
+            tmp.write_text(source, encoding="utf-8")
+            os.replace(tmp, target)
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        return target
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

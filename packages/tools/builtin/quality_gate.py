@@ -33,7 +33,12 @@ class QualityGateInput(BaseModel):
     )
     profile: str = Field(
         default="quick",
-        description="'quick' | 'standard' | 'strict'. Ignored when commands are provided.",
+        description=(
+            "'quick' | 'standard' | 'strict' (Python); "
+            "'node' | 'go' | 'rust' | 'docs'; "
+            "'auto' = detect stack from working_dir. "
+            "Ignored when commands are provided."
+        ),
     )
     commands: list[str] = Field(
         default_factory=list,
@@ -136,11 +141,14 @@ class QualityGateTool(BaseCallable):
                 if cmd.strip()
             ]
 
+        cwd = Path(input.working_dir or os.getcwd()).expanduser().resolve()
         profile = input.profile.lower().strip()
+
+        if profile == "auto":
+            profile = self._detect_stack(cwd)
+
         if profile == "quick":
-            return [
-                _NamedCommand("ruff", self._cmd_ruff()),
-            ]
+            return [_NamedCommand("ruff", self._cmd_ruff())]
         if profile == "standard":
             return [
                 _NamedCommand("ruff", self._cmd_ruff()),
@@ -152,10 +160,38 @@ class QualityGateTool(BaseCallable):
                 _NamedCommand("mypy", self._cmd_mypy()),
                 _NamedCommand("pytest", self._cmd_pytest()),
             ]
+        if profile == "node":
+            return [
+                _NamedCommand("eslint", "npx eslint . --max-warnings 0"),
+                _NamedCommand("tsc", "npx tsc --noEmit"),
+            ]
+        if profile == "go":
+            return [_NamedCommand("golangci-lint", "golangci-lint run ./...")]
+        if profile == "rust":
+            return [
+                _NamedCommand("clippy", "cargo clippy -- -D warnings"),
+                _NamedCommand("fmt", "cargo fmt --check"),
+            ]
+        if profile == "docs":
+            return [_NamedCommand("markdownlint", "npx markdownlint-cli '**/*.md'")]
         raise CallableError(
             f"Unknown quality_gate profile: {input.profile!r}. "
-            "Expected quick|standard|strict."
+            "Expected quick|standard|strict|node|go|rust|docs|auto."
         )
+
+    @staticmethod
+    def _detect_stack(cwd: Path) -> str:
+        """Return the most specific profile based on stack markers in *cwd*."""
+        if (cwd / "Cargo.toml").exists():
+            return "rust"
+        if (cwd / "go.mod").exists():
+            return "go"
+        if (cwd / "package.json").exists():
+            return "node"
+        if (cwd / "pyproject.toml").exists() or (cwd / "setup.py").exists():
+            return "quick"
+        # Default to quick (Python ruff check) when nothing detected
+        return "quick"
 
     @staticmethod
     def _prefer_venv(bin_name: str) -> str:

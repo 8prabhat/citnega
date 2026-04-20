@@ -19,6 +19,7 @@ handles SystemExit on every failure mode.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 import sys
 from typing import TYPE_CHECKING
 
@@ -27,7 +28,6 @@ from citnega.packages.runtime.app_service import ApplicationService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from citnega.packages.config.settings import CitnegaSettings
     from citnega.packages.model_gateway.gateway import ModelGateway
@@ -165,20 +165,24 @@ async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter
 
     # Health-check providers
     healthy_count = 0
-    for _model_id, provider in gateway._providers.items():
+    for _model_id, provider in gateway.list_providers().items():
         try:
             healthy = await provider.health_check()
             if healthy:
                 healthy_count += 1
-        except Exception:
-            pass  # health_check failures are non-fatal individually
+        except Exception as exc:
+            runtime_logger.warning(
+                "provider_health_check_failed",
+                model_id=_model_id,
+                error=str(exc),
+            )
 
     local_only: bool = getattr(settings.runtime, "local_only", True)
     if healthy_count == 0 and local_only:
         runtime_logger.error(
             "bootstrap_no_healthy_provider",
             local_only=local_only,
-            registered=len(list(gateway._providers.keys())),
+            registered=len(gateway.list_providers()),
         )
         sys.exit(EXIT_NO_PROVIDER)
 
@@ -358,6 +362,7 @@ async def create_application(
             approval_mgr,
             deny_network=effective_policy.enforce_network_deny,
             path_vars=_policy_path_vars,
+            bypass_permissions=settings.policy.bypass_permissions,
         )
 
         # ── Step 10: Framework adapter ────────────────────────────────────────
@@ -456,6 +461,14 @@ async def create_application(
 
         tracer = Tracer(InvocationRepository(db))
 
+        # ── Step 14b: Execution backend (local or Docker) ─────────────────────
+        try:
+            from citnega.packages.execution.backends.factory import ExecutionBackendFactory
+            execution_backend = ExecutionBackendFactory.create(settings)
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_execution_backend_failed", error=str(exc))
+            execution_backend = None
+
         # ── Step 15: Tool registry ────────────────────────────────────────────
         from citnega.packages.tools.registry import ToolRegistry
         from citnega.packages.workspace.overlay import load_workspace_overlay
@@ -466,6 +479,7 @@ async def create_application(
             tracer=tracer,
             path_resolver=path_resolver,
             kb_store=kb_store,
+            execution_backend=execution_backend,
         )
         built_in_tools = tool_registry.build_all()
         workspace_overlay = load_workspace_overlay(
@@ -528,8 +542,12 @@ async def create_application(
         for name, callable_obj in {**tools, **agents}.items():
             try:
                 registry.register(name, callable_obj)
-            except Exception:
-                pass
+            except Exception as exc:
+                runtime_logger.error(
+                    "callable_registration_failed",
+                    name=name,
+                    error=str(exc),
+                )
 
         runtime_logger.info(
             "bootstrap_callables_loaded",
@@ -538,24 +556,74 @@ async def create_application(
             total=len(tools) + len(agents),
         )
 
+        # ── Step 17a: MCP Manager (optional — connects configured MCP servers) ─
+        mcp_manager = None
+        try:
+            mcp_settings = getattr(settings, "mcp", None)
+            if mcp_settings is not None and getattr(mcp_settings, "enabled", False):
+                from citnega.packages.mcp.manager import MCPManager
+                mcp_manager = MCPManager(
+                    settings=mcp_settings,
+                    enforcer=enforcer,
+                    emitter=emitter,
+                    tracer=tracer,
+                )
+                await mcp_manager.start()
+                for bridge_tool in mcp_manager.get_bridge_tools().values():
+                    tools[bridge_tool.name] = bridge_tool
+                    try:
+                        registry.register(bridge_tool.name, bridge_tool)
+                    except Exception as _reg_exc:
+                        runtime_logger.warning("bootstrap_mcp_bridge_register_failed", name=bridge_tool.name, error=str(_reg_exc))
+                runtime_logger.info(
+                    "bootstrap_mcp_ready",
+                    bridge_tools=len(mcp_manager.get_bridge_tools()),
+                )
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_mcp_failed", error=str(exc))
+            mcp_manager = None
+
         # ── Step 17b: CapabilityRegistry + ExecutionEngine ───────────────────
-        from citnega.packages.capabilities.providers import BuiltinCapabilityProvider
+        from citnega.packages.capabilities.providers import (
+            BuiltinCapabilityProvider,
+            BuiltinSkillProvider,
+            MentalModelCapabilityProvider,
+            WorkspaceCapabilityProvider,
+        )
         from citnega.packages.capabilities.registry import CapabilityRegistry as _CapReg
         from citnega.packages.execution.engine import ExecutionEngine
 
         cap_registry = _CapReg()
         _cap_records, _cap_diagnostics = BuiltinCapabilityProvider().load({**tools, **agents})
         cap_registry.register_many(_cap_records, overwrite=True)
+        _skill_records, _ = BuiltinSkillProvider().load()
+        cap_registry.register_many(_skill_records, overwrite=False)  # workspace skills take priority
         if _cap_diagnostics.has_required_failures:
             runtime_logger.warning(
                 "bootstrap_capability_registry_failures",
                 failures=len(_cap_diagnostics.failures),
             )
+
+        # Load workspace capabilities (skills, workflows, mental models)
+        try:
+            from citnega.packages.config.loaders import load_settings as _ls
+            _wf_path = _ls().workspace.workfolder_path
+            _ws_root = Path(_wf_path).expanduser() if _wf_path else None
+        except Exception:
+            _ws_root = None
+
+        if _ws_root is not None:
+            _ws_records, _ = WorkspaceCapabilityProvider(_ws_root).load()
+            cap_registry.register_many(_ws_records, overwrite=True)
+            _mm_records, _ = MentalModelCapabilityProvider(_ws_root).load()
+            cap_registry.register_many(_mm_records, overwrite=True)
+
         runtime_logger.info(
             "bootstrap_capability_registry_loaded",
             capabilities=len(cap_registry),
         )
         execution_engine = ExecutionEngine(event_emitter=emitter)
+        adapter.set_capability_registry(cap_registry)
 
         # ── Step 18: CoreRuntime ──────────────────────────────────────────────
         from citnega.packages.runtime.core_runtime import CoreRuntime
@@ -583,6 +651,59 @@ async def create_application(
             tracer=tracer,
             app_home=path_resolver.app_home,
         )
+
+        # ── Step 19a: Skill improver (wired into direct runner when available) ─
+        try:
+            if model_gateway is not None and _framework == "direct":
+                from citnega.packages.skills.improver import SkillImprover
+                _skill_improver = SkillImprover(model_gateway=model_gateway, settings=settings)
+                # Inject into all runners managed by the adapter
+                _adapter_inner = getattr(adapter, "_adapter", adapter)
+                _runners = getattr(_adapter_inner, "_runners", {})
+                for _runner in _runners.values():
+                    if hasattr(_runner, "_skill_improver"):
+                        _runner._skill_improver = _skill_improver
+                # Also patch new runner creation via adapter hook (best-effort)
+                _orig_create = getattr(_adapter_inner, "_create_runner", None)
+                if _orig_create is not None:
+                    def _patched_create(*args, **kwargs):
+                        r = _orig_create(*args, **kwargs)
+                        if hasattr(r, "_skill_improver"):
+                            r._skill_improver = _skill_improver
+                        return r
+                    _adapter_inner._create_runner = _patched_create
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_skill_improver_failed", error=str(exc))
+
+        # ── Step 19b: Messaging gateway + heartbeat engine ────────────────────
+        _messaging_gateway = None
+        _heartbeat_engine = None
+        try:
+            from citnega.packages.messaging.gateway import MessagingGateway
+            channels = []
+            _tg_settings = getattr(settings, "telegram", None)
+            if _tg_settings is not None and getattr(_tg_settings, "enabled", False):
+                from citnega.packages.messaging.channels.telegram import TelegramChannel
+                channels.append(TelegramChannel(_tg_settings))
+            _dc_settings = getattr(settings, "discord", None)
+            if _dc_settings is not None and getattr(_dc_settings, "enabled", False):
+                from citnega.packages.messaging.channels.discord import DiscordChannel
+                channels.append(DiscordChannel(_dc_settings))
+            if channels:
+                _messaging_gateway = MessagingGateway(channels)
+                from citnega.packages.messaging.heartbeat import HeartbeatEngine
+                _heartbeat_engine = HeartbeatEngine(
+                    workfolder=workfolder_root,
+                    gateway=_messaging_gateway,
+                    app_service=svc,
+                )
+                _heartbeat_engine.start()
+                runtime_logger.info(
+                    "bootstrap_messaging_ready",
+                    channels=[c.channel_name for c in channels],
+                )
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_messaging_failed", error=str(exc))
 
         runtime_logger.info(
             "bootstrap_complete",
@@ -613,6 +734,16 @@ async def create_application(
 
         yield svc
     finally:
+        try:
+            if "_heartbeat_engine" in dir() and _heartbeat_engine is not None:
+                await _heartbeat_engine.stop()
+        except Exception as _he_exc:
+            runtime_logger.warning("bootstrap_heartbeat_stop_failed", error=str(_he_exc))
+        try:
+            if "mcp_manager" in dir() and mcp_manager is not None:
+                await mcp_manager.stop()
+        except Exception as _mcp_exc:
+            runtime_logger.warning("bootstrap_mcp_stop_failed", error=str(_mcp_exc))
         if runtime is not None:
             await runtime.shutdown()
         if db is not None:

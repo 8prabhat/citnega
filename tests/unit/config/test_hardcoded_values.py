@@ -9,9 +9,6 @@ Verifies:
 
 from __future__ import annotations
 
-import os
-
-
 # ── 1. New RuntimeSettings fields ────────────────────────────────────────────
 
 
@@ -153,8 +150,9 @@ def test_shutdown_coordinator_default_drain_timeout():
 
 
 def test_token_budget_handler_custom_priorities():
-    from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
     from unittest.mock import MagicMock
+
+    from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
 
     priorities = {"recent_turns": 200, "kb": 10}
     handler = TokenBudgetHandler(priorities=priorities, default_priority=5)
@@ -171,8 +169,9 @@ def test_token_budget_handler_custom_priorities():
 
 
 def test_token_budget_handler_default_priorities():
-    from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
     from unittest.mock import MagicMock
+
+    from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
 
     handler = TokenBudgetHandler()
 
@@ -213,7 +212,7 @@ def test_chunk_text_default_respects_settings(monkeypatch):
 
 
 def test_direct_runner_max_tool_rounds_default():
-    from citnega.packages.adapters.direct.runner import DirectModelRunner, _MAX_TOOL_ROUNDS_DEFAULT
+    from citnega.packages.adapters.direct.runner import _MAX_TOOL_ROUNDS_DEFAULT
 
     assert _MAX_TOOL_ROUNDS_DEFAULT == 5
 

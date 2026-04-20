@@ -78,6 +78,10 @@ class IFrameworkAdapter(ABC):
         """
         return []
 
+    def set_capability_registry(self, registry: Any) -> None:
+        """Inject the CapabilityRegistry so runners can propagate it to CallContext."""
+        return None
+
 
 class IFrameworkRunner(ABC):
     """Session-scoped execution handle returned by IFrameworkAdapter.create_runner()."""
@@ -115,6 +119,10 @@ class IFrameworkRunner(ABC):
 
     def get_active_model_id(self) -> str | None:
         """Return the active model ID for this runner's session."""
+        return None
+
+    def get_store(self) -> Any | None:
+        """Return the conversation store for this runner, if available."""
         return None
 
     def get_mode(self) -> str:

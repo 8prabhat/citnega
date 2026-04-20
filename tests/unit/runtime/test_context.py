@@ -379,6 +379,7 @@ class TestContextAssembler:
     @pytest.mark.asyncio
     async def test_token_budget_emits_context_truncated_event(self) -> None:
         from unittest.mock import MagicMock
+
         from citnega.packages.protocol.events.context import ContextTruncatedEvent
 
         emitter = MagicMock()

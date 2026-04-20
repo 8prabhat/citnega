@@ -57,13 +57,31 @@ class ResearchAgent(SpecialistBase):
         "Always cite sources. Be concise but comprehensive. "
         "Distinguish clearly between current facts (from search) and analysis (your reasoning)."
     )
-    TOOL_WHITELIST = ["search_web", "read_webpage", "fetch_url", "get_datetime", "write_kb"]
+    TOOL_WHITELIST = ["search_web", "read_webpage", "fetch_url", "get_datetime", "write_kb", "read_kb"]
 
     async def _execute(self, input: ResearchInput, context: CallContext) -> SpecialistOutput:
         tool_calls_made: list[str] = []
         sources: list[str] = []
 
         child_ctx = context.child(self.name, self.callable_type)
+
+        # Step -1: check KB for prior research on this topic
+        kb_prior_context = ""
+        kb_read_tool = self._get_tool("read_kb")
+        if kb_read_tool:
+            try:
+                from citnega.packages.tools.builtin.read_kb import ReadKBInput
+
+                kb_result = await kb_read_tool.invoke(
+                    ReadKBInput(query=input.query, max_results=3), child_ctx
+                )
+                if kb_result.success and kb_result.output:
+                    kb_text = kb_result.get_output_field("result")
+                    if kb_text and "(Knowledge base not connected)" not in kb_text:
+                        kb_prior_context = kb_text
+                        tool_calls_made.append("read_kb")
+            except Exception:
+                pass  # KB unavailable — proceed without it
 
         # Step 0: get current date so the model knows what "latest" means
         datetime_context = ""
@@ -114,6 +132,8 @@ class ResearchAgent(SpecialistBase):
 
         # Step 3: synthesise via model with all gathered context
         sections = []
+        if kb_prior_context:
+            sections.append(f"Prior research from knowledge base:\n{kb_prior_context}")
         if datetime_context:
             sections.append(f"Current date/time:\n{datetime_context}")
         sections.append(f"Search results:\n{search_results}")

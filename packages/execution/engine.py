@@ -125,6 +125,15 @@ class ExecutionEngine:
                     excerpt = ""
                     if invoke_result.output is not None:
                         excerpt = invoke_result.output.model_dump_json()[:500]
+                        # Domain-level failures encoded in output.passed=False
+                        # (e.g. quality_gate) must be treated as step failures.
+                        if getattr(invoke_result.output, "passed", None) is False:
+                            last_error = getattr(
+                                invoke_result.output,
+                                "summary",
+                                f"{step.capability_id} reported passed=False",
+                            )
+                            continue
                     return ExecutionStepResult(
                         step_id=step.step_id,
                         capability_id=step.capability_id,
@@ -157,10 +166,12 @@ class ExecutionEngine:
     def _build_input(self, schema: type[BaseModel], step: PlanStep) -> BaseModel:
         payload: dict[str, Any] = dict(step.args)
         if step.task:
+            # Always populate "task" as the canonical field; AgentInput aliases handle the rest.
+            payload.setdefault("task", step.task)
+            # Also set legacy fields if the schema explicitly declares them (backwards compat).
             for candidate in _TEXT_FIELD_CANDIDATES:
                 if candidate in getattr(schema, "model_fields", {}):
                     payload.setdefault(candidate, step.task)
-                    break
         return schema.model_validate(payload)
 
     async def _run_rollbacks(

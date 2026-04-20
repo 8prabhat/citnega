@@ -24,7 +24,10 @@ class FileAgentInput(BaseModel):
 
 
 class FileAgent(SpecialistBase):
+    """FileAgent — DEPRECATED. Use code_agent for all new usage (strict superset)."""
+
     name = "file_agent"
+    llm_direct_access = False  # suppressed from LLM function-calling schema
     description = "Handles filesystem operations: read, write, list, and search files."
     callable_type = CallableType.SPECIALIST
     input_schema = FileAgentInput

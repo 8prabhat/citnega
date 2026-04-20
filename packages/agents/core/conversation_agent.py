@@ -163,7 +163,7 @@ class ConversationAgent(BaseCoreAgent):
     async def _execute_nextgen(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
         from citnega.packages.planning.classifier import TaskClassifier
 
-        capability_registry = getattr(context.session_config, "_capability_registry", None)
+        capability_registry = getattr(context, "capability_registry", None)
         classification = TaskClassifier().classify(input.user_input, registry=capability_registry)
 
         if classification.path == "direct_answer":

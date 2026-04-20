@@ -7,6 +7,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from citnega.packages.strategy.models import StrategySpec
+
 
 class SessionState(StrEnum):
     IDLE = "idle"
@@ -39,3 +41,4 @@ class Session(BaseModel):
     last_active_at: datetime
     run_count: int = 0
     state: SessionState = SessionState.IDLE
+    strategy_spec: StrategySpec | None = None

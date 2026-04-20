@@ -1,0 +1,62 @@
+%%{init: {
+  "themeVariables": { "fontSize": "22px" },
+  "flowchart": { "nodeSpacing": 70, "rankSpacing": 90, "curve": "basis" }
+}}%%
+flowchart TD
+    TUI["TUI / CLI"] --> AppSvc["ApplicationService"]
+    AppSvc --> CoreRT["CoreRuntime"]
+
+    subgraph RT["Core Runtime"]
+      CoreRT --> SessMgr["SessionManager"]
+      CoreRT --> RunMgr["RunManager"]
+      CoreRT --> CtxAsm["ContextAssembler"]
+    end
+
+    subgraph CTX["Context Handlers"]
+      CtxAsm --> H1["RecentTurns"]
+      CtxAsm --> H2["SessionSummary"]
+      CtxAsm --> H3["KBRetrieval"]
+      CtxAsm --> H4["RuntimeState"]
+      CtxAsm --> H5["TokenBudget"]
+    end
+
+    CoreRT --> Adapter["DirectModelAdapter"]
+    Adapter --> Runner["DirectModelRunner"]
+
+    subgraph SP["System Prompt Build"]
+      Runner --> SP1["Base Prompt + Tool Schema"]
+      SP1 --> SP2["Mode Augmentation"]
+      SP2 --> SP3["Skills + Mental Models"]
+      SP3 --> SP4["Ambient Context (cwd/git/time)"]
+      SP4 --> SP5["KB Chunks"]
+    end
+
+    Runner --> GW["ModelGateway"]
+    GW --> P1["Ollama"]
+    GW --> P2["OpenAI-Compatible"]
+    GW --> P3["vLLM"]
+    GW --> P4["Custom Remote"]
+
+    Runner --> Enf["PolicyEnforcer"]
+    Enf --> Appr["ApprovalManager"]
+    Enf --> Disp["Tool Dispatch (parallel)"]
+
+    Disp --> Tools["Built-in Tools"]
+    Disp --> Agents["Specialist Agents"]
+
+    subgraph CAP["Capability Registry"]
+      Skills["Builtin + Workspace Skills"] --> CapReg["CapabilityRegistry"]
+      MM["Mental Models"] --> CapReg
+    end
+    Runner --> CapReg
+
+    Tools --> KB["KnowledgeStore (SQLite + Vector)"]
+    H3 --> KB
+
+    SessMgr --> SRepo["SessionRepository"]
+    RunMgr --> RRepo["RunRepository"]
+    SRepo --> DB["SQLite/Alembic"]
+    RRepo --> DB
+
+    Runner --> Obs["EventEmitter + Tracer"]
+    Obs --> TUI

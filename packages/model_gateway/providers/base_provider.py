@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import asyncio
+import random
 from typing import TYPE_CHECKING
 
 import httpx
@@ -55,6 +56,11 @@ def _get_streaming_max_retries() -> int:
         return _STREAMING_MAX_RETRIES_DEFAULT
 
 
+def _backoff(attempt: int) -> float:
+    """Exponential backoff with jitter: 2^(attempt-1) + [0, 0.5)."""
+    return 2 ** (attempt - 1) + random.uniform(0.0, 0.5)
+
+
 class BaseProvider(IModelProvider):
     """
     Shared retry and HTTP client logic.
@@ -91,18 +97,42 @@ class BaseProvider(IModelProvider):
         return await self._with_retry(self._do_generate, request)
 
     async def stream_generate(self, request: ModelRequest) -> AsyncIterator[ModelChunk]:
+        from citnega.packages.model_gateway.circuit_breaker import get_circuit_breaker
+
+        breaker = get_circuit_breaker(self._model_info.model_id)
+        breaker.raise_if_open()
+
         max_retries = _get_streaming_max_retries()
         last_exc: Exception | None = None
         for attempt in range(1, max_retries + 1):
             try:
                 async for chunk in self._do_stream_generate(request):
                     yield chunk
+                breaker.record_success()
                 return
-            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in _RETRY_STATUSES:
+                    raise ProviderHTTPError(
+                        f"HTTP {exc.response.status_code} from "
+                        f"{self._model_info.model_id}: {exc.response.text[:200]}"
+                    ) from exc
                 last_exc = exc
-                wait = 2 ** (attempt - 1)
+                breaker.record_failure()
+                wait = _backoff(attempt)
                 model_gateway_logger.warning(
                     "provider_stream_retry",
+                    model_id=self._model_info.model_id,
+                    attempt=attempt,
+                    status=exc.response.status_code,
+                    wait=wait,
+                )
+                await asyncio.sleep(wait)
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_exc = exc
+                breaker.record_failure()
+                wait = _backoff(attempt)
+                model_gateway_logger.warning(
+                    "provider_stream_retry_connection",
                     model_id=self._model_info.model_id,
                     attempt=attempt,
                     error=str(exc),
@@ -149,7 +179,7 @@ class BaseProvider(IModelProvider):
                     ) from exc
                 last_exc = exc
                 breaker.record_failure()
-                wait = 2 ** (attempt - 1)
+                wait = _backoff(attempt)
                 model_gateway_logger.warning(
                     "provider_retry",
                     model_id=self._model_info.model_id,
@@ -161,7 +191,7 @@ class BaseProvider(IModelProvider):
             except (httpx.ConnectError, httpx.TimeoutException) as exc:
                 last_exc = exc
                 breaker.record_failure()
-                wait = 2 ** (attempt - 1)
+                wait = _backoff(attempt)
                 model_gateway_logger.warning(
                     "provider_retry_connection",
                     model_id=self._model_info.model_id,

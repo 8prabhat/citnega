@@ -70,6 +70,8 @@ class BaseFrameworkRunner(IFrameworkRunner):
     ) -> str:
         if self._token.is_cancelled():
             raise asyncio.CancelledError("runner already cancelled")
+        if self._paused:
+            raise RuntimeError("Runner is paused — call resume() before submitting new turns")
 
         self._current_run_id = context.run_id
         self._context_token_count = context.total_tokens

@@ -1,9 +1,13 @@
-"""ContextBar — compact one-line info strip above the SmartInput.
+"""ContextBar — two-line info strip at the bottom of the TUI.
 
-Shows the user at a glance:
-  ◈ model-name  │  mode: direct  │  think: off  │  ~/workfolder  │  ⠼ executing
+Line 1 (live session state):
+  session │ ◈ model/fw │ mode:X │ think:X │ ~/folder │ tokens │ ⠼ state
+
+Line 2 (static config — no overlap with line 1):
+  ⚙ CFG │ rounds:5 │ depth:2 │ local:on │ policy:dev │ retries:3/2 │ compact:on @50msg │ cb:5 │ F2=edit
 
 Reactive fields are updated by ChatController as session state changes.
+Call refresh_config() after settings are saved to update line 2.
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ if TYPE_CHECKING:
 
 _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-# Human-readable labels for run states
 _STATE_LABELS: dict[str, str] = {
     "idle":                "●  idle",
     "pending":             "○  starting",
@@ -39,7 +42,7 @@ _STATE_LABELS: dict[str, str] = {
 _ACTIVE_STATES = {"pending", "context_assembling", "executing", "running"}
 
 
-def _build_bar_content(
+def _build_state_line(
     *,
     model: str,
     mode: str,
@@ -71,22 +74,20 @@ def _build_bar_content(
     if tokens_max > 0:
         ratio = tokens_used / tokens_max
         tok_indicator = "▓" if ratio >= 0.8 else ("▒" if ratio >= 0.5 else "░")
-        token_str = f"{tok_indicator} {tokens_used}/{tokens_max}"
+        color = "red" if ratio >= 0.8 else ("yellow" if ratio >= 0.5 else "green")
+        token_str = f"[{color}]{tok_indicator} {tokens_used}/{tokens_max}[/{color}]"
     else:
         token_str = ""
 
     sep = "  │  "
     parts: list[str] = []
 
-    # Session badge: prefer name, fall back to short ID
     badge = session_name[:18] if session_name else (f"#{session_id[:8]}" if session_id else "")
     if badge:
         parts.append(badge)
 
-    # Model + framework
     fw_suffix = f"/{framework}" if framework and framework != "direct" else ""
     parts.append(f"◈ {model_str}{fw_suffix}")
-
     parts.append(f"mode:{mode_str}")
 
     if think and think != "off":
@@ -101,20 +102,89 @@ def _build_bar_content(
     return sep.join(parts)
 
 
+def _bool_label(value: bool) -> str:
+    return "[green]on[/green]" if value else "[dim]off[/dim]"
+
+
+def _build_config_line() -> str:
+    """Return compact one-line config strip (no overlap with state line)."""
+    sep = "  [dim]│[/dim]  "
+
+    max_rounds = 5
+    depth = 2
+    local_only = True
+    policy = "dev"
+    retries = 3
+    s_retries = 2
+    auto_compact = True
+    compact_at = 50
+    cb_thresh = 5
+    bypass_perms = False
+
+    try:
+        from citnega.packages.config.loaders import load_settings
+        s = load_settings()
+        max_rounds    = s.runtime.max_tool_rounds
+        depth         = s.runtime.max_callable_depth
+        local_only    = s.runtime.local_only
+        policy        = s.policy.template
+        retries       = s.runtime.provider_max_retries
+        s_retries     = s.runtime.streaming_max_retries
+        auto_compact  = s.conversation.auto_compact
+        compact_at    = s.conversation.compact_threshold_messages
+        cb_thresh     = s.runtime.circuit_breaker_threshold
+        bypass_perms  = s.policy.bypass_permissions
+    except Exception:
+        pass
+
+    compact_str = _bool_label(auto_compact)
+    if auto_compact and compact_at > 0:
+        compact_str += f" @{compact_at}msg"
+
+    parts = [
+        "[bold dim]⚙ CFG[/bold dim]",
+        f"rounds:{max_rounds}",
+        f"depth:{depth}",
+        f"local:{_bool_label(local_only)}",
+        f"policy:{policy}",
+        f"retries:{retries}/{s_retries}",
+        f"compact:{compact_str}",
+        f"cb:{cb_thresh}",
+    ]
+
+    bypass_str = "[bold red]⚠ ON[/bold red]" if bypass_perms else "[dim]off[/dim]"
+    parts.append(f"bypass:{bypass_str}")
+
+    parts.append("[dim]F2=edit[/dim]")
+    return sep.join(parts)
+
+
 class ContextBar(Widget):
     """
-    Single-line context strip rendered just above the SmartInput.
+    Two-line strip: live session state (line 1) + static config (line 2).
 
-    Animated spinner on the state segment while a run is active.
-    All fields are updated externally by ChatController.
+    Line 1 animates while a run is active.
+    Call refresh_config() after saving settings to update line 2 immediately.
     """
 
     DEFAULT_CSS = """
     ContextBar {
-        height: 1;
+        height: 2;
         background: $panel-darken-1;
         color: $text-muted;
         padding: 0 1;
+    }
+
+    #cb-state {
+        height: 1;
+        background: $panel-darken-2;
+        color: $text-muted;
+    }
+
+    #cb-config {
+        height: 1;
+        background: $panel-darken-1;
+        color: $text-disabled;
     }
     """
 
@@ -135,11 +205,13 @@ class ContextBar(Widget):
         self._timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
-        yield Label("", id="cb-content")
+        yield Label("", id="cb-state")
+        yield Label("", id="cb-config")
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(0.12, self._tick)
         self._redraw()
+        self.refresh_config()
 
     def _tick(self) -> None:
         if self.state in _ACTIVE_STATES:
@@ -147,7 +219,7 @@ class ContextBar(Widget):
         self._redraw()
 
     def _redraw(self) -> None:
-        content = _build_bar_content(
+        content = _build_state_line(
             model=self.model,
             mode=self.mode,
             think=self.think,
@@ -161,9 +233,15 @@ class ContextBar(Widget):
             framework=self.framework,
         )
         with contextlib.suppress(Exception):
-            self.query_one("#cb-content", Label).update(content)
+            self.query_one("#cb-state", Label).update(content)
 
-    # ── Reactive watchers — any change redraws immediately ────────────────────
+    def refresh_config(self) -> None:
+        """Re-read settings and update the config line."""
+        with contextlib.suppress(Exception):
+            line = _build_config_line()
+            self.query_one("#cb-config", Label).update(line)
+
+    # ── Reactive watchers ────────────────────────────────────────────────────
 
     def watch_model(self, _: str) -> None:
         self._redraw()

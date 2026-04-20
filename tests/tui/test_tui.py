@@ -133,14 +133,14 @@ class TestAppCompose:
             assert isinstance(app.screen, ChatScreen)
 
     @pytest.mark.asyncio
-    async def test_status_bar_mounts(self) -> None:
-        """StatusBar is present after compose."""
+    async def test_context_bar_mounts(self) -> None:
+        """ContextBar is present after compose."""
         app = _make_app()
         async with app.run_test(headless=True, size=(80, 24)) as pilot:
             await pilot.pause()
-            from citnega.apps.tui.widgets.status_bar import StatusBar
+            from citnega.apps.tui.widgets.context_bar import ContextBar
 
-            bar = app.screen.query_one(StatusBar)
+            bar = app.screen.query_one(ContextBar)
             assert bar is not None
 
     @pytest.mark.asyncio

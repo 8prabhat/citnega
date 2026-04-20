@@ -51,11 +51,17 @@ def load_settings(
         profile:  Profile name (e.g. "dev"). Loaded from
                   <app_home>/config/profiles/<profile>/settings.toml.
     """
-    # Resolve app_home: env var → explicit arg → None (PathResolver will set later)
+    # Resolve app_home: explicit arg → env var → PathResolver default
     if app_home is None:
         env_home = os.environ.get("CITNEGA_APP_HOME")
         if env_home:
             app_home = Path(env_home)
+        else:
+            try:
+                from citnega.packages.storage.path_resolver import PathResolver
+                app_home = PathResolver().app_home
+            except Exception:
+                pass
 
     # Merge TOML dicts: defaults first, user second, profile third
     merged: dict[str, Any] = {}
@@ -306,6 +312,53 @@ def validate_settings(settings: Settings, raw_toml: dict | None = None) -> list[
             )
 
     return errors
+
+
+def save_general_settings(section: str, values: dict, app_home: Path) -> None:
+    """
+    Persist a section of settings to ``<app_home>/config/settings.toml``.
+
+    Merges ``values`` into the existing user settings.toml under ``[section]``
+    (e.g. section="runtime", section="conversation") without touching other
+    sections.  Written atomically via a temp file.
+    """
+    import tomllib
+
+    settings_path = app_home / "config" / "settings.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    if settings_path.exists():
+        try:
+            with settings_path.open("rb") as fh:
+                existing = tomllib.load(fh)
+        except Exception:
+            existing = {}
+
+    section_data = dict(existing.get(section, {}))
+    section_data.update(values)
+    existing[section] = section_data
+
+    # Serialise to TOML manually (no tomli_w dependency required)
+    lines: list[str] = []
+    for sec, data in existing.items():
+        lines.append(f"[{sec}]")
+        for k, v in data.items():
+            if isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, str):
+                lines.append(f"{k} = {v!r}")
+            elif isinstance(v, (int, float)):
+                lines.append(f"{k} = {v}")
+            elif isinstance(v, list):
+                items = ", ".join(repr(x) for x in v)
+                lines.append(f"{k} = [{items}]")
+        lines.append("")
+
+    tmp = settings_path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines), encoding="utf-8")
+    import os as _os
+    _os.replace(tmp, settings_path)
 
 
 def save_workspace_settings(workfolder_path: str, app_home: Path) -> None:

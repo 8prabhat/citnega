@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 from pydantic import BaseModel
+import pytest
 
 from citnega.packages.adapters.direct.runner import DirectModelRunner
 from citnega.packages.protocol.callables.interfaces import IInvocable
@@ -74,11 +76,8 @@ def test_cannot_fan_out_conflicting_workspace_paths() -> None:
     assert runner._can_fan_out_tool_calls(pending) is False
 
 
+
 # ── _RunnerModelGateway.stream_generate ───────────────────────────────────────
-
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-
 
 @pytest.mark.asyncio
 async def test_runner_gateway_stream_generate_forwards_chunks() -> None:
@@ -108,7 +107,6 @@ async def test_runner_gateway_stream_generate_forwards_chunks() -> None:
 async def test_runner_gateway_stream_generate_fallback_to_first_model() -> None:
     from citnega.packages.adapters.direct.runner import _RunnerModelGateway
     from citnega.packages.protocol.models.model_gateway import ModelChunk, ModelRequest
-    from citnega.packages.model_gateway.yaml_config import ModelEntry
 
     async def _fake_stream(req):
         yield ModelChunk(content="ok")

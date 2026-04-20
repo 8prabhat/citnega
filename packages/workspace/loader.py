@@ -82,12 +82,14 @@ class DynamicLoader:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def load_directory(self, path: Path) -> dict[str, IInvocable]:
+    def load_directory(self, path: Path, *, strict: bool = False) -> dict[str, IInvocable]:
         """
         Load all .py files in ``path`` (non-recursive).
 
         Returns a mapping of callable.name → instantiated callable.
-        Files that fail to import or contain no callables are silently skipped.
+        When strict=False (default), files that fail to import are skipped with a warning.
+        When strict=True, any load failure raises immediately after emitting
+        CapabilityLoadFailedEvent.
         """
         result: dict[str, IInvocable] = {}
         if not path.is_dir():
@@ -101,8 +103,28 @@ class DynamicLoader:
                 result.update(loaded)
             except Exception as exc:
                 logger.warning("DynamicLoader: skipping %s — %s", py_file, exc)
+                self._emit_load_failed(str(py_file), str(exc))
+                if strict:
+                    raise
 
         return result
+
+    def _emit_load_failed(self, path: str, error: str) -> None:
+        if self._emitter is None:
+            return
+        try:
+            from citnega.packages.protocol.events.planning import CapabilityLoadFailedEvent
+
+            self._emitter.emit(
+                CapabilityLoadFailedEvent(
+                    capability_id="",
+                    source="workspace_loader",
+                    path=path,
+                    error=error,
+                )
+            )
+        except Exception:
+            pass
 
     def load_workfolder(self, writer: WorkspaceWriter) -> dict[str, IInvocable]:
         """

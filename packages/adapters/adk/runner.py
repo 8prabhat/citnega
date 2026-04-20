@@ -200,13 +200,17 @@ class ADKRunner(BaseFrameworkRunner):
         return context.run_id
 
     async def _do_pause(self, run_id: str) -> None:
-        # ADK does not have a native pause; set a flag and poll in _do_run_turn
-        runtime_logger.info("adk_runner_paused", run_id=run_id)
+        # In-flight turns complete naturally; _paused guard in base blocks new turns.
+        # Persist history so state survives the pause.
+        runtime_logger.info("adk_runner_paused", run_id=run_id, history_len=len(self._history))
 
     async def _do_resume(self, run_id: str) -> None:
-        runtime_logger.info("adk_runner_resumed", run_id=run_id)
+        # History is retained in memory; ADK session re-hydrates from self._history on next run_turn.
+        runtime_logger.info("adk_runner_resumed", run_id=run_id, history_len=len(self._history))
 
     async def _do_cancel(self, run_id: str) -> None:
+        # CancellationToken is already cancelled by base cancel(); streaming loop will exit.
+        self._history.clear()
         runtime_logger.info("adk_runner_cancelled", run_id=run_id)
 
     async def _do_get_state_snapshot(self) -> RunState:

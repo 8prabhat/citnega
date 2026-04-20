@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from citnega.packages.agents.base import BaseAgent
-from citnega.packages.protocol.callables.types import CallableType
+from citnega.packages.protocol.callables.types import CallablePolicy, CallableType
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
@@ -33,6 +33,12 @@ class SpecialistReviewerAgent(BaseAgent):
     callable_type = CallableType.SPECIALIST
     input_schema = ReviewerInput
     output_schema = ReviewerOutput
+    policy = CallablePolicy(
+        timeout_seconds=60.0,
+        requires_approval=False,
+        max_depth_allowed=3,
+    )
+    TOOL_WHITELIST: list[str] = []  # synthesizes via model only
 
     SYSTEM_PROMPT = (
         "You are a specialist reviewer. Review the given content rigorously. "

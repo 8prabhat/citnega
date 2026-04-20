@@ -156,10 +156,16 @@ class ConversationStore:
         output_summary: str,
         success: bool,
         callable_type: str = "tool",
+        msg_count: int | None = None,
     ) -> None:
         """Append a completed tool/agent call record and save.  Capped at 200 entries."""
         async with self._lock:
             history = self._data.setdefault("tool_history", [])
+            # msg_count records how many messages existed when this tool was called.
+            # Prefer the explicitly-supplied value (captured at ToolCallStarted time,
+            # before the assistant message is added) to avoid a race where the
+            # assistant message arrives before this write.
+            stored_count = msg_count if msg_count is not None else len(self._data.get("messages", []))
             history.append(
                 {
                     "name": name,
@@ -167,6 +173,7 @@ class ConversationStore:
                     "output_summary": output_summary,
                     "success": success,
                     "callable_type": callable_type,
+                    "msg_count": stored_count,
                 }
             )
             if len(history) > 200:

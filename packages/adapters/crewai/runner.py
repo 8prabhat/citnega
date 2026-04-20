@@ -149,12 +149,19 @@ class CrewAIRunner(BaseFrameworkRunner):
         return context.run_id
 
     async def _do_pause(self, run_id: str) -> None:
-        runtime_logger.info("crewai_runner_paused", run_id=run_id)
+        # kickoff_async() completes naturally; _paused guard in base blocks new turns.
+        # Persist last task so resume can communicate context to the user.
+        runtime_logger.info("crewai_runner_paused", run_id=run_id, last_task_preview=self._last_task[:80])
 
     async def _do_resume(self, run_id: str) -> None:
+        # CrewAI is stateless per kickoff; resume simply unblocks new run_turn() calls.
+        # Last task is retained in self._last_task for context.
         runtime_logger.info("crewai_runner_resumed", run_id=run_id)
 
     async def _do_cancel(self, run_id: str) -> None:
+        # CancellationToken is already cancelled by base cancel().
+        self._last_output = ""
+        self._last_task = ""
         runtime_logger.info("crewai_runner_cancelled", run_id=run_id)
 
     async def _do_get_state_snapshot(self) -> RunState:

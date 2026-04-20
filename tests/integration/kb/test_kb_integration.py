@@ -307,6 +307,57 @@ class TestMultiSessionIsolation:
         assert len(all_items) == 2
 
 
+class TestTagFilterSQL:
+    """SQL-level tag pre-filtering via json_each() — covers FR-KB-002."""
+
+    def test_search_with_tag_filter_sql(self, store) -> None:
+        """Tags filter at SQL level: only items whose tags include the filter tag are returned."""
+        from citnega.packages.kb.retrieval import fts_search
+
+        ks, db = store
+        run(ks.add_item(_item("Python machine learning guide", title="ML", tags=["python", "ml"])))
+        run(ks.add_item(_item("JavaScript web development guide", title="Web", tags=["javascript", "web"])))
+
+        results = asyncio.run(fts_search(db, "guide", tags=["python"]))
+        titles = [r.item.title for r in results]
+        assert "ML" in titles
+        assert "Web" not in titles
+
+    def test_search_tag_filter_excludes_all_when_no_match(self, store) -> None:
+        from citnega.packages.kb.retrieval import fts_search
+
+        ks, db = store
+        run(ks.add_item(_item("Python machine learning guide", title="ML", tags=["python"])))
+
+        results = asyncio.run(fts_search(db, "guide", tags=["rust"]))
+        assert results == []
+
+    def test_search_no_tag_filter_returns_all_matches(self, store) -> None:
+        from citnega.packages.kb.retrieval import fts_search
+
+        ks, db = store
+        run(ks.add_item(_item("Python guide for beginners", title="Py", tags=["python"])))
+        run(ks.add_item(_item("Rust guide for systems programming", title="Rust", tags=["rust"])))
+
+        results = asyncio.run(fts_search(db, "guide"))
+        assert len(results) == 2
+
+    def test_search_tag_filter_multi_tag_any_match(self, store) -> None:
+        """When multiple tags passed, items matching ANY of them are included."""
+        from citnega.packages.kb.retrieval import fts_search
+
+        ks, db = store
+        run(ks.add_item(_item("Python async programming guide", title="Async", tags=["python", "async"])))
+        run(ks.add_item(_item("Rust systems guide", title="Rust", tags=["rust"])))
+        run(ks.add_item(_item("Go concurrency guide", title="Go", tags=["go"])))
+
+        results = asyncio.run(fts_search(db, "guide", tags=["python", "rust"]))
+        titles = {r.item.title for r in results}
+        assert "Async" in titles
+        assert "Rust" in titles
+        assert "Go" not in titles
+
+
 class TestKBRetrievalHandler:
     def test_enriches_context_with_kb_results(self, store) -> None:
         from datetime import datetime

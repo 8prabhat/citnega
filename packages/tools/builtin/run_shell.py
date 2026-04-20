@@ -16,6 +16,7 @@ from citnega.packages.tools.builtin._tool_base import tool_policy
 
 if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
+    from citnega.packages.protocol.interfaces.execution_backend import IExecutionBackend
 
 
 class RunShellInput(BaseModel):
@@ -43,8 +44,26 @@ class RunShellTool(BaseCallable):
         network_allowed=True,  # command may touch network
     )
 
+    def __init__(self, policy_enforcer, event_emitter, tracer, execution_backend: IExecutionBackend | None = None) -> None:
+        super().__init__(policy_enforcer, event_emitter, tracer)
+        self._execution_backend = execution_backend
+
     async def _execute(self, input: RunShellInput, context: CallContext) -> ShellOutput:
-        # Register cleanup in case of cancellation
+        cwd = input.working_dir or None
+
+        # Use injected backend (Docker or future backends) when available
+        if self._execution_backend is not None:
+            result = await self._execution_backend.run(
+                command=input.command,
+                cwd=cwd,
+                timeout=input.timeout,
+            )
+            stderr = result.stderr if input.capture_stderr else ""
+            if result.timed_out:
+                raise CallableError(f"Command timed out after {input.timeout}s: {input.command!r}")
+            return ShellOutput(stdout=result.stdout, stderr=stderr, return_code=result.exit_code)
+
+        # Default: local asyncio subprocess (original behaviour, no breaking change)
         proc: asyncio.subprocess.Process | None = None
 
         def _kill() -> None:
@@ -54,7 +73,6 @@ class RunShellTool(BaseCallable):
 
         context.register_cleanup(_kill)
 
-        cwd = input.working_dir or None
         stderr_pipe = (
             asyncio.subprocess.PIPE if input.capture_stderr else asyncio.subprocess.DEVNULL
         )

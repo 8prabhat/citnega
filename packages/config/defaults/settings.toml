@@ -6,7 +6,8 @@ max_callable_depth           = 2
 # Reject session creation when the requested framework is not the active adapter.
 strict_framework_validation  = false
 # Seconds to wait for the next streaming event before disconnecting.
-stream_timeout_seconds       = 60
+# Must be large enough to cover slow tool calls (network, inference, file I/O).
+stream_timeout_seconds       = 3600
 # Maximum per-run event queue slots before events are dropped.
 event_queue_max_size         = 256
 # Maximum tool-call rounds per LLM turn (prevents infinite tool loops).
@@ -143,6 +144,10 @@ onboarding_trusted_publishers = []
 # Require every loadable workspace module to be declared in manifest files.
 onboarding_enforce_file_coverage = true
 
+# When true, any workspace file that fails to load raises an error instead of
+# silently skipping. CapabilityLoadFailedEvent is always emitted regardless.
+strict_workspace_loading = false
+
 # ── Remote execution + signed run envelopes ───────────────────────────────────
 [remote]
 # Enable remote worker dispatch in orchestrator flows.
@@ -220,8 +225,8 @@ service_tls_client_ca_path = ""
 service_tls_require_client_cert = false
 
 [nextgen]
-planning_enabled = false
-execution_enabled = false
-workflows_enabled = false
-skills_enabled = false
+planning_enabled = true
+execution_enabled = true
+workflows_enabled = true
+skills_enabled = true
 parallel_execution_enabled = true

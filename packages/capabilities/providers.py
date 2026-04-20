@@ -17,6 +17,7 @@ from citnega.packages.capabilities.models import (
 from citnega.packages.planning.models import WorkflowTemplate
 from citnega.packages.planning.workflows import load_workflow_template
 from citnega.packages.protocol.callables.types import CallableMetadata
+from citnega.packages.strategy.mental_models import compile_mental_model
 from citnega.packages.strategy.models import SkillDescriptor
 from citnega.packages.strategy.skills import load_skill
 
@@ -171,3 +172,88 @@ class WorkspaceCapabilityProvider:
             tags=template.tags,
             provenance=CapabilityProvenance(source="workspace", path=template.source_path),
         )
+
+
+class BuiltinSkillProvider:
+    """Loads the 5 built-in skills shipped with citnega into the CapabilityRegistry."""
+
+    def load(self) -> tuple[list[CapabilityRecord], CapabilityDiagnostics]:
+        from citnega.packages.skills.builtins import BUILTIN_SKILLS
+
+        diagnostics = CapabilityDiagnostics()
+        records: list[CapabilityRecord] = []
+        for skill_dict in BUILTIN_SKILLS:
+            try:
+                skill = SkillDescriptor(
+                    name=skill_dict["name"],
+                    description=skill_dict.get("description", ""),
+                    content_path="<builtin>",
+                    triggers=skill_dict.get("triggers", []),
+                    preferred_tools=skill_dict.get("preferred_tools", []),
+                    preferred_agents=skill_dict.get("preferred_agents", []),
+                    supported_modes=skill_dict.get("supported_modes", []),
+                    tags=skill_dict.get("tags", []),
+                    body=skill_dict.get("body", ""),
+                )
+                descriptor = CapabilityDescriptor(
+                    capability_id=f"skill:{skill.name}",
+                    kind=CapabilityKind.SKILL,
+                    display_name=skill.name,
+                    description=skill.description,
+                    supported_modes=skill.supported_modes,
+                    tags=skill.tags,
+                    provenance=CapabilityProvenance(source="builtin", path="<builtin>"),
+                )
+                records.append(CapabilityRecord(descriptor=descriptor, runtime_object=skill))
+            except Exception as exc:
+                diagnostics.add_failure(
+                    skill_dict.get("name", "<unknown>"),
+                    source="builtin",
+                    path="<builtin>",
+                    error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                )
+        return records, diagnostics
+
+
+class MentalModelCapabilityProvider:
+    """
+    Loads compiled MentalModelSpec objects from ``{workspace_root}/mental_models/*.md``.
+
+    Each .md file is compiled via ``compile_mental_model()`` and registered as a
+    CapabilityRecord so the runner can inject the clauses into the system prompt.
+    """
+
+    def __init__(self, workspace_root: Path | None) -> None:
+        self._workspace_root = workspace_root
+
+    def load(self) -> tuple[list[CapabilityRecord], CapabilityDiagnostics]:
+        diagnostics = CapabilityDiagnostics()
+        records: list[CapabilityRecord] = []
+        if self._workspace_root is None or not self._workspace_root.exists():
+            return records, diagnostics
+
+        mm_root = self._workspace_root / "mental_models"
+        if not mm_root.exists():
+            return records, diagnostics
+
+        for md_file in sorted(mm_root.glob("*.md")):
+            try:
+                spec = compile_mental_model(md_file.read_text(encoding="utf-8"))
+                descriptor = CapabilityDescriptor(
+                    capability_id=f"mental_model:{md_file.stem}",
+                    kind=CapabilityKind.SKILL,  # reuse SKILL kind — no dedicated kind needed
+                    display_name=md_file.stem,
+                    description=f"Mental model: {md_file.stem}",
+                    supported_modes=["chat", "plan", "explore", "research", "code", "review", "operate"],
+                    provenance=CapabilityProvenance(source="workspace", path=str(md_file)),
+                )
+                records.append(CapabilityRecord(descriptor=descriptor, runtime_object=spec))
+            except Exception as exc:
+                diagnostics.add_failure(
+                    md_file.stem,
+                    source="workspace",
+                    path=str(md_file),
+                    error="".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                )
+
+        return records, diagnostics

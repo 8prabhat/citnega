@@ -101,7 +101,7 @@ class _MockRunner:
     def set_compiled_plan_metadata(self, metadata: dict[str, Any] | None) -> None:
         self._compiled_plan_metadata = dict(metadata or {})
 
-    async def add_tool_call(self, name, input_summary, output_summary, success, callable_type="tool"):
+    async def add_tool_call(self, name, input_summary, output_summary, success, callable_type="tool", msg_count=None):
         pass
 
     async def compact(self, summary: str, *, keep_recent: int = 10) -> int:

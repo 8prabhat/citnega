@@ -111,10 +111,7 @@ class ApprovalBlock(Widget):
         if event.key in ("y", "a"):
             event.stop()
             self._resolve(approved=True)
-        elif event.key == "n":
-            event.stop()
-            self._resolve(approved=False)
-        elif event.key == "escape":
+        elif event.key == "n" or event.key == "escape":
             event.stop()
             self._resolve(approved=False)
 

@@ -129,12 +129,18 @@ class OpenAICompatibleProvider(BaseProvider):
                     continue
                 choice = chunk.get("choices", [{}])[0]
                 delta = choice.get("delta", {})
-                content = delta.get("content")
+                content = delta.get("content") or None
+                # o1/o3 expose chain-of-thought in reasoning_content
+                thinking = delta.get("reasoning_content") or None
                 tool_calls = delta.get("tool_calls")
                 finish_reason = choice.get("finish_reason")
+                # Skip pure-metadata chunks that carry nothing useful
+                if content is None and thinking is None and not tool_calls and not finish_reason:
+                    continue
                 yield ModelChunk(
                     content=content,
-                    tool_call_delta=tool_calls[0] if tool_calls else None,
+                    thinking=thinking,
+                    tool_call_delta=tool_calls if tool_calls else None,
                     finish_reason=finish_reason,
                 )
 

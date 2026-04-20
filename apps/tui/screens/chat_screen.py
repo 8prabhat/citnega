@@ -3,17 +3,25 @@ ChatScreen — the main (and only) screen of the Citnega TUI.
 
 Layout::
 
-    ┌───────────────────────────────┬──────────────────────┐
-    │  #chat-scroll  (3fr)          │  #tools-panel (1fr)  │
-    │  MessageBlock                 │  ─── Tools ───       │
-    │  StreamingBlock               │  ToolCallBlock       │
-    │  ThinkingBlock                │  ToolCallBlock       │
-    │  ApprovalBlock                │  …                   │
-    ├───────────────────────────────┴──────────────────────┤
-    │  SmartInput  (multi-line paste + history)            │
+    ┌──────────────────────────────────────────────────────┐
+    │  #chat-scroll  (full width, 1fr)                     │
+    │  MessageBlock (user / assistant / system)            │
+    │  ThinkingBlock  (collapsible, inline)                │
+    │  ToolCallBlock  (inline — click to expand)           │
+    │  AgentCallBlock (inline — click to expand)           │
+    │  StreamingBlock (live response)                      │
+    │  ApprovalBlock / PlanApprovalBlock                   │
+    ╞══════════════════════════════════════════════════════╡  ← thick divider (on SmartInput top)
+    │  SmartInput  (multi-line, ↑↓ history, /)            │
     ├──────────────────────────────────────────────────────┤
-    │  StatusBar                                           │
+    │  ContextBar line 1: session│◈model│mode│folder│tok  │  ← live session state
+    │  ContextBar line 2: ⚙ rounds│depth│local│policy│…   │  ← static config (no overlap)
     └──────────────────────────────────────────────────────┘
+
+ContextBar owns both lines — zero duplicate information.
+
+Tool and agent calls are rendered inline in the chat stream (Claude Code style),
+not in a separate sidebar.  Click any completed call to expand input + output.
 """
 
 from __future__ import annotations
@@ -21,10 +29,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widget import Widget
-from textual.widgets import Label
 
 from citnega.apps.tui.widgets.context_bar import ContextBar
 from citnega.apps.tui.widgets.smart_input import SmartInput
@@ -35,10 +41,11 @@ if TYPE_CHECKING:
 
 
 class ChatScreen(Screen):
-    """Two-panel conversational screen: chat left, tools right."""
+    """Full-width conversational screen with inline tool/agent call blocks."""
 
     BINDINGS = [
         Binding("ctrl+c", "app.quit", "Quit", show=True),
+        Binding("f2",     "settings", "Settings", show=True),
         Binding("ctrl+l", "clear_chat", "Clear", show=True),
         Binding("ctrl+y", "copy_last", "Copy", show=True),
         Binding("escape", "dismiss_popup", "Dismiss", show=False),
@@ -52,64 +59,34 @@ class ChatScreen(Screen):
         background: $background;
     }
 
-    #main-area {
-        layout: horizontal;
-        height: 1fr;
-    }
-
-    /* ── Chat scroll (left, wider) ─────────────────────────── */
+    /* ── CHAT AREA ─────────────────────────────────────────── */
     #chat-scroll {
-        width: 3fr;
-        border-right: solid $panel-lighten-2;
-        scrollbar-size: 1 1;
-        scrollbar-color: $panel-lighten-2 transparent;
-        padding: 0 1 1 1;
-    }
-
-    /* ── Tools sidebar (right) ─────────────────────────────── */
-    #tools-panel-wrapper {
-        width: 1fr;
-        layout: vertical;
-        background: $surface;
-    }
-    #tools-panel-header {
-        height: 1;
-        background: $panel;
-        color: $secondary;
-        padding: 0 1;
-        text-style: bold;
-        border-bottom: solid $panel-lighten-2;
-    }
-    #tools-panel {
         height: 1fr;
         scrollbar-size: 1 1;
         scrollbar-color: $panel-lighten-2 transparent;
-        padding: 0 1 1 1;
-    }
-    #tools-empty {
-        color: $text-disabled;
-        margin: 2 0;
-        text-align: center;
-        text-style: italic;
+        padding: 0 2 1 2;
+        background: $background;
     }
 
-    /* ── Smart input ───────────────────────────────────────── */
+    /* ── Input — divider between chat and info strip ───────── */
     #chat-input {
-        height: 2;
-        border-top: solid $panel-lighten-2;
+        height: 3;
+        border-top: heavy $primary-darken-2;
         border-left: none;
         border-right: none;
-        border-bottom: none;
+        border-bottom: solid $panel-lighten-1;
         background: $surface;
         padding: 0 2;
     }
     #chat-input:focus {
-        border-top: solid $accent;
+        border-bottom: solid $accent;
         background: $boost;
     }
 
-    /* ── Unified status bar (below input) ──────────────────── */
-    /* ContextBar is positioned here; height:1 from its own CSS */
+    /* ── ContextBar — 2-line strip: state + config ─────────── */
+    #context-bar {
+        height: 2;
+    }
 
     #empty-hint {
         color: $text-disabled;
@@ -121,13 +98,8 @@ class ChatScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="main-area"):
-            with VerticalScroll(id="chat-scroll"):
-                yield WelcomeBanner(id="empty-hint")
-            with Widget(id="tools-panel-wrapper"):
-                yield Label("⚙  Tools", id="tools-panel-header")
-                with VerticalScroll(id="tools-panel"):
-                    yield Label("No active tools", id="tools-empty")
+        with VerticalScroll(id="chat-scroll"):
+            yield WelcomeBanner(id="empty-hint")
         yield SmartInput(
             placeholder="Ask anything…   ↑↓ history   / for commands",
             id="chat-input",
@@ -146,23 +118,25 @@ class ChatScreen(Screen):
             return
         self.app.post_message(UserInputSubmitted(text=text))
 
+    def on_input_changed(self, event) -> None:
+        """Forward input changes to the controller for slash-popup live filter."""
+        try:
+            ctrl = getattr(self.app, "_controller", None)
+            if ctrl is not None:
+                ctrl.on_input_value_changed(event.value)
+        except Exception:
+            pass
+
     def action_clear_chat(self) -> None:
-        # remove_children() schedules removal asynchronously; if we mount
-        # immediately in the same tick the old nodes are still registered and
-        # Textual raises DuplicateIds.  Defer all placeholder mounts to after
-        # the next refresh so the removals are guaranteed to have settled.
+        # remove_children() schedules removal asynchronously; defer placeholder
+        # remount to after the next refresh so removals have settled.
         self.query_one("#chat-scroll", VerticalScroll).remove_children()
-        self.query_one("#tools-panel", VerticalScroll).remove_children()
         self.call_after_refresh(self._remount_placeholders)
 
     def _remount_placeholders(self) -> None:
-        """Mount the empty-state placeholders only if they don't already exist."""
         scroll = self.query_one("#chat-scroll", VerticalScroll)
         if not scroll.query("#empty-hint"):
             scroll.mount(WelcomeBanner(id="empty-hint"))
-        tools = self.query_one("#tools-panel", VerticalScroll)
-        if not tools.query("#tools-empty"):
-            tools.mount(Label("No active tools", id="tools-empty"))
 
     def action_copy_last(self) -> None:
         from citnega.apps.tui.widgets.message_block import MessageBlock
@@ -232,6 +206,18 @@ class ChatScreen(Screen):
 
     def action_toggle_slash_popup(self) -> None:
         self.app.post_message(ToggleSlashPopup())
+
+    def action_settings(self) -> None:
+        from citnega.apps.tui.screens.settings_screen import SettingsScreen
+
+        service = getattr(self.app, "service", None)
+        self.app.push_screen(SettingsScreen(service=service), self._on_settings_closed)
+
+    def _on_settings_closed(self, saved: bool | None = None) -> None:
+        """Refresh the ContextBar config line after the settings screen closes."""
+        import contextlib
+        with contextlib.suppress(Exception):
+            self.query_one("#context-bar", ContextBar).refresh_config()
 
 
 # ── Clipboard ─────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ from citnega.packages.capabilities.models import (
 )
 from citnega.packages.capabilities.providers import (
     BuiltinCapabilityProvider,
+    MentalModelCapabilityProvider,
     WorkspaceCapabilityProvider,
     callable_to_descriptor,
 )
@@ -19,6 +20,7 @@ from citnega.packages.capabilities.registry import CapabilityRegistry
 
 __all__ = [
     "BuiltinCapabilityProvider",
+    "MentalModelCapabilityProvider",
     "CapabilityDescriptor",
     "CapabilityDiagnostics",
     "CapabilityExecutionTraits",

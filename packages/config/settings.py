@@ -10,7 +10,7 @@ Precedence (highest to lowest):
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,7 +24,9 @@ class RuntimeSettings(BaseSettings):
     # frameworks fall back to the configured default silently.
     strict_framework_validation: bool = False
     # Seconds to wait for the next streaming event before disconnecting.
-    stream_timeout_seconds: float = 60.0
+    # Per-event timeout — must be large enough to cover slow tool calls (network,
+    # LLM inference, file I/O).  60 s was too short for long-running agents.
+    stream_timeout_seconds: float = 3600.0
     # Maximum number of per-run event queue slots before events are dropped.
     event_queue_max_size: int = 256
     # Maximum tool-call rounds per LLM turn (prevents infinite tool loops).
@@ -187,6 +189,7 @@ class WorkspaceSettings(BaseSettings):
     onboarding_signature_key: str = ""
     onboarding_trusted_publishers: list[str] = Field(default_factory=list)
     onboarding_enforce_file_coverage: bool = True
+    strict_workspace_loading: bool = False
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_WORKSPACE_")
 
@@ -206,6 +209,9 @@ class PolicySettings(BaseSettings):
     enforce_workspace_bounds: bool = False
     # Workspace root resolved at runtime.  Empty = use WorkspaceSettings.workfolder_path.
     workspace_root: str = ""
+    # When True, ALL approval checks and policy gates are bypassed.
+    # DANGEROUS — intended only for local dev/debug. Shown in red in the TUI when on.
+    bypass_permissions: bool = False
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_POLICY_")
 
@@ -318,6 +324,82 @@ class NextgenSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CITNEGA_NEXTGEN_")
 
 
+class OpenRouterSettings(BaseSettings):
+    """OpenRouter provider configuration — uses LiteLLMProvider internally."""
+
+    enabled: bool = Field(default=False, description="Enable OpenRouter as a provider option.")
+    api_key: SecretStr = Field(default=SecretStr(""), description="OpenRouter API key.")
+    default_model: str = Field(
+        default="openai/gpt-4o-mini",
+        description="Default model ID (e.g. 'anthropic/claude-opus-4', 'openai/gpt-4o').",
+    )
+    site_url: str = Field(default="", description="Optional app URL for OpenRouter rankings.")
+    app_name: str = Field(default="citnega", description="App name sent to OpenRouter.")
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_OPENROUTER_")
+
+
+class MCPServerConfig(BaseSettings):
+    """Configuration for a single MCP server connection."""
+
+    name: str = Field(description="Unique name for this MCP server.")
+    transport: str = Field(default="stdio", description="Transport: stdio | sse | streamable_http.")
+    command: list[str] = Field(default_factory=list, description="Command + args for stdio transport.")
+    url: str = Field(default="", description="Server URL for sse/streamable_http transport.")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment variables for the server process.")
+    enabled: bool = Field(default=True)
+    timeout_seconds: float = Field(default=30.0)
+    requires_approval: bool = Field(default=False, description="Whether tool calls to this server need user approval.")
+    description: str = Field(default="")
+    tags: list[str] = Field(default_factory=list)
+
+    model_config = SettingsConfigDict(env_prefix="")  # no prefix — used as nested model
+
+
+class MCPSettings(BaseSettings):
+    """Global MCP configuration."""
+
+    enabled: bool = Field(default=False, description="Enable MCP server connections.")
+    servers: list[MCPServerConfig] = Field(default_factory=list)
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_MCP_")
+
+
+class DockerSettings(BaseSettings):
+    """Docker execution backend settings."""
+
+    enabled: bool = Field(default=False, description="Use Docker for shell command execution.")
+    image: str = Field(default="python:3.12-slim", description="Docker image to use.")
+    workdir: str = Field(default="/workspace", description="Working directory inside the container.")
+    memory_limit: str = Field(default="512m", description="Memory limit (e.g. '512m', '2g').")
+    cpu_limit: float = Field(default=1.0, description="CPU limit (number of cores).")
+    network_disabled: bool = Field(default=True, description="Disable network access in container.")
+    read_only: bool = Field(default=True, description="Mount container filesystem as read-only.")
+    pids_limit: int = Field(default=64, description="Maximum number of processes in container.")
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_DOCKER_")
+
+
+class TelegramSettings(BaseSettings):
+    """Telegram bot messaging settings."""
+
+    enabled: bool = Field(default=False)
+    bot_token: SecretStr = Field(default=SecretStr(""), description="Telegram bot token.")
+    default_chat_id: str = Field(default="", description="Default chat ID to send messages to.")
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_TELEGRAM_")
+
+
+class DiscordSettings(BaseSettings):
+    """Discord bot messaging settings."""
+
+    enabled: bool = Field(default=False)
+    bot_token: SecretStr = Field(default=SecretStr(""), description="Discord bot token.")
+    default_channel_id: str = Field(default="", description="Default channel ID to send messages to.")
+
+    model_config = SettingsConfigDict(env_prefix="CITNEGA_DISCORD_")
+
+
 class Settings(BaseSettings):
     """Root settings object — single entry point for all configuration."""
 
@@ -332,6 +414,11 @@ class Settings(BaseSettings):
     policy: PolicySettings = Field(default_factory=PolicySettings)
     remote: RemoteExecutionSettings = Field(default_factory=RemoteExecutionSettings)
     nextgen: NextgenSettings = Field(default_factory=NextgenSettings)
+    openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
+    docker: DockerSettings = Field(default_factory=DockerSettings)
+    telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    discord: DiscordSettings = Field(default_factory=DiscordSettings)
 
     model_config = SettingsConfigDict(
         env_prefix="CITNEGA_",

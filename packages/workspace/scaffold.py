@@ -49,8 +49,14 @@ class ScaffoldGenerator:
         if self._gateway is not None:
             try:
                 return await self._generate_with_llm(spec, prior_error=None)
-            except Exception:
-                pass
+            except Exception as exc:
+                import structlog
+                structlog.get_logger().warning(
+                    "scaffold_llm_unavailable_fallback",
+                    kind=spec.kind,
+                    name=spec.name,
+                    error=str(exc),
+                )
         return self._generate_fallback(spec)
 
     async def generate_streaming(
@@ -58,6 +64,7 @@ class ScaffoldGenerator:
         spec: ScaffoldSpec,
         on_chunk: Callable[[str], Awaitable[None]],
         prior_error: str | None = None,
+        on_status: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """
         Stream tokens to ``on_chunk`` as the LLM generates.
@@ -68,8 +75,16 @@ class ScaffoldGenerator:
         if self._gateway is not None:
             try:
                 return await self._stream_with_llm(spec, on_chunk, prior_error=prior_error)
-            except Exception:
-                pass
+            except Exception as exc:
+                import structlog
+                structlog.get_logger().warning(
+                    "scaffold_stream_llm_unavailable_fallback",
+                    kind=spec.kind,
+                    name=spec.name,
+                    error=str(exc),
+                )
+                if on_status:
+                    await on_status("LLM unavailable — using template fallback")
         source = self._generate_fallback(spec)
         # Deliver the whole thing as one chunk for a consistent experience
         await on_chunk(source)

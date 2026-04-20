@@ -83,7 +83,6 @@ def test_strategy_force_plan_mode_overrides() -> None:
 def _make_registry_with(capability_id: str, description: str, kind: str = "tool") -> MagicMock:
     from citnega.packages.capabilities.models import (
         CapabilityDescriptor,
-        CapabilityExecutionTraits,
         CapabilityKind,
         CapabilityProvenance,
     )

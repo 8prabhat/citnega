@@ -67,6 +67,7 @@ class DirectModelAdapter(IFrameworkAdapter):
         self._configured_default_model_id: str = ""
         # session_id → runner (for set_model routing)
         self._runners: dict[str, DirectModelRunner] = {}
+        self._capability_registry: Any = None
 
     @property
     def framework_name(self) -> str:
@@ -109,6 +110,7 @@ class DirectModelAdapter(IFrameworkAdapter):
             conversation_store=conv_store,
             callables=list(callables),
             model_gateway=model_gateway,
+            capability_registry=self._capability_registry,
             max_tool_rounds=_settings.runtime.max_tool_rounds,
         )
         self._runners[session_id] = runner
@@ -125,6 +127,9 @@ class DirectModelAdapter(IFrameworkAdapter):
         runner = self._runners.get(session_id)
         if runner is not None:
             await runner.set_mode(mode_name)
+
+    def set_capability_registry(self, registry: Any) -> None:
+        self._capability_registry = registry
 
     def get_runner(self, session_id: str) -> DirectModelRunner | None:
         return self._runners.get(session_id)

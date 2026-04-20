@@ -10,8 +10,11 @@ The App owns:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 import uuid
+
+_log = logging.getLogger(__name__)
 
 from textual.app import App
 
@@ -98,7 +101,8 @@ class CitnegaApp(App):
 
         try:
             all_sessions = await self._service.list_sessions()
-        except Exception:
+        except Exception as exc:
+            _log.debug("list_sessions failed: %s", exc)
             all_sessions = []
 
         # Sort by most recently active first, cap at configured limit
@@ -136,15 +140,15 @@ class CitnegaApp(App):
             frameworks = self._service.list_frameworks()
             if isinstance(frameworks, list) and frameworks and isinstance(frameworks[0], str):
                 framework = frameworks[0]
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("list_frameworks failed: %s", exc)
 
         try:
             models = self._service.list_models()
             if isinstance(models, list) and models and isinstance(models[0].model_id, str):
                 model_id = models[0].model_id
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("list_models failed: %s", exc)
 
         return framework, model_id
 
@@ -195,8 +199,8 @@ class CitnegaApp(App):
             ctx = self.screen.query_one(ContextBar)
             ctx.session_id = self._session_id
             ctx.framework = self._service.list_frameworks()[0] if self._service else "direct"
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("context_bar seed failed: %s", exc)
 
         # Create controller
         from citnega.apps.tui.controllers.chat_controller import ChatController
@@ -226,8 +230,8 @@ class CitnegaApp(App):
             ws = load_settings().workspace
             if ws.workfolder_path:
                 workfolder = ws.workfolder_path
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("load_settings for workfolder failed: %s", exc)
         session_name = getattr(getattr(session, "config", None), "name", "") or ""
         self._controller.seed_context_bar(
             model=active_model,
@@ -237,26 +241,75 @@ class CitnegaApp(App):
             session_name=session_name,
         )
 
-        # Render persisted message history when resuming an existing session
+        # Render persisted history when resuming an existing session
         resume_sid = getattr(self, "_resume_session_id", None)
         if resume_sid and self._service:
             self._resume_session_id = None
             try:
+                from collections import defaultdict
+
+                from textual.containers import VerticalScroll
+
+                from citnega.apps.tui.widgets.agent_call_block import AgentCallBlock
+                from citnega.apps.tui.widgets.tool_call_block import ToolCallBlock
+
                 raw_messages = self._service.get_conversation_messages(resume_sid)
                 # Drop a dangling user message at the end (saved before LLM died)
                 if raw_messages and raw_messages[-1].get("role") == "user":
                     raw_messages = raw_messages[:-1]
-                for msg in raw_messages:
+
+                # Group tool history by msg_count so blocks appear inline after
+                # the message that triggered them (not consolidated at the end).
+                # msg_count=N means N messages existed when the tool was called,
+                # so the block belongs after raw_messages[N-1] (0-indexed).
+                # Entries without msg_count (legacy) go at the very end.
+                tool_history = self._service.get_session_tool_history(resume_sid)
+                tools_by_pos: defaultdict[int, list[dict]] = defaultdict(list)
+                for entry in tool_history[-100:]:
+                    pos = entry.get("msg_count")
+                    if pos is None:
+                        pos = len(raw_messages) + 1  # legacy: append after all messages
+                    tools_by_pos[int(pos)].append(entry)
+
+                scroll = self.screen.query_one("#chat-scroll", VerticalScroll)
+
+                async def _mount_tool_blocks(entries: list[dict]) -> None:
+                    for entry in entries:
+                        ct = entry.get("callable_type", "tool")
+                        is_agent = ct in ("specialist", "core")
+                        if is_agent:
+                            block: AgentCallBlock | ToolCallBlock = AgentCallBlock(
+                                agent_name=entry.get("name", "?"),
+                                input_summary=entry.get("input_summary", ""),
+                            )
+                        else:
+                            block = ToolCallBlock(
+                                tool_name=entry.get("name", "?"),
+                                input_summary=entry.get("input_summary", ""),
+                            )
+                        await scroll.mount(block)
+                        if entry.get("success", True):
+                            block.set_result(entry.get("output_summary", ""))
+                        else:
+                            block.set_error(entry.get("output_summary", ""))
+
+                # Interleave: after message[i] mount tool blocks with msg_count == i+1
+                for i, msg in enumerate(raw_messages):
                     role = msg.get("role", "user")
                     content = msg.get("content", "")
-                    if not content:
-                        continue
-                    if role in ("user", "assistant"):
-                        await self._controller._append_message(role, content)
-                    elif role == "system" and content.startswith("[Compacted"):
-                        await self._controller._append_message("system", content)
-            except Exception:
-                pass
+                    if content:
+                        if role in ("user", "assistant"):
+                            await self._controller._append_message(role, content)
+                        elif role == "system" and content.startswith("[Compacted"):
+                            await self._controller._append_message("system", content)
+                    # Tool blocks that ran after message[i] was saved have msg_count == i+1
+                    await _mount_tool_blocks(tools_by_pos.get(i + 1, []))
+
+                # Legacy tool blocks (no msg_count) go at the very end
+                await _mount_tool_blocks(tools_by_pos.get(len(raw_messages) + 1, []))
+
+            except Exception as exc:
+                _log.debug("history_restore failed: %s", exc)
 
     async def on_unmount(self) -> None:
         if self._controller is not None:

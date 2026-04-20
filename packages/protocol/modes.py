@@ -16,9 +16,7 @@ from citnega.packages.protocol.interfaces.session_mode import ISessionMode
 
 
 class ChatMode(ISessionMode):
-    """
-    Default conversational mode — no structural constraints.
-    """
+    """Default conversational mode — no structural constraints."""
 
     @property
     def name(self) -> str:
@@ -63,6 +61,10 @@ class PlanMode(ISessionMode):
     def description(self) -> str:
         return "Two-phase: draft a plan → review → execute."
 
+    @property
+    def temperature(self) -> float:
+        return 0.4
+
     def augment_system_prompt(self, base_prompt: str, phase: str = PHASE_DRAFT) -> str:
         if phase == self.PHASE_EXECUTE:
             suffix = (
@@ -89,10 +91,12 @@ class PlanMode(ISessionMode):
 
 class ExploreMode(ISessionMode):
     """
-    Exploration mode — model takes a broad, multi-perspective approach.
+    Exploration mode — agentic, tool-driven, multi-perspective deep research.
 
-    Use this for research, learning, and open-ended questions where
-    depth and breadth matter more than brevity.
+    The model is required to gather real information via tools before answering:
+    web search for current facts, file reads for codebase context, specialist
+    agents for domain-specific depth.  max_tool_rounds is raised to 12 so the
+    loop has room to follow multiple threads.
     """
 
     @property
@@ -105,28 +109,58 @@ class ExploreMode(ISessionMode):
 
     @property
     def description(self) -> str:
-        return "Broad exploration — multiple angles, edge cases, deep analysis."
+        return "Agentic deep exploration — calls tools and agents, multiple angles, edge cases."
+
+    @property
+    def max_tool_rounds(self) -> int:
+        return 12
+
+    @property
+    def temperature(self) -> float:
+        return 0.8
 
     def augment_system_prompt(self, base_prompt: str) -> str:
         suffix = (
-            "\n\n## Explore Mode\n"
-            "Approach every question with intellectual breadth:\n"
-            "- Consider at least two or three distinct perspectives or interpretations.\n"
-            "- Identify assumptions and challenge them where appropriate.\n"
-            "- Surface edge cases, counter-examples, or related concepts.\n"
-            "- When relevant, compare alternatives and explain trade-offs.\n"
-            "Show your reasoning openly. Depth and rigour are valued over brevity."
+            "\n\n## Explore Mode — Agentic Deep Research\n\n"
+            "You are in **explore mode**. This is NOT a conversational response mode — "
+            "it is an **active investigation** mode. You MUST gather information using "
+            "tools before writing your final answer.\n\n"
+            "### Mandatory exploration protocol\n\n"
+            "**Step 1 — Orient** (do this first, before any analysis):\n"
+            "  - If the question involves current events, recent facts, or anything that "
+            "could have changed: call `search_web` immediately with 2–3 targeted queries.\n"
+            "  - If the question involves a codebase or files: call `list_dir`, "
+            "`search_files`, and `repo_map` to understand the structure first.\n"
+            "  - If relevant prior research exists: call `read_kb` to retrieve it.\n\n"
+            "**Step 2 — Deep dive** (parallel where possible):\n"
+            "  - Call `read_webpage` or `fetch_url` for any key sources found.\n"
+            "  - For security topics: invoke `security_agent` — it has specialised tools.\n"
+            "  - For research/analysis topics: invoke `research_agent` for structured investigation.\n"
+            "  - For code topics: invoke `code_agent` to examine implementation details.\n"
+            "  - Run multiple tool calls **in a single response turn** when sub-tasks are independent.\n\n"
+            "**Step 3 — Synthesise**:\n"
+            "  - After gathering real data, write a thorough response covering:\n"
+            "    • At least two or three distinct perspectives or interpretations\n"
+            "    • Assumptions you are making and where they may not hold\n"
+            "    • Edge cases, counter-examples, and trade-offs\n"
+            "    • What you found vs. what remains uncertain\n"
+            "  - For each factual claim from a web source, cite it inline as "
+            "[Source: Title](URL).\n"
+            "  - Add a **Sources** section at the end listing all URLs used.\n\n"
+            "**NEVER** skip Step 1 and 2 to go straight to a text answer. "
+            "If you lack a tool for something, say so explicitly — but first exhaust "
+            "the tools you do have. Depth and evidence beat fast opinions every time.\n\n"
+            "You have up to 12 tool-calling rounds — use them."
         )
         return base_prompt + suffix
 
 
 class ResearchMode(ISessionMode):
     """
-    Deep research mode — structured, evidence-driven, comprehensive analysis.
+    Deep research mode — fully agentic, structured, evidence-driven.
 
-    Use when you need thorough investigation of a topic: the model is
-    instructed to reason step by step, cite its knowledge sources, identify
-    gaps, compare alternatives, and produce a well-structured report.
+    The model MUST use tools to gather live information before writing.
+    Raises max_tool_rounds to 15 to allow multi-thread investigation.
     """
 
     @property
@@ -139,24 +173,41 @@ class ResearchMode(ISessionMode):
 
     @property
     def description(self) -> str:
-        return "Deep research — structured analysis, evidence-driven, comprehensive."
+        return "Fully agentic deep research — web search, agents, structured report."
+
+    @property
+    def max_tool_rounds(self) -> int:
+        return 15
+
+    @property
+    def temperature(self) -> float:
+        return 0.3
 
     def augment_system_prompt(self, base_prompt: str) -> str:
         suffix = (
-            "\n\n## Research Mode\n"
-            "You are operating in deep research mode. Follow these principles:\n\n"
-            "1. **Reason step by step** before drawing conclusions.\n"
-            "2. **Structure your response** with clear headings and sections.\n"
-            "3. **Cite knowledge sources** — note where information comes from "
-            "(training data, well-known facts, inference) and flag uncertainty.\n"
-            "4. **Cover multiple perspectives** — present competing viewpoints "
-            "or interpretations where they exist.\n"
-            "5. **Identify gaps** — explicitly state what is unknown, disputed, "
-            "or outside your knowledge.\n"
-            "6. **Compare alternatives** — where decisions or choices are involved, "
-            "evaluate trade-offs systematically.\n"
-            "7. **Summarise** — end with a concise summary of key findings.\n\n"
-            "Depth, rigour, and intellectual honesty take priority over brevity."
+            "\n\n## Research Mode — Fully Agentic\n\n"
+            "You are in **research mode**. You MUST actively use tools to gather "
+            "current, primary information before writing your report.\n\n"
+            "### Required research sequence\n\n"
+            "1. **Gather** — before writing anything, run:\n"
+            "   - `search_web` (2–4 queries from different angles)\n"
+            "   - `read_kb` (retrieve any prior session notes)\n"
+            "   - `read_webpage` / `fetch_url` for key sources found in search\n"
+            "   - Invoke `research_agent` for structured multi-source investigation\n\n"
+            "2. **Verify** — cross-check conflicting claims across sources; "
+            "note where sources agree and disagree.\n\n"
+            "3. **Write** — produce a structured report:\n"
+            "   - **Executive summary** (2–3 sentences)\n"
+            "   - **Findings** — headed sections; use inline citation format "
+            "[Source: Title](URL) after each factual claim\n"
+            "   - **Competing perspectives** (present disagreements fairly)\n"
+            "   - **Gaps & uncertainties** (what is unknown or disputed)\n"
+            "   - **Conclusions & trade-offs**\n"
+            "   - **Sources** — list all URLs used at the end of the report\n\n"
+            "4. **Save** — call `write_kb` to persist key findings for future sessions.\n\n"
+            "You have up to 15 tool-calling rounds. Use `research_agent` as your "
+            "primary investigator — it parallelises searches and handles source synthesis. "
+            "Never guess when you can verify. Never summarise from memory when you can search."
         )
         return base_prompt + suffix
 
@@ -174,6 +225,10 @@ class CodeMode(ISessionMode):
     """
 
     @property
+    def max_tool_rounds(self) -> int:
+        return 10
+
+    @property
     def name(self) -> str:
         return "code"
 
@@ -184,6 +239,10 @@ class CodeMode(ISessionMode):
     @property
     def description(self) -> str:
         return "Code-focused mode: reads/writes files, runs shell commands, uses git."
+
+    @property
+    def temperature(self) -> float:
+        return 0.2
 
     def augment_system_prompt(self, base_prompt: str) -> str:
         suffix = (
@@ -211,6 +270,13 @@ class CodeMode(ISessionMode):
 
 
 class ReviewMode(ISessionMode):
+    """
+    Professional code review mode — evidence-driven, tool-mandated.
+
+    Requires the model to read the diff and context before commenting.
+    Raises max_tool_rounds to 8 to allow thorough evidence gathering.
+    """
+
     @property
     def name(self) -> str:
         return "review"
@@ -223,19 +289,50 @@ class ReviewMode(ISessionMode):
     def description(self) -> str:
         return "Code review mode: prioritize bugs, regressions, and missing tests."
 
+    @property
+    def max_tool_rounds(self) -> int:
+        return 8
+
+    @property
+    def temperature(self) -> float:
+        return 0.3
+
     def augment_system_prompt(self, base_prompt: str) -> str:
         suffix = (
-            "\n\n## Review Mode\n"
-            "Operate as a rigorous code reviewer.\n"
-            "- Prioritise bugs, risks, regressions, and missing tests.\n"
-            "- Be explicit about assumptions.\n"
-            "- Prefer findings over summaries.\n"
-            "- Cite concrete files and behaviors when available."
+            "\n\n## Review Mode — Mandatory Protocol\n\n"
+            "You are a senior code reviewer. You MUST gather evidence before commenting.\n\n"
+            "### Required steps (do not skip any)\n\n"
+            "**Step 1 — Read the diff** (mandatory first action):\n"
+            "  - Call `git_ops` with operation='diff' to see all changed lines.\n"
+            "  - If specific files are named, call `read_file` on each.\n\n"
+            "**Step 2 — Read context** (call in parallel):\n"
+            "  - Read surrounding code in changed files.\n"
+            "  - Check test files for the changed modules.\n"
+            "  - Run `repo_map` to understand architectural context.\n\n"
+            "**Step 3 — Run static checks**:\n"
+            "  - Call `quality_gate` to get lint, type, and complexity signals.\n\n"
+            "**Step 4 — Write findings** (structured format only):\n"
+            "  For each finding, cite the exact file and line number.\n\n"
+            "  **[SEVERITY] file.py:line — issue description**\n"
+            "  Why it matters: ...\n"
+            "  Recommendation: ...\n\n"
+            "Severity levels: CRITICAL (data loss/security) | HIGH (bug/regression) "
+            "| MEDIUM (correctness/coverage) | LOW (style/clarity) | INFO (observation).\n\n"
+            "**Never** comment on code you have not read. **Never** guess at line numbers. "
+            "**Always** cite the diff or file read that supports each finding.\n\n"
+            "You have up to 8 tool-calling rounds — use them to build evidence before writing."
         )
         return base_prompt + suffix
 
 
 class OperateMode(ISessionMode):
+    """
+    Operational mode — runbook discipline with mandatory verification.
+
+    Every mutating action is stated, executed, then verified before proceeding.
+    Raises max_tool_rounds to 8 to allow thorough pre/post checks.
+    """
+
     @property
     def name(self) -> str:
         return "operate"
@@ -248,14 +345,38 @@ class OperateMode(ISessionMode):
     def description(self) -> str:
         return "Operational mode: execute controlled multi-step runbooks and checks."
 
+    @property
+    def max_tool_rounds(self) -> int:
+        return 8
+
+    @property
+    def temperature(self) -> float:
+        return 0.2
+
     def augment_system_prompt(self, base_prompt: str) -> str:
         suffix = (
-            "\n\n## Operate Mode\n"
-            "Operate with runbook discipline.\n"
-            "- Prefer explicit plans and checkpoints.\n"
-            "- Record assumptions and state transitions.\n"
-            "- Favour verification after each mutating action.\n"
-            "- Treat safety and repeatability as first-class requirements."
+            "\n\n## Operate Mode — Runbook Protocol\n\n"
+            "You are executing a controlled operational procedure. "
+            "Every action must be verified before proceeding.\n\n"
+            "### Mandatory execution protocol\n\n"
+            "**Before each mutating step:**\n"
+            "  - State the exact command or action you are about to take.\n"
+            "  - State the expected outcome.\n"
+            "  - State the rollback plan if it fails.\n\n"
+            "**After each mutating step:**\n"
+            "  - Verify success: call `run_shell` or `git_ops` to confirm the expected state.\n"
+            "  - If verification fails, STOP and report the discrepancy before continuing.\n\n"
+            "**Tool protocol:**\n"
+            "  - Use `run_shell` for all system commands.\n"
+            "  - Use `git_ops` for all version control operations.\n"
+            "  - Use `read_file` / `list_dir` to verify file state after writes.\n"
+            "  - Never assume a step succeeded — always check.\n\n"
+            "**Safety rules:**\n"
+            "  - Do not run destructive operations (rm -rf, DROP TABLE, force push) "
+            "without explicit user confirmation in this conversation.\n"
+            "  - If a step is ambiguous, ask before executing — not after.\n\n"
+            "You have up to 8 tool-calling rounds per response. "
+            "Use verification rounds generously."
         )
         return base_prompt + suffix
 

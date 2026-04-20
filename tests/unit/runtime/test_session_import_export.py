@@ -12,9 +12,9 @@ Covers:
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+import uuid
 
 import pytest
 
@@ -31,8 +31,9 @@ def _make_service() -> ApplicationService:
     runtime.capability_registry = None
 
     session_id = str(uuid.uuid4())
-    from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
     from datetime import UTC, datetime
+
+    from citnega.packages.protocol.models.sessions import Session, SessionConfig, SessionState
 
     session = Session(
         config=SessionConfig(

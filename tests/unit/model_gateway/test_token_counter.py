@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-
 # ── CharApproxCounter ──────────────────────────────────────────────────────────
 
 
@@ -33,8 +32,9 @@ def test_char_approx_count_empty_returns_one():
 
 
 def test_char_approx_count_messages():
-    from citnega.packages.model_gateway.token_counter import CharApproxCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import CharApproxCounter
 
     c = CharApproxCounter()
     msg = MagicMock()
@@ -46,8 +46,9 @@ def test_char_approx_count_messages():
 
 
 def test_char_approx_count_messages_with_name():
-    from citnega.packages.model_gateway.token_counter import CharApproxCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import CharApproxCounter
 
     c = CharApproxCounter()
     msg = MagicMock()
@@ -60,8 +61,9 @@ def test_char_approx_count_messages_with_name():
 
 
 def test_char_approx_count_multiple_messages():
-    from citnega.packages.model_gateway.token_counter import CharApproxCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import CharApproxCounter
 
     c = CharApproxCounter()
     msgs = []
@@ -106,8 +108,9 @@ def test_tiktoken_counter_with_mock_enc():
 
 
 def test_tiktoken_count_messages_with_mock():
-    from citnega.packages.model_gateway.token_counter import TiktokenCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import TiktokenCounter
 
     mock_enc = MagicMock()
     # Each encode call returns 3 tokens
@@ -125,8 +128,9 @@ def test_tiktoken_count_messages_with_mock():
 
 
 def test_tiktoken_count_messages_with_name():
-    from citnega.packages.model_gateway.token_counter import TiktokenCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import TiktokenCounter
 
     mock_enc = MagicMock()
     mock_enc.encode.return_value = [1, 2]  # 2 tokens for any text
@@ -146,7 +150,10 @@ def test_tiktoken_count_messages_with_name():
 
 
 def test_composite_uses_char_approx_without_tiktoken():
-    from citnega.packages.model_gateway.token_counter import CharApproxCounter, CompositeTokenCounter
+    from citnega.packages.model_gateway.token_counter import (
+        CharApproxCounter,
+        CompositeTokenCounter,
+    )
 
     with patch.dict("sys.modules", {"tiktoken": None}):
         c = CompositeTokenCounter()
@@ -162,8 +169,9 @@ def test_composite_count_delegates_to_inner():
 
 
 def test_composite_count_messages_delegates():
-    from citnega.packages.model_gateway.token_counter import CompositeTokenCounter
     from unittest.mock import MagicMock
+
+    from citnega.packages.model_gateway.token_counter import CompositeTokenCounter
 
     c = CompositeTokenCounter()
     msg = MagicMock()

@@ -182,6 +182,8 @@ class TestHotReloadIntegration:
     """hot_reload_workfolder end-to-end."""
 
     def test_hot_reload_registers_all_kinds(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
         writer = WorkspaceWriter(tmp_path)
         writer.ensure_dirs()
 
@@ -201,7 +203,17 @@ class TestHotReloadIntegration:
 
         svc = _make_service()
         loader = _make_loader()
-        result = asyncio.run(svc.hot_reload_workfolder(tmp_path, loader))
+        # Disable nextgen workflows so Python workflow files are loaded directly.
+        with patch(
+            "citnega.packages.workspace.onboarding.enforce_workspace_onboarding"
+        ), patch(
+            "citnega.packages.config.loaders.load_settings"
+        ) as mock_settings:
+            from citnega.packages.config.loaders import load_settings as _real_load
+            real_settings = _real_load()
+            real_settings.nextgen.workflows_enabled = False
+            mock_settings.return_value = real_settings
+            result = asyncio.run(svc.hot_reload_workfolder(tmp_path, loader))
 
         assert "hot_tool" in result["registered"]
         assert "hot_agent" in result["registered"]

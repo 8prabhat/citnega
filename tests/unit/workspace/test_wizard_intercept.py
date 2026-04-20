@@ -141,7 +141,8 @@ class TestCreateSkillWizard:
         ctrl = _FakeSlashController()
         cmd = CreateSkillCommand(service=_FakeService())
         await cmd.execute([], ctrl)
-        await cmd._on_name("release_readiness", ctrl)
+        # Use the installed wizard handler instead of calling _on_name directly
+        await ctrl._pending_wizard.on_input("release_readiness", ctrl)
         await cmd._on_desc("optimize release quality", ctrl)
 
         writer_mock = AsyncMock()
@@ -166,4 +167,5 @@ def test_slash_registry_includes_workspace_skill_command() -> None:
 
     assert "createskill" in registry
     assert "createworkflow" in registry
-    assert len(registry) == 20
+    assert "creatementalmodel" in registry
+    assert len(registry) == 23  # 21 original + skills + skill

@@ -141,12 +141,46 @@ class LiteLLMProvider(BaseProvider):
             delta = getattr(choice, "delta", None)
             if delta is None:
                 continue
-            content = getattr(delta, "content", None)
-            tool_calls = getattr(delta, "tool_calls", None)
+
+            content_raw = getattr(delta, "content", None)
             finish_reason = getattr(choice, "finish_reason", None)
+            tool_calls = getattr(delta, "tool_calls", None)
+
+            # Extract thinking — litellm normalises Claude extended thinking and
+            # DeepSeek-R1 reasoning into delta.thinking; o1/o3 use reasoning_content.
+            thinking: str | None = (
+                getattr(delta, "thinking", None)
+                or getattr(delta, "reasoning_content", None)
+                or None
+            )
+
+            # Claude extended thinking: content arrives as a list of typed blocks.
+            # Extract text blocks for content and thinking blocks for reasoning.
+            content: str | None = None
+            if isinstance(content_raw, list):
+                text_parts: list[str] = []
+                think_parts: list[str] = []
+                for block in content_raw:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block.get("type") == "thinking":
+                        think_parts.append(block.get("thinking", ""))
+                content = "".join(text_parts) or None
+                if not thinking and think_parts:
+                    thinking = "".join(think_parts)
+            elif isinstance(content_raw, str):
+                content = content_raw or None
+
+            # Skip pure-metadata chunks with no useful payload
+            if content is None and thinking is None and not tool_calls and not finish_reason:
+                continue
+
             yield ModelChunk(
                 content=content,
-                tool_call_delta=tool_calls[0] if tool_calls else None,
+                thinking=thinking,
+                tool_call_delta=tool_calls if tool_calls else None,
                 finish_reason=finish_reason,
             )
 

@@ -81,6 +81,16 @@ async def fts_search(
         sql += " AND k.source_session_id = ?"
         params.append(session_id)
 
+    # SQL-level tag pre-filter using json_each() — eliminates O(n) Python post-filter
+    if tags:
+        placeholders = ", ".join("?" * len(tags))
+        sql += (
+            f" AND EXISTS ("
+            f"SELECT 1 FROM json_each(k.tags) je WHERE je.value IN ({placeholders})"
+            f")"
+        )
+        params.extend(tags)
+
     sql += " ORDER BY score LIMIT ?"
     params.append(limit)
 
@@ -96,11 +106,6 @@ async def fts_search(
 
         for row in rows:
             item = _row_to_item(row)
-            # Optional tag filter (post-filter — FTS doesn't index tags as structured data)
-            if tags:
-                item_tags = item.tags
-                if not any(t in item_tags for t in tags):
-                    continue
             # Normalise: best (most negative) → 1.0, worst → 0.0
             norm_score = 1.0 - (row["score"] - min_score) / score_range
             results.append(
