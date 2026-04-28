@@ -1,25 +1,83 @@
+# ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+
+# ── Python bytecode & caches ──────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*.pyo
+*.pyd
+
+# ── Virtual environments ───────────────────────────────────────────────────────
 .venv/
+venv/
+env/
 .citnega_env/
+
+# ── Build & distribution ───────────────────────────────────────────────────────
 *.egg-info/
 dist/
 build/
+*.whl
+*.tar.gz
+MANIFEST
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+*.testmondata
+
+# ── Type checking & linting ───────────────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
-coverage.xml
-.coverage
+.dmypy.json
+
+# ── Secrets and environment files ─────────────────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Local databases (dev/test artifacts — not workfolder data) ────────────────
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Tool caches ───────────────────────────────────────────────────────────────
 .citnega_cache/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Claude Code (AI assistant tooling) ───────────────────────────────────────
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
+# ── GitHub Actions (auto-generated, not hand-authored) ───────────────────────
 .github/workflows/
 
-# Specifications / docs that don't belong in version control
+# ── Specifications / docs that don't belong in version control ────────────────
 citnega_technical_specification.txt
 specs/
 *.spec.txt
 
-# User workspace — lives outside the repo at citnega_workfolder/
+# ── Non-project office and presentation files ─────────────────────────────────
+*.pptx
+*.ppt
+
+# ── User workspace — lives outside the repo at citnega_workfolder/ ────────────
 /memory/
 /agents/
 /tools/

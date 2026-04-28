@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,9 @@ class SessionConfig(BaseModel):
     max_context_tokens: int = 8192
     approval_timeout_seconds: float = 300
     tags: list[str] = Field(default_factory=list)
+    # "interactive" sessions enforce one-run-at-a-time.
+    # "autonomous" sessions allow concurrent background runs.
+    session_type: Literal["interactive", "autonomous"] = "interactive"
 
 
 class Session(BaseModel):

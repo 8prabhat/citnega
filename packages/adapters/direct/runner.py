@@ -18,9 +18,31 @@ import asyncio
 from datetime import UTC, datetime
 import json
 import os
+import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 import uuid
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+_MODE_TOOL_EXCLUSIONS: dict[str, frozenset[str]] = {
+    "chat":     frozenset({"port_scanner", "network_recon", "ssl_tls_audit", "dns_recon", "network_vuln_scan", "perf_profiler", "memory_inspector"}),
+    "code":     frozenset({"pivot_table", "web_scraper", "ocr_image"}),
+    "research": frozenset({"run_shell", "edit_file", "write_file", "memory_inspector"}),
+    "review":   frozenset({"run_shell", "web_scraper"}),
+}
+
+
+def _strip_thinking_blocks(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
+
+
+def _compress_tool_result(msg: dict, tool_name: str = "") -> dict:
+    content = msg.get("content", "")
+    if not content or len(content) <= 256:
+        return msg
+    stub = content[:64].replace("\n", " ")
+    return {**msg, "content": f"[{tool_name or 'tool'}: {len(content)} chars → {stub}…]"}
 
 from citnega.packages.capabilities import callable_to_descriptor
 from citnega.packages.config.loaders import load_settings
@@ -122,6 +144,7 @@ class DirectModelRunner(IFrameworkRunner):
         self._cancelled = False
         self._paused = False
         self._current_model_id: str = ""
+        self._current_mode_name: str = "chat"   # updated each turn by auto-detect
         self._max_tool_rounds = max_tool_rounds
         # Injected ModelGateway (routing + rate-limiting). Falls back to
         # _RunnerModelGateway (direct ProviderFactory) when not provided.
@@ -220,8 +243,48 @@ class DirectModelRunner(IFrameworkRunner):
         provider, model_id = self._resolve_provider(model_id)
         self._current_model_id = model_id
 
-        # 3. Augment system prompt with session mode + phase
-        mode = get_mode(self._conv.mode_name)
+        # 2b. Determine session type — used for mode selection, tool filtering,
+        #     round budget, and replan defaults throughout this turn.
+        _is_autonomous = (
+            getattr(self._session.config, "session_type", "interactive") == "autonomous"
+        )
+
+        # 2c. Auto-detect effective mode for this turn via keyword classification.
+        #     Autonomous sessions always run in "autonomous" mode.
+        #     Interactive sessions switch modes when IntentClassifier is confident
+        #     — the session's persisted mode remains unchanged (per-turn override only).
+        effective_mode_name = self._conv.mode_name
+        _auto_switched_mode: str | None = None
+        if _is_autonomous:
+            effective_mode_name = "autonomous"
+        else:
+            _detected = self._detect_mode(user_input)
+            if _detected and _detected != effective_mode_name:
+                effective_mode_name = _detected
+                _auto_switched_mode = _detected
+
+        if _auto_switched_mode or _is_autonomous:
+            runtime_logger.debug(
+                "auto_mode_switch",
+                session_id=session_id,
+                from_mode=self._conv.mode_name,
+                to_mode=effective_mode_name,
+            )
+            from citnega.packages.protocol.events.routing import ModeAutoSwitchedEvent
+            await event_queue.put(
+                ModeAutoSwitchedEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    turn_id=turn_id,
+                    from_mode=self._conv.mode_name,
+                    to_mode=effective_mode_name,
+                    is_autonomous=_is_autonomous,
+                )
+            )
+
+        # 3. Augment system prompt with effective mode + phase
+        self._current_mode_name = effective_mode_name
+        mode = get_mode(effective_mode_name)
         turn_temperature = mode.temperature
         phase = self._conv.plan_phase
         base_prompt = (
@@ -233,7 +296,15 @@ class DirectModelRunner(IFrameworkRunner):
         except TypeError:
             system_prompt = mode.augment_system_prompt(base_prompt)
 
-        # 3b. Auto-activate skills from trigger matching (session-scoped, non-persistent)
+        # 3b. Inject planning hint when IntentClassifier flagged needs_planning.
+        # This nudges the model to invoke planner_agent / orchestrator_agent
+        # proactively rather than jumping straight to a direct answer.
+        if not _is_autonomous:
+            _planning_hint = self._planning_hint(user_input)
+            if _planning_hint:
+                system_prompt = system_prompt + _planning_hint
+
+        # 3c. Auto-activate skills from trigger matching (session-scoped, non-persistent)
         try:
             matched = self._trigger_matcher.match(user_input)
             if matched:
@@ -244,18 +315,18 @@ class DirectModelRunner(IFrameworkRunner):
         except Exception:
             pass
 
-        # 3b. Inject strategy context (active skills + mental model clauses)
+        # 3d. Inject strategy context (active skills + mental model clauses)
         _token_budget = int(context.metadata.get("token_budget_remaining", 8000)) if hasattr(context, "metadata") and context.metadata else 8000
         strategy_block = self._build_strategy_context(token_budget=_token_budget)
         if strategy_block:
             system_prompt = system_prompt + strategy_block
 
-        # 3c. Inject ambient workspace context (cwd, git branch/status, time)
+        # 3e. Inject ambient workspace context (cwd, git branch/status, time)
         ambient_block = self._build_ambient_context()
         if ambient_block:
             system_prompt = system_prompt + ambient_block
 
-        # 3d. Inject KB context sources into the system prompt
+        # 3f. Inject KB context sources into the system prompt
         kb_sources = [s for s in (context.sources or []) if s.source_type == "kb"]
         if kb_sources:
             kb_block = "\n\n".join(s.content for s in kb_sources)
@@ -290,13 +361,19 @@ class DirectModelRunner(IFrameworkRunner):
             else (entry.thinking if entry is not None else False)
         )
 
-        # 6. Build tool schemas for function calling
-        tools_schema = self._build_tools_schema()
+        # 6. Build tool schemas for function calling.
+        # Autonomous sessions bypass mode-based exclusions — they need the full
+        # tool surface to complete long-running multi-step goals unattended.
+        tools_schema = self._build_tools_schema(
+            mode_name=None if _is_autonomous else effective_mode_name
+        )
 
         # 7. Multi-round tool-calling loop
-        # Mode can declare a higher round budget (e.g. explore=12, research=15).
-        # self._max_tool_rounds is the constructor default; mode may raise it.
+        # Autonomous sessions get a much higher budget — they may chain many
+        # tools across a long-running goal without user intervention.
         effective_rounds = max(self._max_tool_rounds, mode.max_tool_rounds)
+        if _is_autonomous:
+            effective_rounds = max(effective_rounds, 30)
         full_response: list[str] = []
         # Track whether any thinking was emitted this round so we can close it.
         round_had_thinking = False
@@ -460,6 +537,16 @@ class DirectModelRunner(IFrameworkRunner):
                     )
                 )
 
+            # Compress older tool messages (rounds ≥ 2) to reclaim context budget.
+            # Keep the last 2 tool messages verbatim.
+            if _round >= 1:
+                tool_indices = [i for i, m in enumerate(current_messages) if m.role == "tool"]
+                for idx in tool_indices[:-2]:
+                    old = current_messages[idx]
+                    compressed = _compress_tool_result({"content": old.content}, tool_name="tool")
+                    if compressed["content"] != old.content:
+                        current_messages[idx] = old.model_copy(update={"content": compressed["content"]})
+
         # 8. Synthesis pass.
         #
         # Runs when the tool-calling loop produced no visible text.  The root
@@ -594,8 +681,9 @@ class DirectModelRunner(IFrameworkRunner):
                 )
 
         # 9. Persist assistant reply (user message was already saved in step 4)
+        # Strip thinking blocks from persisted copy — stream output is unchanged.
         assistant_reply = "".join(full_response)
-        await self._conv.add_message("assistant", assistant_reply)
+        await self._conv.add_message("assistant", _strip_thinking_blocks(assistant_reply))
 
         # 10. Auto-persist research/explore findings to KB (best-effort)
         if mode.name in ("research", "explore") and len(assistant_reply) > 200:
@@ -916,12 +1004,19 @@ class DirectModelRunner(IFrameworkRunner):
 
     # ── Tool calling helpers ──────────────────────────────────────────────────
 
-    def _build_tools_schema(self) -> list[dict]:
-        """Convert registered tools to OpenAI function-calling schema."""
+    def _build_tools_schema(self, mode_name: str | None = None) -> list[dict]:
+        """Convert registered tools to OpenAI function-calling schema.
+
+        Tools excluded by _MODE_TOOL_EXCLUSIONS for the current mode are
+        omitted — saves ~1500 tokens/turn in non-security modes.
+        """
         if not self._tools:
             return []
+        excluded = _MODE_TOOL_EXCLUSIONS.get(mode_name or self._conv.mode_name, frozenset())
         schemas = []
         for tool in self._tools.values():
+            if tool.name in excluded:
+                continue
             try:
                 meta = tool.get_metadata()
                 # Keep only the fields Ollama/OpenAI expect
@@ -993,7 +1088,7 @@ class DirectModelRunner(IFrameworkRunner):
                 session_config=self._session.config,
                 model_gateway=gateway,
                 capability_registry=self._capability_registry,
-                mode_temperature=get_mode(self._conv.mode_name).temperature,
+                mode_temperature=get_mode(self._current_mode_name).temperature,
             )
             result = await tool.invoke(input_obj, ctx)
             if result.success and result.output:
@@ -1016,6 +1111,58 @@ class DirectModelRunner(IFrameworkRunner):
 
         return output_text
 
+    # ── Planning hint injection ───────────────────────────────────────────────
+
+    _PLANNING_HINT = (
+        "\n\n## Task Complexity Detected\n"
+        "This request appears to require multiple steps. "
+        "Consider invoking `planner_agent` to decompose it into a step-by-step plan "
+        "before executing, or `orchestrator_agent` for parallel multi-agent execution."
+    )
+
+    @classmethod
+    def _planning_hint(cls, user_input: str) -> str | None:
+        """Return a planning nudge if IntentClassifier signals needs_planning."""
+        try:
+            from citnega.packages.agents.core.intent_classifier import IntentClassifierAgent
+
+            result = IntentClassifierAgent._fast_classify(user_input)
+            if result and result.needs_planning and result.confidence >= 0.80:
+                return cls._PLANNING_HINT
+        except Exception:
+            pass
+        return None
+
+    # ── Auto-mode detection ───────────────────────────────────────────────────
+
+    # Maps IntentClassifier recommended_mode → mode name used by get_mode()
+    _RECOMMENDED_TO_MODE: dict[str, str] = {
+        "code":          "code",
+        "research":      "research",
+        "auto_research": "auto_research",
+        "plan":          "plan",
+        "explore":       "explore",
+        "chat":          "chat",
+    }
+
+    @classmethod
+    def _detect_mode(cls, user_input: str) -> str | None:
+        """
+        Run keyword-based intent classification and return a mode override if
+        the classifier is confident (≥ 0.85). Returns None when no override
+        is needed (confidence too low or mode is "auto").
+        """
+        try:
+            from citnega.packages.agents.core.intent_classifier import IntentClassifierAgent
+
+            result = IntentClassifierAgent._fast_classify(user_input)
+            if result is None or result.confidence < 0.85:
+                return None
+            mode_name = cls._RECOMMENDED_TO_MODE.get(result.recommended_mode.value)
+            return mode_name  # None when recommended_mode is "auto"
+        except Exception:
+            return None
+
     # ── IFrameworkRunner stubs ────────────────────────────────────────────────
 
     async def pause(self, run_id: str) -> None:
@@ -1028,31 +1175,105 @@ class DirectModelRunner(IFrameworkRunner):
         self._cancelled = True
 
     async def get_state_snapshot(self) -> StateSnapshot:
+        ckpt_dir = self._conv.session_dir / "checkpoints"
+        checkpoint_available = ckpt_dir.exists() and any(ckpt_dir.glob("*.json"))
         return StateSnapshot(
             session_id=self._session.config.session_id,
             current_run_id=None,
             active_callable=None,
             run_state=RunState.EXECUTING,
-            context_token_count=0,
-            checkpoint_available=False,
+            context_token_count=self._conv.token_estimate,
+            checkpoint_available=checkpoint_available,
             framework_name="direct",
             captured_at=datetime.now(tz=UTC),
         )
 
     async def save_checkpoint(self, run_id: str) -> CheckpointMeta:
-        return CheckpointMeta(
-            checkpoint_id=str(uuid.uuid4()),
-            session_id=self._session.config.session_id,
+        checkpoint_id = str(uuid.uuid4())
+        session_id = self._session.config.session_id
+
+        state: dict = {
+            "run_id": run_id,
+            "messages": self._conv.get_messages()[-40:],
+            "active_model_id": self._conv.active_model_id,
+            "mode_name": self._conv.mode_name,
+            "active_skills": list(self._conv.active_skills or []),
+            "plan_phase": self._conv.plan_phase,
+            "thinking_enabled": self._conv.thinking_enabled,
+        }
+        state_json = json.dumps(state, ensure_ascii=False)
+
+        ckpt_dir = self._conv.session_dir / "checkpoints"
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_path = ckpt_dir / f"{checkpoint_id}.json"
+        ckpt_path.write_text(state_json, encoding="utf-8")
+
+        meta = CheckpointMeta(
+            checkpoint_id=checkpoint_id,
+            session_id=session_id,
             run_id=run_id,
             created_at=datetime.now(tz=UTC),
             framework_name="direct",
-            file_path="/dev/null",
-            size_bytes=0,
-            state_summary="{}",
+            file_path=str(ckpt_path),
+            size_bytes=len(state_json.encode()),
+            state_summary=state_json[:500],
         )
+        runtime_logger.info(
+            "direct_runner_checkpoint_saved",
+            session_id=session_id,
+            run_id=run_id,
+            checkpoint_id=checkpoint_id,
+            size_bytes=meta.size_bytes,
+        )
+        return meta
 
     async def restore_checkpoint(self, checkpoint_id: str) -> None:
-        pass
+        """Restore conversation state from a previously saved checkpoint file."""
+        import pathlib
+
+        # Derive expected checkpoint path from session dir
+        ckpt_path = self._conv.session_dir / "checkpoints" / f"{checkpoint_id}.json"
+        if not ckpt_path.exists():
+            runtime_logger.warning(
+                "direct_runner_checkpoint_not_found",
+                checkpoint_id=checkpoint_id,
+                path=str(ckpt_path),
+            )
+            return
+
+        try:
+            state = json.loads(ckpt_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            runtime_logger.error(
+                "direct_runner_checkpoint_load_failed",
+                checkpoint_id=checkpoint_id,
+                error=str(exc),
+            )
+            return
+
+        # Restore conversation state fields
+        if messages := state.get("messages"):
+            async with self._conv._lock:
+                self._conv._data["messages"] = messages
+        if model_id := state.get("active_model_id"):
+            await self._conv.set_active_model(model_id)
+        if mode := state.get("mode_name"):
+            await self._conv.set_mode(mode)
+        if skills := state.get("active_skills"):
+            self._conv.set_active_skills(skills)
+        if phase := state.get("plan_phase"):
+            self._conv.set_plan_phase(phase)
+        thinking = state.get("thinking_enabled")
+        if thinking is not None:
+            await self._conv.set_thinking_enabled(thinking)
+
+        await self._conv.save()
+        runtime_logger.info(
+            "direct_runner_checkpoint_restored",
+            checkpoint_id=checkpoint_id,
+            session_id=self._session.config.session_id,
+            messages_restored=len(state.get("messages", [])),
+        )
 
     # ── IFrameworkRunner typed accessors ─────────────────────────────────────
 

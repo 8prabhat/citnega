@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from citnega.packages.protocol.callables.context import CallContext
     from citnega.packages.protocol.callables.interfaces import IStreamable
 
-_MAX_SUPERVISOR_ROUNDS_DEFAULT = 3
+_MAX_SUPERVISOR_ROUNDS_DEFAULT = 6
 
 
 def _get_max_supervisor_rounds() -> int:
@@ -120,8 +120,6 @@ class ConversationAgent(BaseCoreAgent):
     # ── Entry point ───────────────────────────────────────────────────────────
 
     async def _execute(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
-        if self._nextgen_planning_enabled():
-            return await self._execute_nextgen(input, context)
         return await self._execute_legacy(input, context)
 
     async def _execute_legacy(self, input: ConversationInput, context: CallContext) -> ConversationOutput:
@@ -130,6 +128,32 @@ class ConversationAgent(BaseCoreAgent):
         if router is None or context.model_gateway is None:
             # No router or no model — skip supervisor, go direct
             return await self._direct_response(input, context)
+
+        # ── Fast pre-classification (keyword-based, zero LLM tokens) ──────────
+        # If IntentClassifier is wired and gives a high-confidence suggestion,
+        # skip the router round-trip and jump straight to the recommended agent.
+        intent_classifier = self._get_peer("intent_classifier")
+        if intent_classifier is not None:
+            try:
+                from citnega.packages.agents.core.intent_classifier import IntentClassifierInput
+
+                classify_input = IntentClassifierInput(user_input=input.user_input)
+                classify_ctx = context.child(self.name, self.callable_type)
+                classify_result = await intent_classifier.invoke(classify_input, classify_ctx)
+
+                if (
+                    classify_result.success
+                    and classify_result.output is not None
+                    and classify_result.output.confidence >= 0.85
+                    and classify_result.output.suggested_first_agent
+                ):
+                    suggested = classify_result.output.suggested_first_agent
+                    specialist = self._get_peer(suggested)
+                    if specialist is not None and not classify_result.output.needs_orchestration:
+                        result_text = await self._invoke_specialist(specialist, input.user_input, [], context)
+                        return ConversationOutput(response=result_text, routed_to=suggested)
+            except Exception:
+                pass
 
         accumulated: list[tuple[str, str]] = []  # [(agent_name, result_text)]
 
@@ -152,7 +176,9 @@ class ConversationAgent(BaseCoreAgent):
             if specialist is None:
                 break
 
-            result_text = await self._invoke_specialist(specialist, input.user_input, context)
+            result_text = await self._invoke_specialist(
+                specialist, input.user_input, [r for _, r in accumulated], context
+            )
             accumulated.append((route.agent, result_text))
 
         if accumulated:
@@ -181,7 +207,7 @@ class ConversationAgent(BaseCoreAgent):
         if classification.capability_id:
             specialist = self._get_peer(classification.capability_id)
             if specialist is not None:
-                result_text = await self._invoke_specialist(specialist, input.user_input, context)
+                result_text = await self._invoke_specialist(specialist, input.user_input, [], context)
                 if result_text:
                     return ConversationOutput(response=result_text, routed_to=classification.capability_id)
 
@@ -192,7 +218,7 @@ class ConversationAgent(BaseCoreAgent):
             if route is not None and not route.is_complete and route.agent not in {"none", self.name, "conversation_agent", ""}:
                 specialist = self._get_peer(route.agent)
                 if specialist is not None:
-                    result_text = await self._invoke_specialist(specialist, input.user_input, context)
+                    result_text = await self._invoke_specialist(specialist, input.user_input, [], context)
                     if result_text:
                         return ConversationOutput(response=result_text, routed_to=route.agent)
 
@@ -233,13 +259,20 @@ class ConversationAgent(BaseCoreAgent):
         self,
         specialist: IStreamable,
         user_input: str,
+        prior_results: list[str],
         context: CallContext,
     ) -> str:
-        """Invoke a specialist with a best-effort input and return text result."""
+        """Invoke a specialist with prior specialist outputs appended as context."""
         child_ctx = context.child(self.name, self.callable_type)
         try:
+            enriched_input = user_input
+            if prior_results:
+                prior_block = "\n\n".join(
+                    f"[Prior result {i + 1}]: {r}" for i, r in enumerate(prior_results)
+                )
+                enriched_input = f"{user_input}\n\nContext from earlier steps:\n{prior_block}"
             input_obj = specialist.input_schema.model_validate(
-                _build_specialist_input(specialist.input_schema, user_input)
+                _build_specialist_input(specialist.input_schema, enriched_input)
             )
             result = await specialist.invoke(input_obj, child_ctx)
             if result.success and result.output:

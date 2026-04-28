@@ -40,7 +40,7 @@ from citnega.packages.protocol.events.planning import (
 )
 from citnega.packages.protocol.events.rate_limit import RateLimitEvent
 from citnega.packages.protocol.events.remote import RemoteExecutionEvent
-from citnega.packages.protocol.events.routing import RouterDecisionEvent
+from citnega.packages.protocol.events.routing import ModeAutoSwitchedEvent, RouterDecisionEvent
 from citnega.packages.protocol.events.streaming import TokenEvent
 from citnega.packages.protocol.events.thinking import ThinkingEvent
 
@@ -74,6 +74,7 @@ CanonicalEvent = (
     | RateLimitEvent
     | RemoteExecutionEvent
     | RouterDecisionEvent
+    | ModeAutoSwitchedEvent
     | StartupDiagnosticsEvent
     | GenericFrameworkEvent
 )
@@ -101,6 +102,7 @@ __all__ = [
     "PlanValidatedEvent",
     "RateLimitEvent",
     "RemoteExecutionEvent",
+    "ModeAutoSwitchedEvent",
     "RouterDecisionEvent",
     "RunCompleteEvent",
     "RunStateEvent",

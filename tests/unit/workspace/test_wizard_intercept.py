@@ -168,4 +168,4 @@ def test_slash_registry_includes_workspace_skill_command() -> None:
     assert "createskill" in registry
     assert "createworkflow" in registry
     assert "creatementalmodel" in registry
-    assert len(registry) == 23  # 21 original + skills + skill
+    assert len(registry) == 24  # 21 original + skills + skill + setup

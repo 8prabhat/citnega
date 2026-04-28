@@ -35,3 +35,29 @@ class RouterDecisionEvent(BaseEvent):
     rationale: str = ""
     is_complete: bool = False
     fallback: bool = False
+
+
+class ModeAutoSwitchedEvent(BaseEvent):
+    """
+    Emitted at the start of a turn when auto-mode detection selects a mode
+    that differs from the session's persisted mode.
+
+    This is a per-turn override — the session mode is NOT mutated.
+    Consumers (e.g. TUI ContextBar) use this to show the effective mode
+    for the current turn.
+
+    Fields
+    ------
+    from_mode   – The session's persisted mode before the override.
+    to_mode     – The mode used for this turn (auto-detected).
+    confidence  – Classifier confidence (0–1).
+    rationale   – One-sentence reason from the intent classifier.
+    is_autonomous – True when the session is autonomous (always switches to "autonomous").
+    """
+
+    event_type: str = "ModeAutoSwitchedEvent"
+    from_mode: str
+    to_mode: str
+    confidence: float = 1.0
+    rationale: str = ""
+    is_autonomous: bool = False

@@ -30,12 +30,13 @@ class RunManager:
     def __init__(self, run_repo: RunRepository) -> None:
         self._repo = run_repo
 
-    async def create(self, session_id: str) -> RunSummary:
+    async def create(self, session_id: str, user_input: str | None = None) -> RunSummary:
         run = RunSummary(
             run_id=str(uuid.uuid4()),
             session_id=session_id,
             state=RunState.PENDING,
             started_at=datetime.now(tz=UTC),
+            user_input=user_input,
         )
         await self._repo.save(run)
         runtime_logger.info(
@@ -94,3 +95,43 @@ class RunManager:
 
     async def list_for_session(self, session_id: str, limit: int = 50) -> list[RunSummary]:
         return await self._repo.list(session_id=session_id, limit=limit)
+
+    async def list_stale(self) -> list[RunSummary]:
+        """Return runs stuck in PENDING/EXECUTING from a previous process."""
+        return await self._repo.list_stale()
+
+    async def cleanup_stale_runs(self) -> list[RunSummary]:
+        """
+        Transition stale PENDING/EXECUTING runs to FAILED on startup.
+
+        Returns the list of runs that were cleaned up so the caller can
+        optionally re-enqueue them.
+        """
+        stale = await self._repo.list_stale()
+        for run in stale:
+            try:
+                # Force-update to FAILED bypassing the FSM guard — the run
+                # may be in a state that doesn't allow a normal transition
+                # (e.g. EXECUTING → FAILED is allowed, PENDING → FAILED is not).
+                # We patch the stored state directly.
+                cleaned = run.model_copy(
+                    update={
+                        "state": RunState.FAILED,
+                        "error": "process_restart: run interrupted by shutdown",
+                        "finished_at": datetime.now(tz=UTC),
+                    }
+                )
+                await self._repo.save(cleaned)
+                runtime_logger.warning(
+                    "stale_run_cleaned",
+                    run_id=run.run_id,
+                    session_id=run.session_id,
+                    was_state=run.state.value,
+                )
+            except Exception as exc:
+                runtime_logger.error(
+                    "stale_run_cleanup_failed",
+                    run_id=run.run_id,
+                    error=str(exc),
+                )
+        return stale

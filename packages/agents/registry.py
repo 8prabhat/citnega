@@ -93,6 +93,7 @@ class AgentRegistry:
         from citnega.packages.agents.core.orchestrator_agent import OrchestratorAgent
         from citnega.packages.agents.core.planner_agent import PlannerAgent
         from citnega.packages.agents.core.reasoning import ReasoningAgent
+        from citnega.packages.agents.core.replanner import RePlanner
         from citnega.packages.agents.core.retriever import RetrieverAgent
         from citnega.packages.agents.core.router import RouterAgent
         from citnega.packages.agents.core.tool_executor import ToolExecutorAgent
@@ -119,6 +120,7 @@ class AgentRegistry:
             ConversationAgent,
             OrchestratorAgent,
             PlannerAgent,
+            RePlanner,
             # Domain
             *ALL_DOMAIN_AGENTS,
             # Roles

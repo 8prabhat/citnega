@@ -1,12 +1,11 @@
 """
-Unit tests for the mode registry (Phase 8, Step 8.2).
+Unit tests for the mode registry.
 
 Verifies:
-- All 7 modes are registered
+- All registered modes are present
 - get_mode() returns the correct mode
 - get_mode() falls back to ChatMode for unknown names
-- all_modes() returns all 7 modes in stable order
-- TUI ModeCommand reads from all_modes()
+- all_modes() returns all modes in stable order
 - Each mode has a non-empty description
 """
 
@@ -16,10 +15,13 @@ import pytest
 
 from citnega.packages.protocol.modes import VALID_MODES, all_modes, get_mode
 
-_EXPECTED_MODES = {"chat", "plan", "explore", "research", "code", "review", "operate"}
+_EXPECTED_MODES = {
+    "chat", "plan", "explore", "research",
+    "code", "review", "operate", "autonomous", "auto_research",
+}
 
 
-def test_all_seven_modes_registered() -> None:
+def test_all_modes_registered() -> None:
     registered = {m.name for m in all_modes()}
     assert registered == _EXPECTED_MODES, (
         f"Missing modes: {_EXPECTED_MODES - registered}. "
@@ -94,7 +96,11 @@ def test_explore_mode_has_higher_tool_rounds() -> None:
     assert explore.max_tool_rounds >= 12
 
 
-def test_research_mode_has_highest_tool_rounds() -> None:
+def test_auto_research_mode_has_most_rounds() -> None:
+    assert get_mode("auto_research").max_tool_rounds >= 40
+
+
+def test_research_mode_rounds_above_explore() -> None:
     research = get_mode("research")
     explore = get_mode("explore")
     assert research.max_tool_rounds >= explore.max_tool_rounds
@@ -186,3 +192,31 @@ def test_operate_mode_has_verification_mandate_in_prompt() -> None:
     prompt = get_mode("operate").augment_system_prompt("base")
     lower = prompt.lower()
     assert "run_shell" in lower or "verify" in lower
+
+
+# ── AutoResearchMode-specific tests ──────────────────────────────────────────
+
+
+def test_auto_research_mode_temperature_is_moderate() -> None:
+    t = get_mode("auto_research").temperature
+    assert 0.3 <= t <= 0.5, f"auto_research.temperature={t} should be in [0.3, 0.5]"
+
+
+def test_auto_research_mode_prompt_mentions_kb_and_verify() -> None:
+    prompt = get_mode("auto_research").augment_system_prompt("base")
+    lower = prompt.lower()
+    assert "read_kb" in lower
+    assert "verify" in lower or "cross" in lower
+    assert "provenance" in lower or "citation" in lower or "source" in lower
+
+
+def test_auto_research_mode_prompt_mentions_phases() -> None:
+    prompt = get_mode("auto_research").augment_system_prompt("base")
+    lower = prompt.lower()
+    assert "decompose" in lower or "phase 1" in lower
+    assert "synthesise" in lower or "synthesize" in lower or "phase 9" in lower
+
+
+def test_auto_research_mode_has_display_label() -> None:
+    mode = get_mode("auto_research")
+    assert mode.display_label, "auto_research should have a non-empty display_label"

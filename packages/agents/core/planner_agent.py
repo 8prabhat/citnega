@@ -95,9 +95,7 @@ class PlannerAgent(BaseCoreAgent):
     )
 
     async def _execute(self, input: PlannerInput, context: CallContext) -> PlannerOutput:
-        if self._nextgen_planning_enabled():
-            return await self._execute_nextgen(input, context)
-        return await self._execute_legacy(input, context)
+        return await self._execute_nextgen(input, context)
 
     async def _execute_legacy(self, input: PlannerInput, context: CallContext) -> PlannerOutput:
         if context.model_gateway is None:
@@ -196,6 +194,46 @@ class PlannerAgent(BaseCoreAgent):
         )
 
     async def _execute_nextgen(self, input: PlannerInput, context: CallContext) -> PlannerOutput:
+        # Delegate genuine multi-step planning to OrchestratorAgent, which already
+        # has LLM-driven plan generation and DAG execution with retries + rollback.
+        orchestrator = self._get_peer("orchestrator_agent")
+        if orchestrator is not None:
+            return await self._delegate_to_orchestrator(orchestrator, input, context)
+
+        # Fallback: single-capability compiled plan (unit-test / isolated scenario).
+        return await self._execute_single_capability(input, context)
+
+    async def _delegate_to_orchestrator(
+        self,
+        orchestrator: object,
+        input: PlannerInput,
+        context: CallContext,
+    ) -> PlannerOutput:
+        """Hand off multi-step execution to OrchestratorAgent and map its output back."""
+        from citnega.packages.agents.core.orchestrator_agent import OrchestratorInput
+
+        orch_input = OrchestratorInput(
+            goal=input.goal,
+            auto_plan=True,
+            max_steps=max(2, input.max_steps),
+            rollback_on_failure=True,
+            fail_fast=False,
+        )
+        child_ctx = context.child(self.name, self.callable_type)
+        result = await orchestrator.invoke(orch_input, child_ctx)
+        if result.success and result.output:
+            orch = result.output
+            step_outputs = [r.output_excerpt or r.error or r.status for r in orch.step_results]
+            return PlannerOutput(
+                response=orch.response,
+                plan_steps=list(orch.plan),
+                step_outputs=step_outputs,
+            )
+        error_msg = result.error.message if result.error else "Orchestration failed."
+        return PlannerOutput(response=error_msg, plan_steps=[])
+
+    async def _execute_single_capability(self, input: PlannerInput, context: CallContext) -> PlannerOutput:
+        """Single-capability compiled plan — used when OrchestratorAgent is not wired."""
         from citnega.packages.capabilities import BuiltinCapabilityProvider, CapabilityRegistry
         from citnega.packages.execution import ExecutionEngine
         from citnega.packages.planning import (
@@ -207,25 +245,16 @@ class PlannerAgent(BaseCoreAgent):
 
         runtime_callables = self._discover_runtime_callables()
         if not runtime_callables:
-            return PlannerOutput(
-                response="(no capabilities available for planning)",
-                plan_steps=[],
-            )
+            return PlannerOutput(response="(no capabilities available for planning)", plan_steps=[])
 
         selected_capability = self._select_capability(input, runtime_callables)
         if selected_capability is None:
-            return PlannerOutput(
-                response="(unable to choose a capability for this goal)",
-                plan_steps=[],
-            )
+            return PlannerOutput(response="(unable to choose a capability for this goal)", plan_steps=[])
 
         registry = CapabilityRegistry()
         records, diagnostics = BuiltinCapabilityProvider().load(runtime_callables)
         if diagnostics.has_required_failures:
-            return PlannerOutput(
-                response="(planner capability registry bootstrap failed)",
-                plan_steps=[],
-            )
+            return PlannerOutput(response="(planner capability registry bootstrap failed)", plan_steps=[])
         registry.register_many(records, overwrite=True)
 
         strategy = StrategySpec(
@@ -286,10 +315,7 @@ class PlannerAgent(BaseCoreAgent):
             fail_fast=True,
             rollback_on_failure=True,
         )
-        plan_steps = [
-            f"{step.step_id}: {step.capability_id}"
-            for step in compiled_plan.steps
-        ]
+        plan_steps = [f"{step.step_id}: {step.capability_id}" for step in compiled_plan.steps]
         step_outputs = [
             item.output_excerpt or item.error or item.status
             for item in execution_result.step_results
@@ -297,11 +323,13 @@ class PlannerAgent(BaseCoreAgent):
         response = self._build_execution_response(execution_result.step_results)
         if not response:
             response = execution_result.response
-        return PlannerOutput(
-            response=response,
-            plan_steps=plan_steps,
-            step_outputs=step_outputs,
-        )
+        return PlannerOutput(response=response, plan_steps=plan_steps, step_outputs=step_outputs)
+
+    def _get_peer(self, name: str) -> object | None:
+        for c in self.list_sub_callables():
+            if c.name == name:
+                return c
+        return None
 
     def _discover_runtime_callables(self) -> dict[str, object]:
         callables: dict[str, object] = {}

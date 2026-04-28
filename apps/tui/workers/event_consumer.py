@@ -19,6 +19,7 @@ from citnega.packages.protocol.events import (
     CallableEndEvent,
     CallableStartEvent,
     CanonicalEvent,
+    ModeAutoSwitchedEvent,
     RunCompleteEvent,
     RunStateEvent,
     ThinkingEvent,
@@ -139,6 +140,17 @@ class RunPhaseChanged(Message):
         self.phase = phase  # e.g. "context_assembling", "executing", "completed"
 
 
+class ModeAutoSwitched(Message):
+    """Emitted when the runner overrides the session mode for a single turn."""
+
+    def __init__(self, run_id: str, from_mode: str, to_mode: str, is_autonomous: bool) -> None:
+        super().__init__()
+        self.run_id = run_id
+        self.from_mode = from_mode
+        self.to_mode = to_mode
+        self.is_autonomous = is_autonomous
+
+
 # ── Worker ────────────────────────────────────────────────────────────────────
 
 
@@ -250,6 +262,16 @@ class EventConsumerWorker:
                     event.approval_id,
                     event.callable_name,
                     event.input_summary,
+                )
+            )
+
+        elif isinstance(event, ModeAutoSwitchedEvent):
+            app.post_message(
+                ModeAutoSwitched(
+                    self._run_id,
+                    from_mode=event.from_mode,
+                    to_mode=event.to_mode,
+                    is_autonomous=event.is_autonomous,
                 )
             )
 

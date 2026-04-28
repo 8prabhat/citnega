@@ -3,12 +3,14 @@ Citnega CLI — entry point.
 
 Command tree::
 
-    citnega session  new|list|delete|show
-    citnega run      --session <id> --prompt <text>
-    citnega approve  <approval_id> [--deny]
-    citnega kb       add|search|export
-    citnega config   validate|show
+    citnega session   new|list|delete|show
+    citnega run       --session <id> --prompt <text>
+    citnega approve   <approval_id> [--deny]
+    citnega kb        add|search|export
+    citnega config    validate|show
     citnega migrate
+    citnega jobs      submit|list|logs|cancel|restart
+    citnega schedule  add|once|list|show|enable|disable|delete
 
 The CLI depends exclusively on IApplicationService — no direct imports of
 runtime, storage, or adapter internals.
@@ -22,11 +24,13 @@ from citnega.apps.cli.commands import (
     approve,
     config,
     doctor,
+    jobs,
     kb,
     migrate,
     remote,
     replay,
     run,
+    schedule,
     session,
 )
 
@@ -46,6 +50,8 @@ app.add_typer(migrate.app, name="migrate", help="Run database migrations.")
 app.add_typer(doctor.app, name="doctor", help="Runtime self-diagnostics (check wiring and config).")
 app.add_typer(remote.app, name="remote", help="Reference remote worker service controls.")
 app.add_typer(replay.app, name="replay", help="Replay events from a persisted run.")
+app.add_typer(jobs.app, name="jobs", help="Submit and manage autonomous agent jobs.")
+app.add_typer(schedule.app, name="schedule", help="Manage autonomous agent schedules (cron and one-shot).")
 
 
 def main() -> None:

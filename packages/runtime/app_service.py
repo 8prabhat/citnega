@@ -65,6 +65,7 @@ class ApplicationService(IApplicationService):
         enforcer: IPolicyEnforcer | None = None,
         tracer: ITracer | None = None,
         app_home: Path | None = None,
+        scheduler: Any | None = None,
     ) -> None:
         self._runtime = runtime
         self._emitter = emitter
@@ -81,6 +82,12 @@ class ApplicationService(IApplicationService):
         self._tracer = tracer
         self._app_home = app_home
         self._capability_registry_cache: CapabilityRegistry | None = None
+        self._scheduler = scheduler
+
+    @property
+    def scheduler(self) -> Any | None:
+        """The SchedulerService instance, if available."""
+        return self._scheduler
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -221,6 +228,20 @@ class ApplicationService(IApplicationService):
 
     async def list_runs(self, session_id: str, limit: int = 50) -> list[RunSummary]:
         return await self._runtime.list_runs_for_session(session_id, limit=limit)
+
+    async def list_all_runs(self, limit: int = 100) -> list[RunSummary]:
+        """Return recent runs across all sessions — used by the Jobs Terminal."""
+        from citnega.packages.observability.logging_setup import runtime_logger
+        sessions = await self._runtime.list_sessions(limit=200)
+        runs: list[RunSummary] = []
+        for s in sessions:
+            try:
+                batch = await self._runtime.list_runs_for_session(s.config.session_id, limit=20)
+                runs.extend(batch)
+            except Exception as exc:
+                runtime_logger.debug("list_all_runs_session_failed", session_id=s.config.session_id, error=str(exc))
+        runs.sort(key=lambda r: r.started_at, reverse=True)
+        return runs[:limit]
 
     # ── Run control ────────────────────────────────────────────────────────────
 

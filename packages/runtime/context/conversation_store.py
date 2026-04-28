@@ -99,6 +99,10 @@ class ConversationStore:
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] = {}
 
+    @property
+    def session_dir(self) -> "Path":
+        return self._path.parent
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def load(self) -> None:

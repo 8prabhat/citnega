@@ -205,6 +205,33 @@ class ToolRegistry:
         from citnega.packages.tools.security.user_audit import UserAuditTool
         from citnega.packages.tools.security.vuln_scanner import VulnScannerTool
 
+        # ── Tier-1 integration tools ──────────────────────────────────────────
+        from citnega.packages.tools.builtin.agent_delegate import AgentDelegateTool
+        from citnega.packages.tools.builtin.browser_session import BrowserSessionTool
+        from citnega.packages.tools.builtin.calendar_query import CalendarQueryTool
+        from citnega.packages.tools.builtin.cloud_ops import CloudOpsTool
+        from citnega.packages.tools.builtin.email_reader import EmailReaderTool
+        from citnega.packages.tools.builtin.github_ops import GitHubOpsTool
+        from citnega.packages.tools.builtin.jira_ops import JiraOpsTool
+        from citnega.packages.tools.builtin.linear_ops import LinearOpsTool
+        from citnega.packages.tools.builtin.mermaid_render import MermaidRenderTool
+        from citnega.packages.tools.builtin.prometheus_query import PrometheusQueryTool
+        from citnega.packages.tools.builtin.vault_secret import VaultSecretTool
+
+        instances += [
+            BrowserSessionTool(*self._deps()),
+            MermaidRenderTool(*self._deps()),
+            JiraOpsTool(*self._deps()),
+            GitHubOpsTool(*self._deps()),
+            VaultSecretTool(*self._deps()),
+            CloudOpsTool(*self._deps()),
+            EmailReaderTool(*self._deps()),
+            CalendarQueryTool(*self._deps()),
+            PrometheusQueryTool(*self._deps()),
+            LinearOpsTool(*self._deps()),
+            AgentDelegateTool(*self._deps()),
+        ]
+
         instances += [
             # ── Security: passive / local ─────────────────────────────────────
             OSFingerprintTool(*self._deps()),
