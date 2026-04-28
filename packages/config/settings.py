@@ -82,7 +82,7 @@ class ContextSettings(BaseSettings):
             "token_budget",
         ]
     )
-    recent_turns_count: int = 20
+    recent_turns_count: int = 10
     kb_retrieval_limit: int = 5
     # When True, a handler name in the config that cannot be resolved to a
     # known handler class raises a startup error.  When False (default),
@@ -311,14 +311,13 @@ class NextgenSettings(BaseSettings):
     """
     Feature gates for the Nextgen planning/execution stack.
 
-    All gates default to false so the legacy runtime remains the active path
-    until parity and rollout criteria are met.
+    Nextgen is the default active path; set env vars CITNEGA_NEXTGEN__*=false to revert.
     """
 
-    planning_enabled: bool = False
-    execution_enabled: bool = False
-    workflows_enabled: bool = False
-    skills_enabled: bool = False
+    planning_enabled: bool = True
+    execution_enabled: bool = True
+    workflows_enabled: bool = True
+    skills_enabled: bool = True
     parallel_execution_enabled: bool = True
 
     model_config = SettingsConfigDict(env_prefix="CITNEGA_NEXTGEN_")

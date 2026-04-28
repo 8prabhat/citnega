@@ -62,6 +62,8 @@ class RunSummary(BaseModel):
     turn_count: int = 0
     total_tokens: int = 0
     error: str | None = None
+    # Stored so stale PENDING runs can be replayed after a process restart.
+    user_input: str | None = None
 
 
 class StateSnapshot(BaseModel):

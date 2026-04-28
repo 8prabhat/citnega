@@ -31,6 +31,7 @@ class RunRepository(BaseRepository[RunSummary]):
             turn_count=row["turn_count"],
             total_tokens=row["total_tokens"],
             error=row.get("error_message"),
+            user_input=row.get("user_input"),
         )
 
     def _to_row(self, entity: RunSummary) -> dict[str, Any]:
@@ -43,6 +44,7 @@ class RunRepository(BaseRepository[RunSummary]):
             "turn_count": entity.turn_count,
             "total_tokens": entity.total_tokens,
             "error_message": entity.error,
+            "user_input": entity.user_input,
         }
 
     async def save(self, entity: RunSummary) -> RunSummary:
@@ -71,4 +73,12 @@ class RunRepository(BaseRepository[RunSummary]):
                 "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?",
                 (limit,),
             )
+        return [self._from_row(r) for r in rows]
+
+    async def list_stale(self) -> list[RunSummary]:
+        """Return runs stuck in PENDING or EXECUTING — survivors of a crash."""
+        rows = await self._db.fetchall(
+            "SELECT * FROM runs WHERE state IN (?, ?) ORDER BY started_at ASC",
+            ("pending", "executing"),
+        )
         return [self._from_row(r) for r in rows]

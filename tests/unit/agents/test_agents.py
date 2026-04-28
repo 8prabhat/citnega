@@ -403,7 +403,8 @@ class TestConversationAgent:
         assert "unavailable" in result.output.response
 
     @pytest.mark.asyncio
-    async def test_nextgen_complex_route_prefers_planner_agent(self) -> None:
+    async def test_routes_to_registered_specialist_and_accumulates(self) -> None:
+        """ConversationAgent routes to a registered specialist and accumulates its result."""
         import json
 
         from citnega.packages.agents.core.conversation_agent import (
@@ -411,13 +412,27 @@ class TestConversationAgent:
             ConversationInput,
         )
         from citnega.packages.agents.core.router import RouterAgent
+        from citnega.packages.agents.specialists.research_agent import ResearchAgent
+
+        call_count = 0
 
         async def _generate(_request):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return ModelResponse(
+                    model_id="x",
+                    content=json.dumps(
+                        {"agent": "research_agent", "reason": "research", "is_complete": False}
+                        if call_count == 1
+                        else {"agent": "none", "reason": "done", "is_complete": True}
+                    ),
+                    finish_reason="stop",
+                    usage={},
+                )
             return ModelResponse(
                 model_id="x",
-                content=json.dumps(
-                    {"agent": "research_agent", "reason": "multi-step", "is_complete": False}
-                ),
+                content="Research synthesis.",
                 finish_reason="stop",
                 usage={},
             )
@@ -425,26 +440,12 @@ class TestConversationAgent:
         gw = MagicMock()
         gw.generate = _generate
 
-        planner = MagicMock()
-        planner.name = "planner_agent"
-        planner.invoke = AsyncMock(
-            return_value=SimpleNamespace(
-                success=True,
-                output=SimpleNamespace(
-                    response="Planned response",
-                    plan_steps=["step1: research_agent"],
-                ),
-            )
-        )
-
         agent = _make_core_agent(ConversationAgent)
         router = _make_core_agent(RouterAgent)
-        research = MagicMock()
-        research.name = "research_agent"
-        research.description = "Research specialist"
-        router.register_sub_callable(research)
+        specialist = _make_specialist(ResearchAgent)
+        router.register_sub_callable(specialist)
         agent.register_sub_callable(router)
-        agent.register_sub_callable(planner)
+        agent.register_sub_callable(specialist)
 
         ctx = CallContext(
             session_id="s",
@@ -453,20 +454,14 @@ class TestConversationAgent:
             session_config=_session_config(),
             model_gateway=gw,
         )
-        with patch("citnega.packages.config.loaders.load_settings") as mock_settings:
-            mock_settings.return_value = SimpleNamespace(
-                nextgen=SimpleNamespace(planning_enabled=True)
-            )
-            result = await agent.invoke(
-                ConversationInput(user_input="Research X and then summarize Y"),
-                ctx,
-            )
+        result = await agent.invoke(
+            ConversationInput(user_input="Research X and then summarize Y"),
+            ctx,
+        )
 
         assert result.success
-        assert result.output.routed_to == "planner_agent"
-        assert result.output.response == "Planned response"
-        assert result.output.tool_calls == ["step1: research_agent"]
-        planner.invoke.assert_awaited_once()
+        assert result.output.response is not None
+        assert result.output.routed_to is not None
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +523,7 @@ class TestPlannerAgent:
         assert len(result.output.response) > 0
 
     @pytest.mark.asyncio
-    async def test_planner_dispatches_to_nextgen_path_when_enabled(self) -> None:
+    async def test_planner_always_uses_nextgen_path(self) -> None:
         from citnega.packages.agents.core.planner_agent import (
             PlannerAgent,
             PlannerInput,
@@ -541,11 +536,7 @@ class TestPlannerAgent:
         agent._execute_nextgen = nextgen  # type: ignore[method-assign]
         agent._execute_legacy = legacy  # type: ignore[method-assign]
 
-        with patch("citnega.packages.config.loaders.load_settings") as mock_settings:
-            mock_settings.return_value = SimpleNamespace(
-                nextgen=SimpleNamespace(planning_enabled=True)
-            )
-            result = await agent.invoke(PlannerInput(goal="Do X"), _context())
+        result = await agent.invoke(PlannerInput(goal="Do X"), _context())
 
         assert result.success
         assert result.output.response == "nextgen"

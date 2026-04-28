@@ -63,6 +63,13 @@ class OrchestratorInput(BaseModel):
     rollback_on_failure: bool = True
     fail_fast: bool = True
     allow_remote: bool = False
+    replan_on_failure: bool = Field(
+        default=False,
+        description=(
+            "When true, invoke RePlanner on step failure instead of aborting. "
+            "Mutually exclusive with fail_fast=True — set fail_fast=False to activate."
+        ),
+    )
 
 
 class OrchestrationStepResult(BaseModel):
@@ -193,6 +200,18 @@ class OrchestratorAgent(BaseCoreAgent):
         self._remote_executor_fingerprint = ""
 
     async def _execute(self, input: OrchestratorInput, context: CallContext) -> OrchestratorOutput:
+        # Autonomous sessions get resilient defaults: replan on failure, no fast-abort.
+        _is_autonomous = (
+            getattr(context.session_config, "session_type", "interactive") == "autonomous"
+        )
+        if _is_autonomous:
+            input = input.model_copy(update={
+                "replan_on_failure": True,
+                "fail_fast": False,
+                "rollback_on_failure": False,
+                "max_retries": max(input.max_retries, 2),
+            })
+
         callables = self._discover_callables()
         steps, generated_plan = await self._resolve_steps(input, callables, context)
         if not steps:
@@ -272,6 +291,7 @@ class OrchestratorAgent(BaseCoreAgent):
                     successful_for_rollback.append(step)
                     continue
 
+                # ── Step failed ───────────────────────────────────────────────
                 if input.rollback_on_failure:
                     rollback_actions.extend(
                         await self._run_rollbacks(
@@ -282,6 +302,30 @@ class OrchestratorAgent(BaseCoreAgent):
                             step_results=step_results,
                         )
                     )
+
+                # Adaptive replanning: inject revised steps instead of aborting.
+                if input.replan_on_failure and not input.fail_fast:
+                    replanned = await self._try_replan(
+                        failed_step=step,
+                        failed_result=result,
+                        completed=[s for s in successful_for_rollback],
+                        remaining=list(pending.values()),
+                        input=input,
+                        callables=callables,
+                        context=context,
+                    )
+                    if replanned:
+                        # Insert revised steps back into pending queue
+                        for rs in replanned:
+                            new_step = OrchestrationStep(
+                                step_id=rs.step_id,
+                                callable_name=rs.callable_name,
+                                task=rs.task,
+                                args=rs.args,
+                                depends_on=rs.depends_on,
+                            )
+                            pending[rs.step_id] = new_step
+                        continue
 
                 if input.fail_fast:
                     for rem in list(pending.values()):
@@ -509,6 +553,70 @@ class OrchestratorAgent(BaseCoreAgent):
             pass
 
         return self._fallback_steps(input.goal, callables), True
+
+    async def _try_replan(
+        self,
+        *,
+        failed_step: OrchestrationStep,
+        failed_result: OrchestrationStepResult,
+        completed: list[OrchestrationStep],
+        remaining: list[OrchestrationStep],
+        input: OrchestratorInput,
+        callables: dict[str, IStreamable],
+        context: CallContext,
+    ) -> list:
+        """Invoke RePlanner. Returns a list of RevisedStep objects, or [] on failure."""
+        try:
+            from citnega.packages.agents.core.replanner import (
+                CompletedStep,
+                FailedStep,
+                RePlanner,
+                ReplannerInput,
+            )
+
+            replanner = self._find_sub_callable(RePlanner.name, callables)
+            if replanner is None:
+                replanner = self._get_peer("replanner")
+            if replanner is None:
+                return []
+
+            replan_input = ReplannerInput(
+                goal=input.goal,
+                completed_steps=[
+                    CompletedStep(
+                        step_id=s.step_id,
+                        callable_name=s.callable_name,
+                        task=s.task,
+                    )
+                    for s in completed
+                ],
+                failed_step=FailedStep(
+                    step_id=failed_step.step_id,
+                    callable_name=failed_step.callable_name,
+                    task=failed_step.task,
+                    error=failed_result.error,
+                    attempts=failed_result.attempts,
+                ),
+                remaining_steps=[s.model_dump() for s in remaining],
+                available_callables=list(callables.keys()),
+                max_new_steps=min(input.max_steps, 4),
+            )
+            child_ctx = context.child(self.name, self.callable_type)
+            result = await replanner.invoke(replan_input, child_ctx)
+            if result.success and result.output and not result.output.abandon:
+                return result.output.revised_steps
+        except Exception:
+            pass
+        return []
+
+    def _find_sub_callable(self, name: str, callables: dict) -> object | None:
+        return callables.get(name)
+
+    def _get_peer(self, name: str) -> object | None:
+        for c in self.list_sub_callables():
+            if c.name == name:
+                return c
+        return None
 
     def _normalise_steps(self, steps: list[OrchestrationStep], max_steps: int) -> list[OrchestrationStep]:
         seen: set[str] = set()

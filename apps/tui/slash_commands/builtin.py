@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from citnega.packages.protocol.interfaces.slash_command import ISlashCommand
@@ -727,3 +729,279 @@ class SkillCommand(ISlashCommand):
             f"Skill '{skill_name}' is now active for this session.\n\n"
             f"{body}\n\nTriggers: {triggers}",
         )
+
+
+# ── /setup ────────────────────────────────────────────────────────────────────
+
+
+class SetupCommand(ISlashCommand):
+    """
+    Interactive setup wizard — API keys, local models, default model, full settings.
+
+    Usage:
+      /setup             → show top-level picker
+      /setup api         → go directly to API key picker
+      /setup ollama      → go directly to local model setup
+      /setup model       → go directly to default model picker
+    """
+
+    name = "setup"
+    help_text = "Interactive setup: API keys, local model server, default model."
+
+    def __init__(self, service: IApplicationService) -> None:
+        self._service = service
+
+    async def execute(self, args: list[str], ctrl: ChatController) -> None:
+        shortcut = args[0].lower() if args else ""
+        if shortcut in ("api", "apikey", "keys"):
+            await self._step_api_picker(ctrl)
+        elif shortcut in ("ollama", "local", "lm", "lmstudio"):
+            await self._step_local_model(ctrl)
+        elif shortcut in ("model", "default"):
+            await self._step_default_model(ctrl)
+        else:
+            await self._step_top(ctrl)
+
+    # ── Top-level picker ──────────────────────────────────────────────────────
+
+    async def _step_top(self, ctrl: ChatController) -> None:
+        options = [
+            ("api",    "  API Keys    — Anthropic, OpenAI, Gemini, OpenRouter"),
+            ("ollama", "  Local Model — Ollama / LM Studio endpoint"),
+            ("model",  "  Default Model — choose which model is used by default"),
+            ("full",   "  Full Settings — open the F2 settings panel"),
+        ]
+
+        async def on_select(value: str, label: str) -> None:
+            if value == "api":
+                await self._step_api_picker(ctrl)
+            elif value == "ollama":
+                await self._step_local_model(ctrl)
+            elif value == "model":
+                await self._step_default_model(ctrl)
+            elif value == "full":
+                from citnega.apps.tui.screens.settings_screen import SettingsScreen
+                svc = getattr(ctrl._app, "_service", None)
+                ctrl._app.push_screen(SettingsScreen(service=svc))
+
+        await ctrl._append_picker(
+            title="⚙ Setup — What would you like to configure?",
+            options=options,
+            on_select=on_select,
+        )
+
+    # ── API key setup ─────────────────────────────────────────────────────────
+
+    async def _step_api_picker(self, ctrl: ChatController) -> None:
+        _PROVIDERS = [
+            ("ANTHROPIC_API_KEY",          "  Anthropic  (claude-* models)"),
+            ("OPENAI_API_KEY",             "  OpenAI  (gpt-* models)"),
+            ("GEMINI_API_KEY",             "  Google Gemini  (gemini-* models)"),
+            ("CITNEGA_OPENROUTER_API_KEY", "  OpenRouter  (multi-provider hub)"),
+            ("GROQ_API_KEY",               "  Groq  (fast inference)"),
+            ("other",                      "  Other — custom env var name"),
+        ]
+
+        def _status(env_var: str) -> str:
+            return " [set]" if os.environ.get(env_var) else ""
+
+        options = [
+            (env_var, label + _status(env_var))
+            for env_var, label in _PROVIDERS
+        ]
+
+        async def on_select(value: str, label: str) -> None:
+            if value == "other":
+                await self._ask_custom_var(ctrl)
+            else:
+                await self._ask_api_key(ctrl, value)
+
+        await ctrl._append_picker(
+            title="Which provider's API key?",
+            options=options,
+            on_select=on_select,
+        )
+
+    async def _ask_api_key(self, ctrl: ChatController, env_var: str) -> None:
+        current_masked = "****" + os.environ[env_var][-4:] if os.environ.get(env_var) else "not set"
+        await ctrl._append_message(
+            "system",
+            f"Setting  {env_var}  (currently: {current_masked})\n\n"
+            f"Type your API key and press Ctrl+Enter.\n"
+            f"The key will be active immediately for this session and persisted to config.",
+        )
+
+        async def on_key_input(text: str, _ctrl: ChatController) -> None:
+            key = text.strip()
+            if not key:
+                await _ctrl._append_message("system", "Empty input — cancelled.")
+                return
+            os.environ[env_var] = key
+            self._persist_env_var(env_var, key, _ctrl)
+            if "OPENROUTER" in env_var:
+                self._save_openrouter_to_settings(key, _ctrl)
+            masked = key[:4] + "…" + key[-4:] if len(key) > 8 else "****"
+            await _ctrl._append_message(
+                "system",
+                f"✓  {env_var} = {masked}\n"
+                f"Active for this session. Saved to config/.env.\n"
+                f"For permanent shell-level setup, add to ~/.zshrc or ~/.bashrc:\n"
+                f"  export {env_var}=<your_key>",
+            )
+
+        from citnega.apps.tui.slash_commands.workspace import WizardState
+        ctrl._pending_wizard = WizardState(
+            step_name="api_key_input",
+            on_input=on_key_input,
+        )
+
+    async def _ask_custom_var(self, ctrl: ChatController) -> None:
+        await ctrl._append_message(
+            "system",
+            "Enter the environment variable name and value separated by a space:\n"
+            "  MY_CUSTOM_API_KEY  sk-abc123…\n\n"
+            "Press Ctrl+Enter to confirm.",
+        )
+
+        async def on_input(text: str, _ctrl: ChatController) -> None:
+            parts = text.strip().split(None, 1)
+            if len(parts) < 2:
+                await _ctrl._append_message("system", "Invalid format. Expected: VAR_NAME value")
+                return
+            var_name, value = parts[0].upper(), parts[1].strip()
+            os.environ[var_name] = value
+            self._persist_env_var(var_name, value, _ctrl)
+            masked = value[:4] + "…" + value[-4:] if len(value) > 8 else "****"
+            await _ctrl._append_message("system", f"✓  {var_name} = {masked}  set and saved.")
+
+        from citnega.apps.tui.slash_commands.workspace import WizardState
+        ctrl._pending_wizard = WizardState(step_name="custom_var_input", on_input=on_input)
+
+    # ── Local model setup ─────────────────────────────────────────────────────
+
+    async def _step_local_model(self, ctrl: ChatController) -> None:
+        options = [
+            ("ollama",    "  Ollama  — set OLLAMA_BASE_URL  (default: localhost:11434)"),
+            ("lmstudio",  "  LM Studio  — set LM_STUDIO_BASE_URL  (default: localhost:1234/v1)"),
+            ("custom",    "  Custom server  — set CUSTOM_REMOTE_URL"),
+        ]
+
+        async def on_select(value: str, label: str) -> None:
+            if value == "ollama":
+                await self._ask_local_url(ctrl, "OLLAMA_BASE_URL", "Ollama", "http://localhost:11434")
+            elif value == "lmstudio":
+                await self._ask_local_url(ctrl, "LM_STUDIO_BASE_URL", "LM Studio", "http://localhost:1234/v1")
+            elif value == "custom":
+                await self._ask_local_url(ctrl, "CUSTOM_REMOTE_URL", "Custom server", "http://localhost:8000/v1")
+
+        await ctrl._append_picker(
+            title="Which local model server?",
+            options=options,
+            on_select=on_select,
+        )
+
+    async def _ask_local_url(
+        self, ctrl: ChatController, env_var: str, server_name: str, default_url: str
+    ) -> None:
+        current = os.environ.get(env_var, default_url)
+        await ctrl._append_message(
+            "system",
+            f"Enter the {server_name} base URL  [{env_var}]\n"
+            f"Current: {current}\n\n"
+            f"Press Ctrl+Enter with just the URL (e.g. http://localhost:11434)\n"
+            f"or leave blank to keep the current value.",
+        )
+
+        async def on_input(text: str, _ctrl: ChatController) -> None:
+            url = text.strip()
+            if not url:
+                await _ctrl._append_message("system", f"Kept existing URL: {current}")
+                return
+            os.environ[env_var] = url
+            self._persist_env_var(env_var, url, _ctrl)
+            await _ctrl._append_message(
+                "system",
+                f"✓  {env_var} = {url}\n"
+                f"Active for this session. Restart citnega to reload the model gateway.",
+            )
+
+        from citnega.apps.tui.slash_commands.workspace import WizardState
+        ctrl._pending_wizard = WizardState(step_name="local_url_input", on_input=on_input)
+
+    # ── Default model picker ──────────────────────────────────────────────────
+
+    async def _step_default_model(self, ctrl: ChatController) -> None:
+        models = self._service.list_models() if self._service else []
+        if not models:
+            await ctrl._append_message("system", "No models available. Check models.yaml.")
+            return
+
+        session_id = getattr(ctrl, "_session_id", None)
+        active = self._service.get_session_model(session_id) if session_id and self._service else ""
+
+        options = [
+            (
+                m.model_id,
+                f"{'* ' if m.model_id == active else '  '}"
+                f"{m.model_id:<32}  {(m.description or '')[:40]}",
+            )
+            for m in models
+        ]
+
+        async def on_select(value: str, label: str) -> None:
+            try:
+                if session_id and self._service:
+                    await self._service.set_session_model(session_id, value)
+                app_home = self._get_app_home(ctrl)
+                if app_home:
+                    from citnega.packages.config.loaders import save_general_settings
+                    save_general_settings("runtime", {"default_model_id": value}, app_home)
+                ctrl._update_context_bar(model=value)
+                await ctrl._append_message("system", f"✓ Default model set to: {value}")
+            except Exception as exc:
+                await ctrl._append_message("system", f"Failed to set model: {exc}")
+
+        await ctrl._append_picker(
+            title=f"Select default model  [active: {active or 'none'}]",
+            options=options,
+            on_select=on_select,
+        )
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _persist_env_var(self, name: str, value: str, ctrl: ChatController) -> None:
+        """Append / overwrite *name=value* in <app_home>/config/.env."""
+        try:
+            app_home = self._get_app_home(ctrl)
+            if app_home is None:
+                return
+            env_file = app_home / "config" / ".env"
+            env_file.parent.mkdir(parents=True, exist_ok=True)
+            lines = env_file.read_text().splitlines() if env_file.exists() else []
+            new_lines = [ln for ln in lines if not ln.startswith(f"{name}=")]
+            new_lines.append(f"{name}={value}")
+            env_file.write_text("\n".join(new_lines) + "\n")
+        except Exception:
+            pass
+
+    def _save_openrouter_to_settings(self, api_key: str, ctrl: ChatController) -> None:
+        try:
+            app_home = self._get_app_home(ctrl)
+            if app_home is None:
+                return
+            from citnega.packages.config.loaders import save_general_settings
+            save_general_settings("openrouter", {"api_key": api_key, "enabled": True}, app_home)
+        except Exception:
+            pass
+
+    def _get_app_home(self, ctrl: ChatController) -> Path | None:
+        try:
+            svc = self._service
+            if svc is not None:
+                ah = getattr(svc, "_app_home", None)
+                if ah is not None:
+                    return Path(ah)
+            from citnega.packages.storage.path_resolver import PathResolver
+            return PathResolver().app_home
+        except Exception:
+            return None

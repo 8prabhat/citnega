@@ -381,6 +381,140 @@ class OperateMode(ISessionMode):
         return base_prompt + suffix
 
 
+class AutonomousMode(ISessionMode):
+    """
+    Autonomous agent mode — self-directed, goal-completion-focused.
+
+    Used automatically for sessions with session_type='autonomous'.
+    The agent is instructed to:
+      - Pursue the stated goal independently until complete.
+      - Use OrchestratorAgent for multi-step tasks with replanning on failure.
+      - Self-monitor progress and verify outcomes after each action.
+      - Call any available tool or specialist without asking permission.
+      - Report blockers only when genuinely stuck after retrying.
+
+    Tool budget is 30 rounds (set by runner); all tools are available (no
+    mode-based exclusions). Temperature is low to keep execution deterministic.
+    """
+
+    @property
+    def name(self) -> str:
+        return "autonomous"
+
+    @property
+    def display_label(self) -> str:
+        return "[AUTO]"
+
+    @property
+    def description(self) -> str:
+        return "Autonomous long-running agent — self-directed goal completion."
+
+    @property
+    def max_tool_rounds(self) -> int:
+        return 30
+
+    @property
+    def temperature(self) -> float:
+        return 0.2
+
+    def augment_system_prompt(self, base_prompt: str) -> str:
+        suffix = (
+            "\n\n## Autonomous Agent Mode\n\n"
+            "You are running as an **autonomous agent**. There is no human in the loop "
+            "for this session. Your job is to **complete the stated goal** independently "
+            "and report the outcome.\n\n"
+            "### Execution principles\n\n"
+            "1. **Act, don't ask** — use every tool and specialist available without "
+            "requesting permission. You have full access to all registered tools.\n\n"
+            "2. **Multi-step tasks → use OrchestratorAgent** — for goals requiring "
+            "2+ sequential steps, invoke `orchestrator_agent` with `replan_on_failure=true` "
+            "and `fail_fast=false`. This enables adaptive replanning when a step fails.\n\n"
+            "3. **Verify outcomes** — after each mutating action (file write, API call, "
+            "shell command), confirm the result before proceeding to the next step.\n\n"
+            "4. **Replan on failure** — if a tool or agent call fails, try an alternative "
+            "approach before giving up. Exhaust at least two alternatives before reporting "
+            "a blocker.\n\n"
+            "5. **Self-monitor progress** — after every 3–4 tool calls, briefly assess: "
+            "am I making progress toward the goal? If not, pivot strategy.\n\n"
+            "6. **Report blockers, not questions** — if genuinely stuck after retrying, "
+            "state what you tried, why it failed, and what information would unblock you.\n\n"
+            "7. **Summarise at the end** — when the goal is achieved, write a brief "
+            "completion summary: what was done, what was produced, any caveats.\n\n"
+            "You have up to 30 tool-calling rounds. Use them efficiently — "
+            "parallel tool calls in a single turn when sub-tasks are independent."
+        )
+        return base_prompt + suffix
+
+
+class AutoResearchMode(ISessionMode):
+    """
+    Autonomous deep research mode — KB-first, multi-angle, cross-verified.
+
+    Capabilities:
+      - KB-first check avoids re-researching known topics
+      - 3 angle-queries per sub-question for broad coverage
+      - Source quality scoring before reading (recency, authority, relevance)
+      - Cross-verification across sources (VERIFIED vs UNVERIFIED)
+      - Structured fact extraction with provenance (avoids context explosion)
+      - Self-assessment completeness score with adaptive re-search
+      - Mandatory structured 7-section report output
+    """
+
+    @property
+    def name(self) -> str:
+        return "auto_research"
+
+    @property
+    def display_label(self) -> str:
+        return "[AUTO-RESEARCH]"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Autonomous deep research loop — KB-first, multi-angle, "
+            "cross-verified, cited structured report."
+        )
+
+    @property
+    def max_tool_rounds(self) -> int:
+        return 40
+
+    @property
+    def temperature(self) -> float:
+        return 0.4
+
+    def augment_system_prompt(self, base_prompt: str, **kwargs) -> str:
+        suffix = (
+            "\n\n## Auto-Research Mode — Structured Research Protocol\n\n"
+            "You are an autonomous research agent executing a structured 9-phase methodology.\n\n"
+            "**Phase 1 — Decompose:** Break the goal into 3–6 sub-questions and hypotheses.\n"
+            "**Phase 2 — KB-first:** Call `read_kb` for each sub-question; skip already-answered ones.\n"
+            "**Phase 3 — Parallel search:** Issue 2–3 angle-queries per unsatisfied sub-question via `search_web`.\n"
+            "**Phase 4 — Score sources:** Before reading, score each URL on recency (1-5), "
+            "authority (1-5), relevance (1-5); read top scorers only.\n"
+            "**Phase 5 — Extract with provenance:** For each page, extract facts as:\n"
+            "  `FACT: <claim> SOURCE: <url> DATE: <date> CONFIDENCE: <high/medium/low>`\n"
+            "**Phase 6 — Cross-verify:** Flag claims found in 1 source as `[UNVERIFIED]`; "
+            "2+ sources as `[VERIFIED]`.\n"
+            "**Phase 7 — Write KB:** Call `write_kb` with structured facts, "
+            'tags: `["auto_research", "<topic>", "verified"|"unverified"]`.\n'
+            "**Phase 8 — Self-assess:** Score completeness 0–10. If <8, identify gaps and "
+            "loop back to Phase 3 (max 2 extra passes).\n"
+            "**Phase 9 — Synthesise:** Write structured report:\n"
+            "  - Executive Summary (3 sentences)\n"
+            "  - Findings (headed sections, inline citations `[Title](URL)`)\n"
+            "  - Competing Perspectives (where sources disagree)\n"
+            "  - Unverified Claims (single-source only)\n"
+            "  - Gaps (what Phase 8 flagged)\n"
+            "  - Sources list\n\n"
+            "Tools available: `search_web`, `read_webpage`, `web_scraper`, `read_kb`, `write_kb`, "
+            "`render_chart`, `fetch_url`, `get_datetime`.\n"
+            "Invoke `auto_research_agent` to run the full structured investigation.\n"
+            "Tool budget: 40 rounds. Use parallel tool calls for independent sub-questions."
+        )
+        return base_prompt + suffix
+
+
 # ── Registry (single source of truth — DRY) ──────────────────────────────────
 
 _REGISTRY: dict[str, ISessionMode] = {
@@ -393,6 +527,8 @@ _REGISTRY: dict[str, ISessionMode] = {
         CodeMode(),
         ReviewMode(),
         OperateMode(),
+        AutonomousMode(),
+        AutoResearchMode(),
     )
 }
 

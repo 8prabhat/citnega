@@ -179,12 +179,19 @@ async def _build_model_gateway(settings: CitnegaSettings, emitter: IEventEmitter
 
     local_only: bool = getattr(settings.runtime, "local_only", True)
     if healthy_count == 0 and local_only:
-        runtime_logger.error(
+        runtime_logger.warning(
             "bootstrap_no_healthy_provider",
             local_only=local_only,
             registered=len(gateway.list_providers()),
+            hint="Run /setup to configure a model provider, or set CITNEGA_RUNTIME__LOCAL_ONLY=false to allow remote providers.",
         )
-        sys.exit(EXIT_NO_PROVIDER)
+        print(
+            "\n[citnega] No model provider is reachable.\n"
+            "  → Run `citnega tui` and type /setup to configure one, or\n"
+            "  → Set CITNEGA_RUNTIME__LOCAL_ONLY=false to allow remote providers.\n"
+            "  Starting in limited mode — only offline commands will work.\n",
+            file=sys.stderr,
+        )
 
     return gateway
 
@@ -399,10 +406,12 @@ async def create_application(
         from citnega.packages.runtime.context.handlers.runtime_state import RuntimeStateHandler
         from citnega.packages.runtime.context.handlers.session_summary import SessionSummaryHandler
         from citnega.packages.runtime.context.handlers.token_budget import TokenBudgetHandler
+        from citnega.packages.runtime.context.handlers.workspace_fingerprint import WorkspaceFingerprintHandler
         from citnega.packages.storage.repositories.message_repo import MessageRepository
 
         _KNOWN_HANDLERS = frozenset(
-            {"recent_turns", "session_summary", "kb_retrieval", "runtime_state", "token_budget"}
+            {"recent_turns", "session_summary", "kb_retrieval", "runtime_state", "token_budget",
+             "workspace_fingerprint"}
         )
         _unknown = [h for h in settings.context.handlers if h not in _KNOWN_HANDLERS]
         if _unknown:
@@ -439,7 +448,13 @@ async def create_application(
                 message_repo,
                 recent_turns_count=settings.context.recent_turns_count,
             ),
-            "session_summary": lambda: SessionSummaryHandler(run_repo),
+            "session_summary": lambda: SessionSummaryHandler(
+                run_repo,
+                model_gateway=model_gateway,
+                conversation_store=None,  # injected per-session by runner
+                summarize_threshold=20,
+                summarize_window=15,
+            ),
             "kb_retrieval": lambda: KBRetrievalHandler(kb_store=kb_store),
             "runtime_state": lambda: RuntimeStateHandler(),
             "token_budget": lambda: TokenBudgetHandler(
@@ -447,6 +462,9 @@ async def create_application(
                 emitter=emitter,
                 priorities=dict(settings.context.token_budget_priorities),
                 default_priority=settings.context.token_budget_default_priority,
+            ),
+            "workspace_fingerprint": lambda: WorkspaceFingerprintHandler(
+                workfolder_root=str(workfolder_root) if workfolder_root else "",
             ),
         }
 
@@ -457,9 +475,11 @@ async def create_application(
 
         # ── Step 14: Tracer ───────────────────────────────────────────────────
         from citnega.packages.runtime.events.tracer import Tracer
+        from citnega.packages.runtime.tracing.span_repository import SpanRepository
         from citnega.packages.storage.repositories.invocation_repo import InvocationRepository
 
-        tracer = Tracer(InvocationRepository(db))
+        span_repo = SpanRepository(db)
+        tracer = Tracer(InvocationRepository(db), span_repo=span_repo)
 
         # ── Step 14b: Execution backend (local or Docker) ─────────────────────
         try:
@@ -598,6 +618,18 @@ async def create_application(
         cap_registry.register_many(_cap_records, overwrite=True)
         _skill_records, _ = BuiltinSkillProvider().load()
         cap_registry.register_many(_skill_records, overwrite=False)  # workspace skills take priority
+
+        # Overlay persisted improved skill bodies (written by SkillImprover)
+        try:
+            _persisted_skills_dir = Path.home() / ".citnega" / "skills"
+            if _persisted_skills_dir.exists():
+                from citnega.packages.skills.builtins import BUILTIN_SKILL_INDEX
+                for _md in _persisted_skills_dir.glob("*.md"):
+                    if _md.stem in BUILTIN_SKILL_INDEX:
+                        BUILTIN_SKILL_INDEX[_md.stem]["body"] = _md.read_text("utf-8")
+                        runtime_logger.debug("bootstrap_persisted_skill_loaded", name=_md.stem)
+        except Exception as _e:
+            runtime_logger.warning("bootstrap_persisted_skills_failed", error=str(_e))
         if _cap_diagnostics.has_required_failures:
             runtime_logger.warning(
                 "bootstrap_capability_registry_failures",
@@ -675,7 +707,35 @@ async def create_application(
         except Exception as exc:
             runtime_logger.warning("bootstrap_skill_improver_failed", error=str(exc))
 
-        # ── Step 19b: Messaging gateway + heartbeat engine ────────────────────
+        # ── Step 19b: Stale run cleanup (before accepting new runs) ──────────
+        try:
+            stale_count = await runtime.cleanup_stale_runs()
+            if stale_count:
+                runtime_logger.warning(
+                    "bootstrap_stale_runs_cleaned",
+                    count=stale_count,
+                )
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_stale_cleanup_failed", error=str(exc))
+
+        # ── Step 19c: SchedulerService (autonomous agent cron/one-shot) ──────
+        _scheduler_service = None
+        try:
+            from citnega.packages.runtime.scheduler import SchedulerService
+            from citnega.packages.storage.repositories.schedule_repo import ScheduleRepository
+
+            _schedule_repo = ScheduleRepository(db)
+            _scheduler_service = SchedulerService(
+                schedule_repo=_schedule_repo,
+                app_service=svc,
+            )
+            _scheduler_service.start()
+            svc._scheduler = _scheduler_service  # expose via svc.scheduler
+            runtime_logger.info("bootstrap_scheduler_ready")
+        except Exception as exc:
+            runtime_logger.warning("bootstrap_scheduler_failed", error=str(exc))
+
+        # ── Step 19d: Messaging gateway + heartbeat engine ────────────────────
         _messaging_gateway = None
         _heartbeat_engine = None
         try:
@@ -734,6 +794,11 @@ async def create_application(
 
         yield svc
     finally:
+        try:
+            if "_scheduler_service" in dir() and _scheduler_service is not None:
+                await _scheduler_service.stop()
+        except Exception as _sched_exc:
+            runtime_logger.warning("bootstrap_scheduler_stop_failed", error=str(_sched_exc))
         try:
             if "_heartbeat_engine" in dir() and _heartbeat_engine is not None:
                 await _heartbeat_engine.stop()

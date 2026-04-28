@@ -17,6 +17,8 @@ class PlanStepType(StrEnum):
 class RetryPolicy(BaseModel):
     max_attempts: int = 1
     backoff_seconds: float = 0.0
+    backoff_multiplier: float = 1.0
+    jitter: bool = False
 
 
 class TimeoutPolicy(BaseModel):
@@ -36,6 +38,8 @@ class PlanStep(BaseModel):
     rollback_capability_id: str = ""
     rollback_args: dict[str, Any] = Field(default_factory=dict)
     execution_target: str = "local"
+    condition: str = ""
+    idempotency_key: str = ""
 
 
 class WorkflowTemplateStep(BaseModel):

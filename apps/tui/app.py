@@ -122,6 +122,14 @@ class CitnegaApp(App):
         await self.pop_screen()
         await self._start_chat_with_session(message.session_id)
 
+    async def on_history_screen_session_selected(self, message: object) -> None:
+        """User picked a session from the History screen (F3) — resume it."""
+        from citnega.apps.tui.screens.history_screen import HistoryScreen
+
+        if isinstance(message, HistoryScreen.SessionSelected):
+            await self.pop_screen()
+            await self._start_chat_with_session(message.session_id)
+
     async def on_session_picker_screen_new_session_requested(
         self, message: SessionPickerScreen.NewSessionRequested
     ) -> None:

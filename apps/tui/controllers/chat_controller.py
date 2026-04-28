@@ -26,6 +26,7 @@ from citnega.apps.tui.widgets.tool_call_block import ToolCallBlock
 from citnega.apps.tui.workers.event_consumer import (
     ApprovalRequested,
     EventConsumerWorker,
+    ModeAutoSwitched,
     RunFinished,
     RunPhaseChanged,
     RunStarted,
@@ -79,8 +80,9 @@ class ChatController:
         self._consumer: EventConsumerWorker | None = None
         # Slash command registry
         self._slash_commands = _build_slash_registry(app, service, session_id, self)
-        # Popup widget reference
-        self._popup = None
+        # Slash screen state (ModalScreen replaces the old widget popup)
+        self._popup = None  # kept for backward-compat; unused in current flow
+        self._slash_screen_open: bool = False
         # Plan mode state machine
         # None → awaiting_approval → executing → None
         self._plan_state: str | None = None
@@ -89,6 +91,8 @@ class ChatController:
         # Multi-step wizard intercept — set by workspace slash commands
         self._pending_wizard = None  # WizardState | None
         self._wizard_data: dict = {}
+        # Prevents popup from reopening after _insert_command writes text to SmartInput
+        self._suppress_popup_for_next_change: bool = False
 
     # ── User input routing ─────────────────────────────────────────────────────
 
@@ -233,7 +237,13 @@ class ChatController:
             await self._streaming_block.finalize()
             self._streaming_block = None
 
-        self._update_context_bar(state="idle")
+        # Restore the ContextBar mode to the session's persisted mode now that
+        # the turn (which may have used an auto-detected override) is complete.
+        try:
+            persisted_mode = self._service.get_session_mode(self._session_id) or "chat"
+            self._update_context_bar(state="idle", mode=persisted_mode)
+        except Exception:
+            self._update_context_bar(state="idle")
 
         if message.final_state not in ("completed", "cancelled"):
             await self._append_message(
@@ -348,44 +358,58 @@ class ChatController:
         """Update ContextBar state on every run-state transition."""
         self._update_context_bar(state=message.phase)
 
-    # ── Popup ──────────────────────────────────────────────────────────────────
+    def on_mode_auto_switched(self, message: ModeAutoSwitched) -> None:
+        """Show the auto-detected effective mode in the ContextBar for this turn."""
+        label = f"{message.to_mode} [auto]" if not message.is_autonomous else message.to_mode
+        self._update_context_bar(mode=label)
+
+    # ── Slash screen (ModalScreen replaces old floating widget popup) ─────────
 
     def toggle_slash_popup(self) -> None:
-        if self._popup is not None:
-            self.dismiss_popup()
-        else:
-            self._show_slash_popup()
+        """Open the slash command screen (Ctrl+K shortcut)."""
+        if not self._slash_screen_open:
+            self._show_slash_screen()
 
     def dismiss_popup(self) -> None:
-        if self._popup is not None:
-            with contextlib.suppress(Exception):
-                self._popup.remove()
-            self._popup = None
+        """No-op: ModalScreen handles its own dismissal via Escape."""
+        pass
 
     def on_input_value_changed(self, value: str) -> None:
         """Called by ChatScreen whenever the chat input value changes."""
-        if value.startswith("/"):
-            prefix = value[1:]  # text after the slash
-            if self._popup is None:
-                self._show_slash_popup(initial_filter=prefix)
-            else:
-                self._popup.update_filter(prefix)
-        else:
-            if self._popup is not None:
-                self.dismiss_popup()
+        if self._suppress_popup_for_next_change:
+            self._suppress_popup_for_next_change = False
+            return
+        if value.startswith("/") and not self._slash_screen_open:
+            self._show_slash_screen(initial_filter=value[1:])
 
-    def _show_slash_popup(self, initial_filter: str = "") -> None:
-        from citnega.apps.tui.widgets.slash_popup import SlashCommandPopup
+    def _show_slash_screen(self, initial_filter: str = "") -> None:
+        from citnega.apps.tui.screens.slash_screen import SlashCommandScreen
 
+        if self._slash_screen_open:
+            return
         cmds = [
             (name, getattr(cmd, "help_text", ""))
             for name, cmd in self._slash_commands.items()
         ]
-        popup = SlashCommandPopup(commands=cmds)
-        if initial_filter:
-            popup._filter = initial_filter
-        self._popup = popup
-        self._app.mount(popup)
+        self._slash_screen_open = True
+        self._app.push_screen(
+            SlashCommandScreen(commands=cmds, initial_filter=initial_filter),
+            self._on_slash_dismissed,
+        )
+
+    async def _on_slash_dismissed(self, cmd_name: str | None) -> None:
+        self._slash_screen_open = False
+        # Suppress the TextArea.Changed that fires when we clear SmartInput.
+        self._suppress_popup_for_next_change = True
+        try:
+            from citnega.apps.tui.widgets.smart_input import SmartInput
+            smart = self._app.query_one("#chat-input", SmartInput)
+            smart._textarea.clear()
+            smart._textarea.focus()
+        except Exception:
+            pass
+        if cmd_name is not None:
+            await self.handle_user_input(f"/{cmd_name}")
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -516,6 +540,7 @@ def _build_slash_registry(app, service, session_id, controller):
         NewSessionCommand,
         RenameCommand,
         SessionsCommand,
+        SetupCommand,
         ShowSessionCommand,
         SkillCommand,
         SkillsCommand,
@@ -548,6 +573,7 @@ def _build_slash_registry(app, service, session_id, controller):
         ThinkCommand(service=service),
         SkillsCommand(),
         SkillCommand(),
+        SetupCommand(service=service),
         # Workspace commands
         SetWorkfolderCommand(service=service),
         RefreshCommand(service=service),

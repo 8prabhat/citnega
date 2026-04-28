@@ -35,8 +35,13 @@ class Tracer(ITracer):
     the DB write as a background task on the running event loop.
     """
 
-    def __init__(self, invocation_repo: InvocationRepository) -> None:
+    def __init__(
+        self,
+        invocation_repo: InvocationRepository,
+        span_repo: object | None = None,
+    ) -> None:
         self._repo = invocation_repo
+        self._span_repo = span_repo  # SpanRepository | None
 
     def record(
         self,
@@ -74,6 +79,29 @@ class Tracer(ITracer):
                 loop = asyncio.get_running_loop()
                 task = loop.create_task(self._save(rec))
                 task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+                # Also save a TraceSpan if span_repo is wired
+                if self._span_repo is not None:
+                    output_hash = ""
+                    if result.output:
+                        out_json = result.output.model_dump_json()
+                        output_hash = hashlib.sha256(out_json.encode()).hexdigest()[:16]
+                    span_task = loop.create_task(
+                        self._save_span(
+                            invocation_id=invocation_id,
+                            callable_name=callable.name,
+                            run_id=context.run_id,
+                            turn_id=getattr(context, "turn_id", None),
+                            step_id=None,
+                            input_hash=input_hash,
+                            output_hash=output_hash,
+                            success=result.success,
+                            duration_ms=result.duration_ms,
+                        )
+                    )
+                    span_task.add_done_callback(
+                        lambda t: t.exception() if not t.cancelled() else None
+                    )
             except RuntimeError:
                 # No running loop — skip tracing (e.g., in sync test context)
                 pass
@@ -86,3 +114,38 @@ class Tracer(ITracer):
             await self._repo.save(rec)
         except Exception as exc:
             runtime_logger.warning("tracer_save_failed", error=str(exc))
+
+    async def _save_span(
+        self,
+        *,
+        invocation_id: str,
+        callable_name: str,
+        run_id: str,
+        turn_id: str | None,
+        step_id: str | None,
+        input_hash: str,
+        output_hash: str,
+        success: bool,
+        duration_ms: int,
+    ) -> None:
+        try:
+            from datetime import timedelta
+            from citnega.packages.runtime.tracing.span import TraceSpan
+
+            now = datetime.now(tz=UTC)
+            start = (now - timedelta(milliseconds=duration_ms)).isoformat()
+            span = TraceSpan(
+                span_id=invocation_id,
+                run_id=run_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                tool_name=callable_name,
+                start_ts=start,
+                end_ts=now.isoformat(),
+                input_hash=input_hash,
+                output_hash=output_hash,
+                success=success,
+            )
+            await self._span_repo.save(span)  # type: ignore[union-attr]
+        except Exception as exc:
+            runtime_logger.warning("tracer_span_save_failed", error=str(exc))

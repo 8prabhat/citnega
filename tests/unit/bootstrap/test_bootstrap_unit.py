@@ -14,7 +14,6 @@ import pytest
 
 from citnega.packages.bootstrap.bootstrap import (
     EXIT_ADAPTER_ERROR,
-    EXIT_NO_PROVIDER,
     _build_model_gateway,
     _select_adapter,
 )
@@ -83,7 +82,10 @@ def _fake_settings(*, local_only: bool = True) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_build_gateway_no_providers_local_only_exits() -> None:
+async def test_build_gateway_no_providers_local_only_warns_and_continues() -> None:
+    """No healthy provider in local_only mode now emits a warning instead of exiting."""
+    from citnega.packages.model_gateway.gateway import ModelGateway
+
     settings = _fake_settings(local_only=True)
     emitter = MagicMock()
 
@@ -91,9 +93,8 @@ async def test_build_gateway_no_providers_local_only_exits() -> None:
         patch("citnega.packages.model_gateway.registry.ModelRegistry.load"),
         patch("citnega.packages.model_gateway.registry.ModelRegistry.list_all", return_value=[]),
     ):
-        with pytest.raises(SystemExit) as exc_info:
-            await _build_model_gateway(settings, emitter)
-    assert exc_info.value.code == EXIT_NO_PROVIDER
+        gateway = await _build_model_gateway(settings, emitter)
+    assert isinstance(gateway, ModelGateway)
 
 
 @pytest.mark.asyncio

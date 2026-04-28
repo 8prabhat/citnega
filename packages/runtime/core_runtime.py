@@ -130,25 +130,32 @@ class CoreRuntime(IRuntime):
     # Turn execution
     # ------------------------------------------------------------------
 
+    async def cleanup_stale_runs(self) -> int:
+        """Transition stale PENDING/EXECUTING runs to FAILED. Call once at startup."""
+        stale = await self._runs.cleanup_stale_runs()
+        return len(stale)
+
     async def run_turn(self, session_id: str, user_input: str) -> str:
         """
         Start a new turn.  Returns the run_id immediately; execution
         happens in a background asyncio.Task.
 
-        Raises RuntimeError if a run is already active for this session.
+        Interactive sessions raise if a run is already active.
+        Autonomous sessions allow concurrent runs.
         """
         session = await self._sessions.get(session_id)
+        is_autonomous = getattr(session.config, "session_type", "interactive") == "autonomous"
 
         async with self._active_lock:
-            if session_id in self._active:
+            if not is_autonomous and session_id in self._active:
                 active_run_id = self._active[session_id].run_id
                 raise CitnegaRuntimeError(
                     f"Session {session_id!r} already has an active run "
                     f"({active_run_id!r}).  Cancel or wait for it to finish."
                 )
 
-        # Create the run record (PENDING state)
-        run = await self._runs.create(session_id)
+        # Create the run record (PENDING state), storing user_input for replay
+        run = await self._runs.create(session_id, user_input=user_input)
         run_id = run.run_id
         turn_id = str(uuid.uuid4())
 
@@ -187,8 +194,11 @@ class CoreRuntime(IRuntime):
             task=task,
             runner=runner,
         )
+        # Autonomous sessions key by run_id so concurrent runs don't collide.
+        # Interactive sessions key by session_id (existing one-at-a-time guarantee).
+        _active_key = run_id if is_autonomous else session_id
         async with self._active_lock:
-            self._active[session_id] = active
+            self._active[_active_key] = active
 
         return run_id
 
@@ -357,7 +367,11 @@ class CoreRuntime(IRuntime):
                 )
             finally:
                 async with self._active_lock:
-                    self._active.pop(session_id, None)
+                    # Autonomous sessions are keyed by run_id; interactive by session_id.
+                    if run_id in self._active:
+                        self._active.pop(run_id, None)
+                    else:
+                        self._active.pop(session_id, None)
 
             # Emit completion sentinel only after cleanup is persisted and
             # the run is removed from active bookkeeping. This guarantees

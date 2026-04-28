@@ -44,13 +44,18 @@ class ChatScreen(Screen):
     """Full-width conversational screen with inline tool/agent call blocks."""
 
     BINDINGS = [
-        Binding("ctrl+c", "app.quit", "Quit", show=True),
-        Binding("f2",     "settings", "Settings", show=True),
-        Binding("ctrl+l", "clear_chat", "Clear", show=True),
-        Binding("ctrl+y", "copy_last", "Copy", show=True),
-        Binding("escape", "dismiss_popup", "Dismiss", show=False),
-        Binding("tab", "focus_input", "Input", show=False),
-        Binding("ctrl+k", "toggle_slash_popup", "Commands", show=False),
+        Binding("ctrl+c", "app.quit",            "Quit",     show=True),
+        Binding("f2",     "settings",             "Settings", show=True),
+        Binding("f3",     "history",              "History",  show=True),
+        Binding("ctrl+l", "clear_chat",           "Clear",    show=True),
+        Binding("ctrl+y", "copy_last",            "Copy",     show=True),
+        Binding("escape", "dismiss_popup",        "Dismiss",  show=False),
+        Binding("tab",    "focus_input",          "Input",    show=False),
+        Binding("ctrl+k", "toggle_slash_popup",   "Commands", show=False),
+        # Priority binding — fires before TextArea sees the key, so it intercepts
+        # even when TextArea is focused.  ctrl+enter is not reliably distinguishable
+        # from plain Enter on standard terminals, so we use ctrl+s as the submit key.
+        Binding("ctrl+s", "submit_input",         "Send",     show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -68,19 +73,11 @@ class ChatScreen(Screen):
         background: $background;
     }
 
-    /* ── Input — divider between chat and info strip ───────── */
+    /* ── Input — full-height multiline prompt panel ─────────── */
     #chat-input {
-        height: 3;
-        border-top: heavy $primary-darken-2;
-        border-left: none;
-        border-right: none;
-        border-bottom: solid $panel-lighten-1;
-        background: $surface;
-        padding: 0 2;
-    }
-    #chat-input:focus {
-        border-bottom: solid $accent;
-        background: $boost;
+        height: auto;
+        min-height: 7;
+        max-height: 14;
     }
 
     /* ── ContextBar — 2-line strip: state + config ─────────── */
@@ -100,16 +97,13 @@ class ChatScreen(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat-scroll"):
             yield WelcomeBanner(id="empty-hint")
-        yield SmartInput(
-            placeholder="Ask anything…   ↑↓ history   / for commands",
-            id="chat-input",
-        )
+        yield SmartInput(id="chat-input")
         yield ContextBar(id="context-bar")
 
     def on_mount(self) -> None:
         self.query_one("#chat-input", SmartInput).focus()
 
-    def on_input_submitted(self, event: SmartInput.Submitted) -> None:
+    def on_smart_input_submitted(self, event: SmartInput.Submitted) -> None:
         smart = event.input
         if not isinstance(smart, SmartInput):
             return
@@ -118,7 +112,7 @@ class ChatScreen(Screen):
             return
         self.app.post_message(UserInputSubmitted(text=text))
 
-    def on_input_changed(self, event) -> None:
+    def on_smart_input_changed(self, event: SmartInput.Changed) -> None:
         """Forward input changes to the controller for slash-popup live filter."""
         try:
             ctrl = getattr(self.app, "_controller", None)
@@ -142,22 +136,15 @@ class ChatScreen(Screen):
         from citnega.apps.tui.widgets.message_block import MessageBlock
         from citnega.apps.tui.widgets.streaming_block import StreamingBlock
 
-        # ── Tier 1: SmartInput has an active text selection ───────────────────
-        # Only applies when the cursor is actually inside the input widget and
-        # text is selected within it — the one place where sub-character
-        # selection is meaningful in Textual.
+        # ── Tier 1: SmartInput TextArea has an active text selection ─────────
         try:
             smart = self.query_one("#chat-input", SmartInput)
-            if self.app.focused is smart:
-                selection = smart.selection  # Selection(start, end) — int column pos
-                start, end = selection.start, selection.end
-                if start != end:
-                    lo, hi = min(start, end), max(start, end)
-                    sel = smart.value[lo:hi]
-                    if sel:
-                        _copy_to_clipboard(sel)
-                        self.app.notify("Copied selection.", timeout=2)
-                        return
+            if smart.is_input_focused:
+                sel = smart.selected_text
+                if sel:
+                    _copy_to_clipboard(sel)
+                    self.app.notify("Copied selection.", timeout=2)
+                    return
         except Exception:
             pass
 
@@ -198,6 +185,15 @@ class ChatScreen(Screen):
                 return
         self.app.notify("Nothing to copy.", timeout=2)
 
+    def action_submit_input(self) -> None:
+        """Priority Ctrl+S — submit the current SmartInput content."""
+        from textual.actions import SkipAction
+        ctrl = getattr(self.app, "_controller", None)
+        if ctrl is not None and getattr(ctrl, "_slash_screen_open", False):
+            raise SkipAction()
+        smart = self.query_one("#chat-input", SmartInput)
+        smart.post_message(SmartInput.Submitted(input=smart))
+
     def action_focus_input(self) -> None:
         self.query_one("#chat-input", SmartInput).focus()
 
@@ -212,6 +208,12 @@ class ChatScreen(Screen):
 
         service = getattr(self.app, "service", None)
         self.app.push_screen(SettingsScreen(service=service), self._on_settings_closed)
+
+    def action_history(self) -> None:
+        from citnega.apps.tui.screens.history_screen import HistoryScreen
+
+        service = getattr(self.app, "service", None)
+        self.app.push_screen(HistoryScreen(service=service))
 
     def _on_settings_closed(self, saved: bool | None = None) -> None:
         """Refresh the ContextBar config line after the settings screen closes."""

@@ -1,30 +1,23 @@
 """
-SmartInput — multi-line paste support + command history for the chat input.
+SmartInput — full-height multiline prompt panel for the chat screen.
 
 Features
 --------
-- **Multi-line paste**: When the user pastes text containing newlines the
-  display inserts ``[[PASTED N LINES]]`` at the cursor position so the user
-  can still type context around it, e.g.:
-      "Could you review: [[PASTED 42 LINES]]"
-  On submit the tag is replaced with the actual pasted content.
-- **Command history**: Up / Down arrow keys navigate previously submitted
-  commands (like a shell).  The current draft is saved and restored when
-  the user arrows back to the bottom.
-- **Normal single-line text**: Behaves exactly like the standard ``Input``
-  widget when no multi-line paste is in progress.
+- **Multiline TextArea**: real multi-line editing, word-wrap, scrollable.
+- **Ctrl+Enter**: submit (Enter adds a newline as in any editor).
+- **Alt+↑ / Alt+↓**: history navigation (↑↓ move the cursor within the text).
+- **Command history**: last N entries, configurable via settings.
 """
 
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING
 
-from textual.events import Key, Paste
-from textual.widgets import Input
-
-if TYPE_CHECKING:
-    pass
+from textual.app import ComposeResult
+from textual.events import Key
+from textual.message import Message
+from textual.widget import Widget
+from textual.widgets import Static, TextArea
 
 _MAX_HISTORY_DEFAULT = 200
 
@@ -32,62 +25,119 @@ _MAX_HISTORY_DEFAULT = 200
 def _get_max_history() -> int:
     try:
         from citnega.packages.config.loaders import load_settings
-
         return load_settings().tui.input_history_size
     except Exception:
         return _MAX_HISTORY_DEFAULT
 
 
-class SmartInput(Input):
+class SmartInput(Widget):
     """
-    Single-line ``Input`` subclass with:
+    Multiline prompt panel (TextArea-backed).
 
-    * Multi-line paste collapsed to ``[[PASTED N LINES]]`` (inserted at cursor)
-    * User can type context before/after the tag
-    * Command history navigated with ↑ / ↓
+    Submit via Ctrl+Enter.  Navigate history via Alt+↑ / Alt+↓.
+    Up / Down move the text cursor within the current draft as expected.
     """
 
-    def __init__(self, **kwargs) -> None:
-        # Disable auto-select-all on re-focus so the user's typed text is never
-        # silently replaced when they click away and come back.
-        kwargs.setdefault("select_on_focus", False)
+    class Submitted(Message):
+        def __init__(self, input: "SmartInput") -> None:
+            super().__init__()
+            self.input = input
+
+    class Changed(Message):
+        def __init__(self, input: "SmartInput", value: str) -> None:
+            super().__init__()
+            self.input = input
+            self.value = value
+
+    DEFAULT_CSS = """
+    SmartInput {
+        height: auto;
+        min-height: 6;
+        max-height: 14;
+        background: $surface;
+        border-top: heavy $primary-darken-2;
+        border-bottom: solid $panel-lighten-1;
+    }
+
+    SmartInput #hint-bar {
+        height: 1;
+        background: $panel-darken-1;
+        color: $text-muted;
+        padding: 0 2;
+        text-align: right;
+    }
+
+    SmartInput TextArea {
+        height: 1fr;
+        min-height: 5;
+        border: none;
+        background: $surface;
+        padding: 0 1;
+    }
+
+    SmartInput TextArea:focus {
+        background: $boost;
+        border: none;
+    }
+    """
+
+    def __init__(self, placeholder: str = "", **kwargs) -> None:
         super().__init__(**kwargs)
-        # Full pasted text stored when a multi-line paste tag is present
-        self._pasted_text: str = ""
+        self._placeholder = placeholder
         self._history: deque[str] = deque(maxlen=_get_max_history())
-        self._history_index: int = -1   # -1 = not browsing
-        self._draft: str = ""           # unsaved draft when browsing history
+        self._history_index: int = -1
+        self._draft: str = ""
 
-    # ── Tag helpers ───────────────────────────────────────────────────────────
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "Ctrl+S send  •  Alt+↑↓ history  •  / for commands",
+            id="hint-bar",
+        )
+        yield TextArea(
+            soft_wrap=True,
+            show_line_numbers=False,
+            tab_behavior="indent",
+        )
 
-    def _paste_tag(self) -> str:
-        if not self._pasted_text:
-            return ""
-        return f"[[PASTED {len(self._pasted_text.splitlines())} LINES]]"
+    def on_mount(self) -> None:
+        self._textarea.focus()
 
-    # ── Actual value (real content behind the summary label) ─────────────────
+    # ── Internal access ───────────────────────────────────────────────────────
+
+    @property
+    def _textarea(self) -> TextArea:
+        return self.query_one(TextArea)
+
+    # ── Public API (used by chat_screen, controller, slash commands) ──────────
+
+    @property
+    def value(self) -> str:
+        return self._textarea.text
 
     @property
     def actual_value(self) -> str:
-        """
-        The text that will be submitted.
+        return self.value
 
-        Replaces the ``[[PASTED N LINES]]`` tag in the current input value
-        with the real pasted content, so users can write context around it:
-            "Could you review: [[PASTED 42 LINES]]"  →
-            "Could you review: <actual 42-line block>"
-        """
-        if not self._pasted_text:
-            return self.value
-        return self.value.replace(self._paste_tag(), self._pasted_text, 1)
+    @property
+    def selected_text(self) -> str:
+        try:
+            return self._textarea.selected_text
+        except Exception:
+            return ""
+
+    @property
+    def is_input_focused(self) -> bool:
+        try:
+            return bool(self.app.focused is self._textarea)
+        except Exception:
+            return False
+
+    def focus(self, scroll_visible: bool = True) -> "SmartInput":
+        self._textarea.focus(scroll_visible)
+        return self
 
     def seed_history(self, messages: list[str]) -> None:
-        """
-        Populate arrow-key history from a list of past messages.
-
-        Pass messages oldest-first; the newest will end up at index 0
-        (first result when pressing Up).  Clears any existing history.
-        """
+        """Populate arrow-key history. Pass messages oldest-first."""
         self._history.clear()
         self._history_index = -1
         self._draft = ""
@@ -96,86 +146,62 @@ class SmartInput(Input):
                 self._history.appendleft(msg)
 
     def submit_and_clear(self) -> str:
-        """Consume the current value, add to history, clear the input."""
-        text = self.actual_value.strip()
+        """Consume the current value, push to history, clear the editor."""
+        text = self.value.strip()
         if text:
             self._history.appendleft(text)
         self._history_index = -1
         self._draft = ""
-        self._pasted_text = ""
-        self.value = ""
+        self._textarea.clear()
         return text
 
-    # ── Paste interception ────────────────────────────────────────────────────
-
-    def _on_paste(self, event: Paste) -> None:
-        """Insert multi-line paste as a summary tag.
-
-        Replaces the current selection (if any) with the tag so that pasting
-        while text is selected behaves the same as a normal paste.  When there
-        is no selection the tag is inserted at the cursor position, preserving
-        all surrounding text.
-        """
-        text = event.text
-        lines = text.splitlines()
-        if len(lines) <= 1:
-            # Single-line: let Textual handle it normally; clear paste state
-            # so a stale _pasted_text doesn't shadow the newly inserted text.
-            self._pasted_text = ""
-            return
-
-        self._pasted_text = text
-        tag = self._paste_tag()
-
-        # sorted() normalises both "cursor at start" and "cursor at end"
-        # selections so start ≤ end regardless of selection direction.
-        start, end = sorted(self.selection)
-        current = self.value
-        self.value = current[:start] + tag + current[end:]
-        self.cursor_position = start + len(tag)
-
-        event.prevent_default()
-        event.stop()
-
-    # ── History navigation via ↑ / ↓ ─────────────────────────────────────────
+    # ── Key handling ──────────────────────────────────────────────────────────
 
     def on_key(self, event: Key) -> None:
-        if event.key == "up":
+        if event.key == "ctrl+enter":
+            self.post_message(self.Submitted(input=self))
+            event.prevent_default()
+            event.stop()
+        elif event.key == "alt+up":
             self._history_up()
             event.prevent_default()
             event.stop()
-        elif event.key == "down":
+        elif event.key == "alt+down":
             self._history_down()
             event.prevent_default()
             event.stop()
+
+    # ── Forward TextArea.Changed as SmartInput.Changed ───────────────────────
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.post_message(self.Changed(input=self, value=event.text_area.text))
+
+    # ── History navigation ────────────────────────────────────────────────────
 
     def _history_up(self) -> None:
         if not self._history:
             return
         if self._history_index == -1:
-            self._draft = self.actual_value
+            self._draft = self.value
         new_idx = min(self._history_index + 1, len(self._history) - 1)
         if new_idx == self._history_index:
             return
         self._history_index = new_idx
-        self._pasted_text = ""
-        self.value = self._history[self._history_index]
-        self.cursor_position = len(self.value)
+        self._load_and_end(self._history[self._history_index])
 
     def _history_down(self) -> None:
         if self._history_index == -1:
             return
         self._history_index -= 1
-        self._pasted_text = ""
-        if self._history_index == -1:
-            self.value = self._draft
-        else:
-            self.value = self._history[self._history_index]
-        self.cursor_position = len(self.value)
+        text = self._draft if self._history_index == -1 else self._history[self._history_index]
+        self._load_and_end(text)
 
-    # ── Guard: clear paste state only on explicit submit or new session ──────────
-    # NOTE: We intentionally do NOT clear _pasted_text in on_input_changed.
-    # actual_value.replace(tag, content) is a no-op when the tag is absent,
-    # so correctness is preserved even if the user partially deletes the tag.
-    # Clearing eagerly here was causing bug 2: any accidental Backspace into the
-    # tag would silently lose the pasted content before submit.
+    def _load_and_end(self, text: str) -> None:
+        ta = self._textarea
+        ta.load_text(text)
+        lines = text.splitlines()
+        if lines:
+            ta.move_cursor((len(lines) - 1, len(lines[-1])))
+        else:
+            ta.move_cursor((0, 0))
+

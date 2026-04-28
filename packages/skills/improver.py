@@ -91,6 +91,18 @@ class SkillImprover:
                 if hasattr(chunk, "text"):
                     chunks.append(chunk.text)
             improved = "".join(chunks).strip()
-            return improved or None
+            if not improved:
+                return None
+
+            # Persist improved skill body to disk so it survives restarts
+            try:
+                from pathlib import Path
+                _skills_dir = Path.home() / ".citnega" / "skills"
+                _skills_dir.mkdir(parents=True, exist_ok=True)
+                (_skills_dir / f"{name}.md").write_text(improved, encoding="utf-8")
+            except Exception:
+                pass  # best-effort
+
+            return improved
         except Exception:
             return None
