@@ -1,15 +1,13 @@
-```
+<div align="center">
+
+<pre>
  ██████╗██╗████████╗███╗   ██╗███████╗ ██████╗  █████╗
 ██╔════╝██║╚══██╔══╝████╗  ██║██╔════╝██╔════╝ ██╔══██╗
 ██║     ██║   ██║   ██╔██╗ ██║█████╗  ██║  ███╗███████║
 ██║     ██║   ██║   ██║╚██╗██║██╔══╝  ██║   ██║██╔══██║
 ╚██████╗██║   ██║   ██║ ╚████║███████╗╚██████╔╝██║  ██║
  ╚═════╝╚═╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝
-```
-
-<div align="center">
-
-# CITNEGA
+</pre>
 
 ### Your AI. Your Terminal. Your Rules.
 
@@ -23,6 +21,10 @@ Plan, research, write, code, analyse — with 9 thinking modes, 60+ tools, and 3
 ```bash
 pip install citnega && citnega
 ```
+
+<br/>
+
+![Citnega TUI](docs/screenshot.png)
 
 </div>
 
@@ -131,21 +133,7 @@ citnega-cli session list
 
 ## The TUI
 
-```
-┌─ Citnega ────────────────────────────────────────── [CODE] claude-sonnet ─┐
-│                                                                            │
-│  ┌──────────────────────────────────────────────────────────────────────┐ │
-│  │ You: read the main.py file and explain what it does                  │ │
-│  │                                                                      │ │
-│  │ Citnega: I'll read the file first.                                   │ │
-│  │ [read_file] main.py → 142 lines                                      │ │
-│  │                                                                      │ │
-│  │ This is the entry point for your web server. It sets up...           │ │
-│  └──────────────────────────────────────────────────────────────────────┘ │
-│                                                                            │
-│  > _                                                              F1 F2 F3 │
-└────────────────────────────────────────────────────────────────────────────┘
-```
+The welcome screen shows the session mode, active model, and key shortcuts. The status bar at the bottom displays the session name, model, mode, thinking budget, workfolder path, and idle/active state.
 
 ### Keyboard shortcuts
 
