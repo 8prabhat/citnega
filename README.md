@@ -13,7 +13,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.1-orange.svg)](https://github.com/8prabhat/citnega/releases)
+[![Version](https://img.shields.io/badge/version-0.6.2-orange.svg)](https://github.com/8prabhat/citnega/releases)
 
 **A local-first AI runtime that lives in your terminal.**  
 Plan, research, write, code, analyse — with 9 thinking modes, 60+ tools, and 35+ specialist agents — all without leaving your keyboard.

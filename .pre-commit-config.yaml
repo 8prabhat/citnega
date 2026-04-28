@@ -1,21 +1,77 @@
+## Pre-commit hooks for citnega
+##
+## Install: make pre-commit-install   (or: pre-commit install)
+## Run all: make pre-commit-run       (or: pre-commit run --all-files)
+##
+## Hooks run in order on every `git commit`:
+##   1. General hygiene (trailing whitespace, file endings, merge conflicts)
+##   2. Ruff  — lint + auto-fix
+##   3. mypy  — type checking
+##   4. Bandit — Python SAST (medium/high findings block the commit)
+##   5. detect-secrets — block commits that introduce new secrets
+##
+## Semgrep and pip-audit run in CI only (too slow for a commit hook).
+
 repos:
+
+  # ── General hygiene ─────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]
+
+  # ── Ruff (lint + format) ─────────────────────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.10
+    rev: v0.9.10
     hooks:
       - id: ruff
-        args: [--fix]
+        args: ["--fix"]
       - id: ruff-format
 
+  # ── mypy ─────────────────────────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+    rev: v1.15.0
     hooks:
       - id: mypy
         additional_dependencies:
-          - pydantic>=2.5
-          - pydantic-settings>=2.1
-        args: [packages/]
+          - pydantic>=2.10
+          - pydantic-settings>=2.7
+        args: ["--ignore-missing-imports", "citnega/packages"]
 
-  - repo: https://github.com/andreoliwa/nitpick
-    rev: v0.35.0
+  # ── Bandit (Python SAST) ─────────────────────────────────────────────────────
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.3
     hooks:
-      - id: nitpick-suggest
+      - id: bandit
+        args:
+          - "-c"
+          - "pyproject.toml"   # reads [tool.bandit] for skips + severity
+          - "-ll"              # medium + high severity only
+        exclude: ^tests/
+
+  # ── Secret detection ─────────────────────────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args:
+          - "--baseline"
+          - ".secrets.baseline"
+        exclude: |
+          (?x)^(
+            .*\.lock$|
+            dist/.*|
+            \.git/.*|
+            htmlcov/.*
+          )$

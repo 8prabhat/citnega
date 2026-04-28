@@ -65,8 +65,9 @@ logs/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 
-# ── GitHub Actions (auto-generated, not hand-authored) ───────────────────────
-.github/workflows/
+# ── GitHub Actions ────────────────────────────────────────────────────────────
+# (hand-authored workflows are tracked; only generated artefacts below are ignored)
+.github/workflows/*.log
 
 # ── Specifications / docs that don't belong in version control ────────────────
 citnega_technical_specification.txt

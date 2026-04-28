@@ -1,6 +1,6 @@
 [project]
 name = "citnega"
-version = "0.6.1"
+version = "0.6.2"
 description = "Local-first terminal AI runtime with planning, parallel tool orchestration, and workspace-extensible agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -85,6 +85,11 @@ dev = [
     "respx>=0.21",
     "hatchling>=1.25",
     "build>=1.2",
+    # Security scanning
+    "bandit[toml]>=1.8",
+    "pip-audit>=2.7",
+    "detect-secrets>=1.5",
+    "semgrep>=1.70",
 ]
 
 [project.scripts]
@@ -130,3 +135,15 @@ exclude_lines = [
     "@abstractmethod",
     "raise NotImplementedError",
 ]
+
+# ── Bandit (SAST) ───────────────────────────────────────────────────────────────
+[tool.bandit]
+targets    = ["citnega/packages", "citnega/apps"]
+exclude_dirs = ["tests", "citnega/packages/tools/security"]   # security tools use intentional patterns
+skips = [
+    "B101",  # assert — fine in non-production code
+    "B404",  # subprocess import — we intentionally shell out
+    "B603",  # subprocess without shell — we audit call sites explicitly
+    "B607",  # partial path — same as above
+]
+severity = "medium"   # report medium + high only

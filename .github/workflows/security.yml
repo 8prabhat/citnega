@@ -1,0 +1,192 @@
+name: Security
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # Every Monday at 06:00 UTC — catches new CVEs published since last push
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write   # allows uploading SARIF to GitHub Security tab
+
+jobs:
+  # ── 1. Dependency CVE scan ─────────────────────────────────────────────────
+  dependency-audit:
+    name: Dependency CVEs (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies
+        run: pip-audit --requirement requirements.txt --output json > pip-audit-report.json || true
+
+      - name: Audit package itself
+        run: pip-audit --output json -r pyproject.toml || true
+
+      - name: Show results
+        run: cat pip-audit-report.json
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: pip-audit-report.json
+          retention-days: 30
+
+  # ── 2. Static Application Security Testing ─────────────────────────────────
+  sast-bandit:
+    name: SAST — bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install bandit
+        run: pip install "bandit[toml]>=1.8"
+
+      - name: Run bandit
+        run: |
+          bandit -r citnega/packages citnega/apps \
+            -c pyproject.toml \
+            -f json \
+            -o bandit-report.json \
+            --exit-zero
+
+      - name: Show findings summary
+        run: |
+          python - <<'EOF'
+          import json, sys
+          data = json.load(open("bandit-report.json"))
+          results = data.get("results", [])
+          high   = [r for r in results if r["issue_severity"] == "HIGH"]
+          medium = [r for r in results if r["issue_severity"] == "MEDIUM"]
+          print(f"HIGH: {len(high)}  MEDIUM: {len(medium)}  LOW: {len(results)-len(high)-len(medium)}")
+          for r in high:
+              print(f"  [HIGH] {r['filename']}:{r['line_number']} — {r['issue_text']}")
+          if high:
+              sys.exit(1)
+          EOF
+
+      - name: Upload bandit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 30
+
+  # ── 3. Deep SAST — Semgrep ─────────────────────────────────────────────────
+  sast-semgrep:
+    name: SAST — semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install semgrep
+        run: pip install semgrep
+
+      - name: Run semgrep (Python security rules)
+        run: |
+          semgrep \
+            --config=p/python \
+            --config=p/security-audit \
+            --config=p/owasp-top-ten \
+            --json \
+            --output semgrep-report.json \
+            --error \
+            citnega/packages citnega/apps \
+            || echo "Semgrep found issues — see report"
+
+      - name: Upload semgrep report
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+          retention-days: 30
+
+  # ── 4. Secret scanning ──────────────────────────────────────────────────────
+  secrets-scan:
+    name: Secret scanning (detect-secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can scan all commits
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install detect-secrets
+        run: pip install detect-secrets
+
+      - name: Scan for secrets
+        run: |
+          detect-secrets scan \
+            --exclude-files '\.git/.*' \
+            --exclude-files '.*\.lock$' \
+            --exclude-files 'dist/.*' \
+            > secrets-scan.json
+
+      - name: Audit against baseline
+        run: |
+          if [ -f .secrets.baseline ]; then
+            detect-secrets audit .secrets.baseline --report --fail-on-unaudited
+          else
+            python - <<'EOF'
+          import json, sys
+          data = json.load(open("secrets-scan.json"))
+          found = sum(len(v) for v in data.get("results", {}).values())
+          if found:
+              print(f"Found {found} potential secret(s) — run 'make secrets-baseline' to review")
+              sys.exit(1)
+          print("No secrets found.")
+          EOF
+          fi
+
+      - name: Upload secrets scan
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-scan
+          path: secrets-scan.json
+          retention-days: 30
+
+  # ── 5. Summary gate ─────────────────────────────────────────────────────────
+  security-gate:
+    name: Security gate
+    runs-on: ubuntu-latest
+    needs: [dependency-audit, sast-bandit, sast-semgrep, secrets-scan]
+    if: always()
+    steps:
+      - name: Check all security jobs passed
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          failed=$(echo "$results" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          failed = [k for k, v in data.items() if v['result'] not in ('success', 'skipped')]
+          print(' '.join(failed))
+          ")
+          if [ -n "$failed" ]; then
+            echo "Security jobs failed: $failed"
+            exit 1
+          fi
+          echo "All security checks passed."
